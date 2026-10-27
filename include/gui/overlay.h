@@ -110,6 +110,8 @@ public:
     static bool WasLastD3D9InitDeferredForNetplay();
     static bool ShouldUseExternalMenuFallback();
     static bool SetD3D9Active(bool active);
+    // Re-installs the EndScene JMP when a peer restored the exact bytes we hooked over.
+    static void RepairD3D9EntryIfRestored();
     static void ShutdownD3D9();
 };
 

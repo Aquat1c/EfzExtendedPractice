@@ -18,7 +18,7 @@ bool IsGroundedOverhead(int charId, int moveId, uintptr_t attackerBase) {
             break;
         case CHAR_ID_KAORI:
             // Kaori: 214A/B/C
-            if (InRange(moveId, 253, 256)) return true;
+            if (InRange(moveId, 253, 255)) return true;
             break;
         case CHAR_ID_MISHIO:
             // Mishio: Fire element only, Fire 623B (move 274)

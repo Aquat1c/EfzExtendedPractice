@@ -162,6 +162,16 @@ namespace {
         device->SetProperty(DIPROP_RANGE, &range.diph);
     }
 
+    // XInput-capable HID interfaces carry "IG_" in their device path.
+    bool IsXInputDevice(IDirectInputDevice8* device) {
+        DIPROPGUIDANDPATH prop{};
+        prop.diph.dwSize = sizeof(DIPROPGUIDANDPATH);
+        prop.diph.dwHeaderSize = sizeof(DIPROPHEADER);
+        prop.diph.dwHow = DIPH_DEVICE;
+        if (FAILED(device->GetProperty(DIPROP_GUIDANDPATH, &prop.diph))) return false;
+        return wcsstr(prop.wszPath, L"IG_") != nullptr || wcsstr(prop.wszPath, L"ig_") != nullptr;
+    }
+
     BOOL CALLBACK EnumGenericPadsCallback(const DIDEVICEINSTANCE* instance, VOID* context) {
         if (!XInputShim::IsPollingActive()) return DIENUM_STOP;
         auto* pads = static_cast<std::vector<GenericPad>*>(context);
@@ -171,6 +181,12 @@ namespace {
         LPDIRECTINPUTDEVICE8 device = nullptr;
         HRESULT hr = g_directInput->CreateDevice(instance->guidInstance, &device, nullptr);
         if (FAILED(hr) || !device) {
+            return DIENUM_CONTINUE;
+        }
+
+        // Already polled through its native XInput slot; without XInput keep it as the only path.
+        if (g_xinput && IsXInputDevice(device)) {
+            device->Release();
             return DIENUM_CONTINUE;
         }
 

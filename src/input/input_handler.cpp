@@ -37,6 +37,7 @@
 #include "../include/game/character_settings.h"
 #include "../include/game/savestate_hook.h"
 #include "../include/input/framestep.h"
+#include "../include/game/game_thread_queue.h"
 #include "../include/utils/xp_compat.h"
 #include <Xinput.h>
 
@@ -81,6 +82,43 @@ void StartHotkeyCooldown() {
 
 int g_gamepadCount = 0;
 GamepadDevice g_gamepads[MAX_CONTROLLERS];
+
+// Hotkey actions that call into efz/Revival run as game-thread commands.
+static void MenuOpenCommand(uintptr_t) { OpenMenu(); }
+static void MenuOpenIfHiddenCommand(uintptr_t) { if (!ImGuiImpl::IsVisible()) OpenMenu(); }
+static void MenuToggleCommand(uintptr_t) {
+    if (!ImGuiImpl::IsVisible()) OpenMenu();
+    else ImGuiImpl::ToggleVisibility();
+}
+// Without the battle hooks there is no game-thread owner; the legacy direct path stays.
+static void PostMenuCommand(GameThread::Command cmd) {
+    if (!GameThread::Post(cmd) && !AreFrontendControlHooksInstalled()) cmd(0);
+}
+static void ToggleLocalSideCommand(uintptr_t) {
+    if (SwitchPlayers::ToggleLocalSide()) {
+        DirectDrawHook::AddMessage("Switch Players: toggled", "SYSTEM", RGB(100,255,100), 1200, 0, 100);
+    } else {
+        DirectDrawHook::AddMessage("Switch Players: failed", "SYSTEM", RGB(255,100,100), 1200, 0, 100);
+    }
+}
+static void PostToggleLocalSide() {
+    if (!GameThread::Post(&ToggleLocalSideCommand)) {
+        DirectDrawHook::AddMessage("Switch Players: failed", "SYSTEM", RGB(255,100,100), 1200, 0, 100);
+    }
+}
+static void SavestateSaveCommand(uintptr_t) {
+    if (!SavestateHook::TriggerSave()) {
+        DirectDrawHook::AddMessage("Savestate save unavailable (Revival not ready)", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
+    }
+}
+static void SavestateLoadCommand(uintptr_t) {
+    if (!SavestateHook::TriggerLoad()) {
+        DirectDrawHook::AddMessage("Savestate load unavailable (Revival not ready)", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
+    }
+}
+static void FramestepTogglePauseCommand(uintptr_t) { Framestep::TogglePause(); }
+static void FramestepStepCommand(uintptr_t) { Framestep::RequestFrameStep(); }
+
 extern void ResetFrameCounter();
 
 #define JOYSTICK_DEADZONE 8000  // Standard deadzone for a 16-bit joystick
@@ -204,7 +242,7 @@ void MonitorKeys() {
         LogOut("[KEYBINDS] Hotkey values from config:", true);
         LogOut("[KEYBINDS] Teleport/Load key: " + GetKeyName(cfg0.teleportKey), true);
         LogOut("[KEYBINDS] Record/Save key: " + GetKeyName(cfg0.recordKey), true);
-        LogOut("[KEYBINDS] Menu key: Esc (fixed)", true);
+        LogOut("[KEYBINDS] Menu key: " + GetKeyName(cfg0.configMenuKey), true);
     }
 
     static DWORD s_nextIniRetryTick = GetTickCount() + 60000;
@@ -247,7 +285,7 @@ void MonitorKeys() {
     const Config::Settings& cfg = Config::GetSettings();
     int teleportKey = (cfg.teleportKey > 0) ? cfg.teleportKey : '1';
     int recordKey = (cfg.recordKey > 0) ? cfg.recordKey : '2';
-    int configMenuKey = VK_ESCAPE;
+    int configMenuKey = (cfg.configMenuKey > 0) ? cfg.configMenuKey : VK_ESCAPE;
     int toggleTitleKey = cfg.toggleTitleKey;
     int resetFrameCounterKey = cfg.resetFrameCounterKey;
     int savestateSaveKey = (cfg.savestateSaveKey > 0) ? cfg.savestateSaveKey : 'U';
@@ -314,7 +352,9 @@ void MonitorKeys() {
             (Mission::TutorialSession::IsActive() ||
              Mission::PauseMenu::IsOpen());
         const bool escDown = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-        if (allowMenuToggle && escDown && !s_contextMenuEscWasDown) OpenMenu();
+        // The battle-hotkey hook owns Esc on the game thread when installed.
+        if (allowMenuToggle && escDown && !s_contextMenuEscWasDown &&
+            !AreFrontendControlHooksInstalled()) OpenMenu();
         s_contextMenuEscWasDown = escDown;
 
         XInputShim::RefreshSnapshotOncePerFrame();
@@ -337,7 +377,7 @@ void MonitorKeys() {
             if (padSnapshot.CopyState(i, cached)) {
                 const bool menuNow = padBindingDown(cached, cfg.gpToggleMenuButton);
                 const bool menuWas = padBindingDown(prevPads[i], cfg.gpToggleMenuButton);
-                if (allowMenuToggle && menuNow && !menuWas) OpenMenu();
+                if (allowMenuToggle && menuNow && !menuWas) PostMenuCommand(&MenuOpenCommand);
                 prevPads[i] = cached;
             }
         }
@@ -469,7 +509,7 @@ void MonitorKeys() {
                     recPhase == Mission::Engine::Recorder::Phase::Recording;
                 if (recorderOwnsHotkeys) {
                     if (gpWentDown(cgp.gpToggleMenuButton)) {
-                        if (!ImGuiImpl::IsVisible()) OpenMenu();
+                        PostMenuCommand(&MenuOpenIfHiddenCommand);
                         handled = true;
                     } else if (gpWentDown(cgp.gpMacroRecordButton) &&
                                !Mission::PauseMenu::IsOpen()) {
@@ -480,11 +520,7 @@ void MonitorKeys() {
                     return handled;
                 }
                 if (!handled && gpWentDown(cgp.gpToggleMenuButton)) {
-                    if (!ImGuiImpl::IsVisible()) {
-                        OpenMenu();
-                    } else {
-                        ImGuiImpl::ToggleVisibility();
-                    }
+                    PostMenuCommand(&MenuToggleCommand);
                     handled = true;
                 } else if (!handled && gpWentDown(cgp.gpTeleportButton)) {
                     CancelFrameAdvantageCalculation();
@@ -506,12 +542,7 @@ void MonitorKeys() {
                         handled = true;
                     } else {
                         if (GetCurrentGameMode() == GameMode::Practice) {
-                            bool ok = SwitchPlayers::ToggleLocalSide();
-                            if (ok) {
-                                DirectDrawHook::AddMessage("Switch Players: toggled", "SYSTEM", RGB(100,255,100), 1200, 0, 100);
-                            } else {
-                                DirectDrawHook::AddMessage("Switch Players: failed", "SYSTEM", RGB(255,100,100), 1200, 0, 100);
-                            }
+                            PostToggleLocalSide();
                         }
                         handled = true;
                     }
@@ -553,8 +584,9 @@ void MonitorKeys() {
                 return handled;
             };
 
-            // 1) Keyboard menu/overlay toggles first (avoids conflicts)
-            if (IsKeyPressed(configMenuKey, false)) {
+            // 1) Keyboard menu/overlay toggles first (avoids conflicts).
+            // The battle-hotkey hook owns this key on the game thread when installed.
+            if (!AreFrontendControlHooksInstalled() && IsKeyPressed(configMenuKey, false)) {
                 if (!ImGuiImpl::IsVisible()) {
                     OpenMenu();
                 }
@@ -659,12 +691,7 @@ void MonitorKeys() {
                     DirectDrawHook::AddMessage("Switch Players disabled during Macro PreRecord/Recording/Playback", "SYSTEM", RGB(255,200,120), 1200, 0, 100);
                     keyHandled = true;
                 } else if (GetCurrentGameMode() == GameMode::Practice && !g_guiActive.load()) {
-                    bool ok = SwitchPlayers::ToggleLocalSide();
-                    if (ok) {
-                        DirectDrawHook::AddMessage("Switch Players: toggled", "SYSTEM", RGB(100,255,100), 1200, 0, 100);
-                    } else {
-                        DirectDrawHook::AddMessage("Switch Players: failed", "SYSTEM", RGB(255,100,100), 1200, 0, 100);
-                    }
+                    PostToggleLocalSide();
                     keyHandled = true;
                 }
             } else if (IsKeyPressed(savestateSaveKey, false)) {
@@ -675,7 +702,7 @@ void MonitorKeys() {
                 } else if (GetCurrentGameMode() == GameMode::Practice
                         && GetCurrentGamePhase() == GamePhase::Match
                         && AreCharactersInitialized()) {
-                    if (!SavestateHook::TriggerSave()) {
+                    if (!GameThread::Post(&SavestateSaveCommand)) {
                         DirectDrawHook::AddMessage("Savestate save unavailable (Revival not ready)", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
                     }
                 } else {
@@ -690,7 +717,7 @@ void MonitorKeys() {
                 } else if (GetCurrentGameMode() == GameMode::Practice
                         && GetCurrentGamePhase() == GamePhase::Match
                         && AreCharactersInitialized()) {
-                    if (!SavestateHook::TriggerLoad()) {
+                    if (!GameThread::Post(&SavestateLoadCommand)) {
                         DirectDrawHook::AddMessage("Savestate load unavailable (Revival not ready)", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
                     }
                 } else {
@@ -821,12 +848,12 @@ void MonitorKeys() {
                 keyHandled = true;
             } else if (cfg.framestepEnabled && IsKeyPressed(cfg.framestepPauseKey > 0 ? cfg.framestepPauseKey : VK_SPACE, false)) {
                 if (Framestep::IsEnabled()) {
-                    Framestep::TogglePause();
+                    (void)GameThread::Post(&FramestepTogglePauseCommand);
                     keyHandled = true;
                 }
             } else if (cfg.framestepEnabled && IsKeyPressed(cfg.framestepStepKey > 0 ? cfg.framestepStepKey : 'P', false)) {
                 if (Framestep::IsEnabled()) {
-                    Framestep::RequestFrameStep();
+                    (void)GameThread::Post(&FramestepStepCommand);
                     keyHandled = true;
                 }
             } else if (IsKeyPressed(VK_F9, false)) {

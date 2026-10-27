@@ -51,6 +51,9 @@ struct FrameAdvantageScratchState {
     int p2FreezeAccumSinceFree = 0;
     int p1FreezeAfterAtkActionable = 0;
     int p2FreezeAfterAtkActionable = 0;
+    // Internal frame and freeze state of the previous MonitorFrameAdvantage call.
+    int lastCallInternalFrame = -1;
+    bool lastCallFrozen = false;
     int p1HitConnectCooldown = 0;
     int p2HitConnectCooldown = 0;
     int p1LastAttackEdgeFrame = -1;
@@ -534,21 +537,39 @@ void MonitorFrameAdvantage(short moveID1, short moveID2, short prevMoveID1, shor
         if (IsSpecialStun(moveID1) || IsSpecialStun(moveID2)) return true;
         return false;
     };
-    if (p1_last_defender_free_frame != -1 && isFreezeFrame()) {
-        p1_freeze_accum_since_free++;
+    // Calls are skipped while move IDs hold and no timer runs, but the anchors are
+    // internal frames: skipped frames carry the previous call's freeze state.
+    const bool freezeNow = isFreezeFrame();
+    const int lastCall = g_faScratch.lastCallInternalFrame;
+    // Same-frame repeat calls add nothing; an unknown or rewound previous call carries no frames.
+    const bool newFrame = lastCall < 0 || currentInternalFrame != lastCall;
+    const bool carry = g_faScratch.lastCallFrozen && lastCall >= 0 && currentInternalFrame > lastCall;
+    g_faScratch.lastCallInternalFrame = currentInternalFrame;
+    g_faScratch.lastCallFrozen = freezeNow;
+    // Never count frames before the anchor that opened the window.
+    const auto frozenSince = [&](int anchor) -> int {
+        int frames = (freezeNow && newFrame) ? 1 : 0;
+        if (carry) {
+            const int from = (lastCall + 1 > anchor) ? lastCall + 1 : anchor;
+            if (currentInternalFrame > from) frames += currentInternalFrame - from;
+        }
+        return frames;
+    };
+    if (p1_last_defender_free_frame != -1) {
+        p1_freeze_accum_since_free += frozenSince(p1_last_defender_free_frame);
     }
-    if (p2_last_defender_free_frame != -1 && isFreezeFrame()) {
-        p2_freeze_accum_since_free++;
+    if (p2_last_defender_free_frame != -1) {
+        p2_freeze_accum_since_free += frozenSince(p2_last_defender_free_frame);
     }
 
     // Also accumulate freeze that occurs after attacker recovery but before defender free.
     if (frameAdvState.p1Attacking && frameAdvState.p1ActionableInternalFrame != -1 &&
-        frameAdvState.p2DefenderFreeInternalFrame == -1 && isFreezeFrame()) {
-        p1_freeze_after_atk_actionable++;
+        frameAdvState.p2DefenderFreeInternalFrame == -1) {
+        p1_freeze_after_atk_actionable += frozenSince(frameAdvState.p1ActionableInternalFrame);
     }
     if (frameAdvState.p2Attacking && frameAdvState.p2ActionableInternalFrame != -1 &&
-        frameAdvState.p1DefenderFreeInternalFrame == -1 && isFreezeFrame()) {
-        p2_freeze_after_atk_actionable++;
+        frameAdvState.p1DefenderFreeInternalFrame == -1) {
+        p2_freeze_after_atk_actionable += frozenSince(frameAdvState.p2ActionableInternalFrame);
     }
     
     // STEP 1: Detect if an attack connects (P1 attacking P2)

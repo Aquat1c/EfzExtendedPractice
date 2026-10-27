@@ -369,9 +369,10 @@ static bool StopWorker(bool releaseNeutral, const EfzTmEntryV1* heldWorld = null
 }
 
 void CancelWork() {
-    s_practiceAdmissionClosed.store(true, std::memory_order_release);
-    s_stop.store(true, std::memory_order_release);
     std::lock_guard<std::mutex> lifecycleLock(s_lifecycleMutex);
+    // Only BindPracticeWorld reopens admission; never close it without a bound world.
+    if (s_boundWorld.id.battleWorld) s_practiceAdmissionClosed.store(true, std::memory_order_release);
+    s_stop.store(true, std::memory_order_release);
     if (s_stopEvent) SetEvent(s_stopEvent);
 }
 

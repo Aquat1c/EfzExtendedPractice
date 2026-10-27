@@ -28,6 +28,7 @@
 #include "../include/game/per_frame_sample.h" // unified sampling context
 #include "../include/input/input_buffer.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../include/input/input_motion.h"
 #include "../include/utils/network.h"
 #include "../include/utils/pause_integration.h" // PauseIntegration::EnsurePracticePointerCapture/GetPracticeControllerPtr
@@ -40,6 +41,7 @@
 #include "../include/game/character_hotswap.h"
 #include "../include/game/final_memory_patch.h"
 #include "../include/game/timer_freeze_patch.h"
+#include "../include/game/game_thread_queue.h"
 #include "../include/game/macro_controller.h"
 #include "../include/game/always_rg.h"
 #include "../include/game/random_rg.h"
@@ -156,7 +158,7 @@ static void TickMissionEngineGuarded() noexcept {
         try {
             const std::string detail = e.what() ? e.what() : "unknown std::exception";
             LogOut("[MISSION][UNHANDLED_EXCEPTION] " + detail, true);
-            DirectDrawHook::AddMessage(("Mission stopped: " + detail).c_str(),
+            DirectDrawHook::AddMessage(I18n::TrFormat("Mission stopped: %s", detail.c_str()),
                                        "MISSION", RGB(255, 120, 120), 5000, 0, 120);
             Mission::Engine::Runner::Unload();
         } catch (...) {
@@ -190,19 +192,19 @@ static void MaybeShowPracticeOverlayHintOnce() {
         return;
     }
 
-    std::string keyboardKey = "Esc";
+    std::string keyboardKey = GetKeyName(cfg.configMenuKey);
 
-    std::ostringstream msg;
-    msg << "Training menu: press " << keyboardKey;
+    std::string msg;
     if (cfg.gpToggleMenuButton >= 0) {
         std::string padName = Config::GetGamepadButtonName(cfg.gpToggleMenuButton);
         if (!padName.empty() && padName != "-1") {
-            msg << " (controller: " << padName << ")";
+            msg = I18n::TrFormat("Training menu: press %s (controller: %s) to open.",
+                                 keyboardKey.c_str(), padName.c_str());
         }
     }
-    msg << " to open.";
+    if (msg.empty()) msg = I18n::TrFormat("Training menu: press %s to open.", keyboardKey.c_str());
 
-    DirectDrawHook::AddMessage(msg.str(), "PRACTICE_HINT", RGB(180, 235, 255), 4200, 0, 100);
+    DirectDrawHook::AddMessage(msg, "PRACTICE_HINT", RGB(180, 235, 255), 4200, 0, 100);
 }
 
 static std::atomic<int> g_fsdbgSteps{-1};
@@ -629,7 +631,7 @@ void UpdateTriggerOverlay() {
         if (isEnabled) {
             auto tokenFor = [&](int act, int str, int macro) -> std::string {
                 if (macro > 0) {
-                    return std::string("Macro ") + std::to_string(macro);
+                    return I18n::TrFormat("Macro %d", macro);
                 }
                 auto letter = [&](int s)->char { return (s<=0)?'A':(s==1?'B':(s==2?'C':'S')); };
                 switch (act) {
@@ -664,9 +666,9 @@ void UpdateTriggerOverlay() {
                         // strength: 0=neutral jump, 1=forward jump, 2=backward jump
                         int s = (str < 0 ? 0 : (str > 2 ? 2 : str));
                         switch (s) {
-                            case 1: return "Forward Jump";
-                            case 2: return "Backward Jump";
-                            default: return "Jump";
+                            case 1: return I18n::Tr("Forward Jump");
+                            case 2: return I18n::Tr("Backward Jump");
+                            default: return I18n::Tr("Jump");
                         }
                     }
                     case ACTION_BACKDASH: return "44";
@@ -683,7 +685,7 @@ void UpdateTriggerOverlay() {
                         }
                     }
                     case ACTION_BLOCK: return "[4]";
-                    case ACTION_FINAL_MEMORY: return "fm";
+                    case ACTION_FINAL_MEMORY: return I18n::Tr("fm");
                     default: return "?";
                 }
             };
@@ -698,9 +700,9 @@ void UpdateTriggerOverlay() {
                 switch (poolAction) {
                     case ACTION_FINAL_MEMORY: return "FM";
                     case ACTION_JUMP:
-                        if (poolStrength == 1) return "F.Jump";
-                        if (poolStrength == 2) return "B.Jump";
-                        return "Jump";
+                        if (poolStrength == 1) return I18n::Tr("F.Jump");
+                        if (poolStrength == 2) return I18n::Tr("B.Jump");
+                        return I18n::Tr("Jump");
                     case ACTION_BACKDASH: return "44";
                     // A pool entry for the plain forward dash must not inherit
                     // the separate global dash-followup selector.
@@ -857,14 +859,14 @@ void UpdateTriggerOverlay() {
                 bool usePool = false;
                 getPoolConfig(lo, hi, usePool);
                 if (!usePool) return std::string();
-                if ((lo | hi) == 0) return "Random: Empty";
+                if ((lo | hi) == 0) return I18n::Tr("Random: Empty");
 
                 int selected[CharacterActionCatalog::kPoolCount];
                 int selectedCount = 0;
                 for (int idx = 0; idx < CharacterActionCatalog::kPoolCount; ++idx) {
                     if (poolBitSet(lo, hi, idx)) selected[selectedCount++] = idx;
                 }
-                if (selectedCount <= 0) return "Random: Empty";
+                if (selectedCount <= 0) return I18n::Tr("Random: Empty");
 
                 const int chosen = activePoolChoiceIndex();
                 const bool chosenSelected = chosen >= 0 && poolBitSet(lo, hi, chosen);
@@ -880,7 +882,7 @@ void UpdateTriggerOverlay() {
                     shown[shownCount++] = selected[i];
                 }
 
-                std::string result = "Random: ";
+                std::string result = I18n::Tr("Random: ");
                 for (int i = 0; i < shownCount; ++i) {
                     if (i > 0) result += "/";
                     const bool markChosen = chosenSelected && shown[i] == chosen;
@@ -932,11 +934,11 @@ void UpdateTriggerOverlay() {
             // Fallback: legacy single-action display.
             std::string text;
             if (!combined.empty()) {
-                text = label + combined;
+                text = I18n::Tr(label.c_str()) + combined;
             } else {
                 std::string actionName = (macroSlot > 0) ? (std::string("Macro Slot #") + std::to_string(macroSlot))
                                                          : getActionName(action, customId, strength);
-                text = label + actionName;
+                text = I18n::Tr(label.c_str()) + std::string(I18n::Tr(actionName.c_str()));
                 if (delay > 0) { text += " +" + std::to_string(delay); }
             }
 
@@ -1340,8 +1342,7 @@ void FrameDataMonitor() {
             || featuresEnabledNow != lastFmSyncFeatures
             || netplayNow != lastFmSyncNetplay;
         if (fmSyncNeeded) {
-            const int fmChanges = SyncFinalMemoryBypassForCurrentMode("FrameDataMonitor transition");
-            TimerFreeze::SyncForCurrentMode("FrameDataMonitor transition");
+            const int fmChanges = GameThread::SyncPracticePatches("FrameDataMonitor transition");
             if (fmChanges > 0 || detailedLogging.load()) {
                 std::ostringstream oss;
                 oss << "[FM_PATCH] Frame monitor sync"
@@ -2827,26 +2828,33 @@ void FrameDataMonitor() {
                                 double defY = (defPlayer == 1) ? p1Y : p2Y;
                                 double diff = atkY - defY;
 
-                                std::stringstream ss; ss.setf(std::ios::fixed); ss << std::setprecision(2);
-                                ss << "Akiko 623 last hit dY=" << diff << "  ";
+                                std::string en, shown;
+                                auto add = [&](const char* fmt, double v) {
+                                    char b[96];
+                                    _snprintf_s(b, sizeof(b), _TRUNCATE, fmt, v);
+                                    en += b;
+                                    shown += I18n::TrFormat(fmt, v);
+                                };
+                                auto addText = [&](const char* t) { en += t; shown += I18n::Tr(t); };
+                                add("Akiko 623 last hit dY=%.2f  ", diff);
                                 if (isLastC) {
                                     if (diff > 47.0 && diff < 53.0) {
-                                        ss << "FULL CLEAN HIT!";
+                                        addText("FULL CLEAN HIT!");
                                     } else if (diff > 40.0 && diff < 60.0) {
-                                        ss << "PARTIAL CLEAN HIT!";
-                                        if (diff >= 47.0) ss << " (Enemy's too high for FULL by " << (diff - 53.0) << ")";
-                                        else ss << " (Enemy's too low for FULL by " << (47.0 - diff) << ")";
+                                        addText("PARTIAL CLEAN HIT!");
+                                        if (diff >= 47.0) add(" (Enemy's too high for FULL by %.2f)", diff - 53.0);
+                                        else add(" (Enemy's too low for FULL by %.2f)", 47.0 - diff);
                                     } else {
-                                        if (diff >= 40.0) ss << "Enemy's too high for PARTIAL by " << (diff - 60.0);
-                                        else ss << "Enemy's too low for PARTIAL by " << (40.0 - diff);
+                                        if (diff >= 40.0) add("Enemy's too high for PARTIAL by %.2f", diff - 60.0);
+                                        else add("Enemy's too low for PARTIAL by %.2f", 40.0 - diff);
                                     }
                                 } else {
                                     if (diff > 32.0 && diff < 48.0) {
-                                        ss << "CLEAN HIT!";
+                                        addText("CLEAN HIT!");
                                     } else if (diff >= 48.0) {
-                                        ss << "Enemy's too high by " << (diff - 48.0);
+                                        add("Enemy's too high by %.2f", diff - 48.0);
                                     } else {
-                                        ss << "Enemy's too low by " << (32.0 - diff);
+                                        add("Enemy's too low by %.2f", 32.0 - diff);
                                     }
                                 }
 
@@ -2854,8 +2862,8 @@ void FrameDataMonitor() {
                                        " def=P" + std::to_string(defPlayer) +
                                        " move=" + std::to_string((int)atkMove) +
                                        " diffY=" + std::to_string(diff) +
-                                       " -> " + ss.str(), true);
-                                DirectDrawHook::AddMessage(ss.str(), "SYSTEM", RGB(255, 255, 0), 1500, 0, 100);
+                                       " -> " + en, true);
+                                DirectDrawHook::AddMessage(shown, "SYSTEM", RGB(255, 255, 0), 1500, 0, 100);
                                 s_cleanHitSuppress = 8; // ~40ms at 192fps
                             }
                         }
@@ -3374,19 +3382,10 @@ void UpdateStatsDisplay() {
     // Feed positions cache for other systems
     UpdatePositionCache(p1X, p1Y, p2X, p2Y);
 
-    std::stringstream p1Values, p2Values, positions, moveIds;
-    
-    // Player 1 values (HP, Meter, RF)
-    p1Values << "P1:  HP: " << p1Hp << "  Meter: " << p1Meter << "  RF: " << std::fixed << std::setprecision(1) << p1Rf;
-    
-    // Player 2 values (HP, Meter, RF)
-    p2Values << "P2:  HP: " << p2Hp << "  Meter: " << p2Meter << "  RF: " << std::fixed << std::setprecision(1) << p2Rf;
-    
-    // Player positions
-    positions << "Position:  P1 [X: " << std::fixed << std::setprecision(2) << p1X 
-              << ", Y: " << std::fixed << std::setprecision(2) << p1Y 
-              << "]  P2 [X: " << std::fixed << std::setprecision(2) << p2X 
-              << ", Y: " << std::fixed << std::setprecision(2) << p2Y << "]";
+    const std::string p1Values = I18n::TrFormat("P1:  HP: %d  Meter: %d  RF: %.1f", p1Hp, p1Meter, p1Rf);
+    const std::string p2Values = I18n::TrFormat("P2:  HP: %d  Meter: %d  RF: %.1f", p2Hp, p2Meter, p2Rf);
+    const std::string positions = I18n::TrFormat(
+        "Position:  P1 [X: %.2f, Y: %.2f]  P2 [X: %.2f, Y: %.2f]", p1X, p1Y, p2X, p2Y);
     
     // Move IDs with P1 guard requirement (HIGH/LOW/ANY) appended when available
     std::string p1ReqStr;
@@ -3423,9 +3422,9 @@ void UpdateStatsDisplay() {
         if (g_statsBlockstunId != -1) { DirectDrawHook::RemovePermanentMessage(g_statsBlockstunId); g_statsBlockstunId = -1; }
         if (g_statsUntechId != -1) { DirectDrawHook::RemovePermanentMessage(g_statsUntechId); g_statsUntechId = -1; }
     }
-    moveIds << "MoveID:  P1: " << p1MoveId;
-    if (!p1ReqStr.empty()) moveIds << " [" << p1ReqStr << "]";
-    moveIds << "  P2: " << p2MoveId;
+    const std::string moveIds = p1ReqStr.empty()
+        ? I18n::TrFormat("MoveID:  P1: %d  P2: %d", (int)p1MoveId, (int)p2MoveId)
+        : I18n::TrFormat("MoveID:  P1: %d [%s]  P2: %d", (int)p1MoveId, I18n::Tr(p1ReqStr.c_str()), (int)p2MoveId);
 
     // Set or update the display.
     const int startX = 20;
@@ -3442,9 +3441,9 @@ void UpdateStatsDisplay() {
     };
 
     if (statsOn) {
-        upsert(g_statsP1ValuesId, p1Values.str());
-        upsert(g_statsP2ValuesId, p2Values.str());
-        upsert(g_statsPositionId, positions.str());
+        upsert(g_statsP1ValuesId, p1Values);
+        upsert(g_statsP2ValuesId, p2Values);
+        upsert(g_statsPositionId, positions);
 
         // Separate Blockstun and Untech counters (raw internal values).
         auto readStunCounters = [&]() {
@@ -3462,11 +3461,8 @@ void UpdateStatsDisplay() {
         {
             int p1BlkLF=0, p1HitLF=0, p2BlkLF=0, p2HitLF=0;
             std::tie(p1BlkLF, p1HitLF, p2BlkLF, p2HitLF) = readStunCounters();
-            std::stringstream blkLine, hitLine;
-            blkLine << "Blockstun:  P1 " << p1BlkLF << "  P2 " << p2BlkLF;
-            hitLine << "Untech:    P1 " << p1HitLF << "  P2 " << p2HitLF;
-            upsert(g_statsBlockstunId, blkLine.str());
-            upsert(g_statsUntechId, hitLine.str());
+            upsert(g_statsBlockstunId, I18n::TrFormat("Blockstun:  P1 %d  P2 %d", p1BlkLF, p2BlkLF));
+            upsert(g_statsUntechId, I18n::TrFormat("Untech:    P1 %d  P2 %d", p1HitLF, p2HitLF));
         }
 
         // Nayuki (Awake) snowbunnies timer (either side).
@@ -3746,7 +3742,11 @@ void UpdateStatsDisplay() {
                 std::stringstream aiLine;
                 aiLine << "AI: P1=" << (haveP1 ? (p1AI?"1":"0") : "-") << " P2=" << (haveP2 ? (p2AI?"1":"0") : "-");
                 // Indicate when P2 control is temporarily overridden by automation
-                if (g_p2ControlOverridden) aiLine << " [Override]";
+                if (g_p2ControlOverridden) {
+                    aiLine.str(I18n::TrFormat("AI: P1=%s P2=%s [Override]",
+                                              haveP1 ? (p1AI ? "1" : "0") : "-",
+                                              haveP2 ? (p2AI ? "1" : "0") : "-"));
+                }
                 upsert(g_statsAIFlagsId, aiLine.str());
             } else {
                 if (g_statsAIFlagsId != -1) { DirectDrawHook::RemovePermanentMessage(g_statsAIFlagsId); g_statsAIFlagsId = -1; }
@@ -3758,7 +3758,7 @@ void UpdateStatsDisplay() {
     }
 
     if (statsOn) {
-        upsert(g_statsMoveIdId, moveIds.str());
+        upsert(g_statsMoveIdId, moveIds);
     }
 
     // Dynamic EXTRA pages: overview, then one page per active entity; g_statsPageCount drives 5/6 wrap.
@@ -3821,10 +3821,10 @@ void UpdateStatsDisplay() {
                 SafeReadMemory(p2b + PLAYER_ATTACK_TIMER_OFFSET, &at2, sizeof(at2));
                 SafeReadMemory(p2b + CURRENT_FRAME_INDEX_OFFSET, &fi2, sizeof(fi2));
             }
-            { std::stringstream l; l << "Guard:    P1 " << std::fixed << std::setprecision(0) << g1 << "   P2 " << g2; pageLines.push_back(l.str()); }
-            { std::stringstream l; l << "AtkTimer: P1 " << at1 << "   P2 " << at2; pageLines.push_back(l.str()); }
-            { std::stringstream l; l << "FrameIdx: P1 " << fi1 << "   P2 " << fi2; pageLines.push_back(l.str()); }
-            { std::stringstream l; l << "Entities: P1 " << p1Count << "   P2 " << p2Count; pageLines.push_back(l.str()); }
+            pageLines.push_back(I18n::TrFormat("Guard:    P1 %.0f   P2 %.0f", (double)g1, (double)g2));
+            pageLines.push_back(I18n::TrFormat("AtkTimer: P1 %d   P2 %d", (int)at1, (int)at2));
+            pageLines.push_back(I18n::TrFormat("FrameIdx: P1 %d   P2 %d", (int)fi1, (int)fi2));
+            pageLines.push_back(I18n::TrFormat("Entities: P1 %d   P2 %d", p1Count, p2Count));
         } else {
             const EntityPageRef& selected = entityPages[static_cast<std::size_t>(page - 1)];
             const EntityProbe& entity = *selected.entity;
@@ -3832,14 +3832,15 @@ void UpdateStatsDisplay() {
             if (!entity.readable) {
                 pageLines.push_back("entry unreadable (alive bit retained)");
             } else {
-                { std::stringstream l; l << "pattern " << entity.pattern << "   life " << entity.life; pageLines.push_back(l.str()); }
-                { std::stringstream l; l << "frame " << entity.frame << ":" << entity.frameTick << "   destroyed " << entity.destroyed; pageLines.push_back(l.str()); }
-                { std::stringstream l; l << "pos (" << std::fixed << std::setprecision(1) << entity.x << ", " << entity.y << ")"; pageLines.push_back(l.str()); }
+                pageLines.push_back(I18n::TrFormat("pattern %d   life %d", (int)entity.pattern, (int)entity.life));
+                pageLines.push_back(I18n::TrFormat("frame %d:%d   destroyed %d", (int)entity.frame, (int)entity.frameTick,
+                                                   (int)entity.destroyed));
+                pageLines.push_back(I18n::TrFormat("pos (%.1f, %.1f)", entity.x, entity.y));
             }
         }
 
         std::vector<std::string> lines;
-        { std::stringstream h; h << "== EXTRA " << (page + 1) << "/" << count << " (" << pageName << ")  [5/6] =="; lines.push_back(h.str()); }
+        lines.push_back(I18n::TrFormat("== EXTRA %d/%d (%s)  [5/6] ==", page + 1, count, I18n::Tr(pageName.c_str())));
         for (const auto& l : pageLines) lines.push_back(l);
 
         // Permanent messages can't reposition; drop+re-add slots when the top moves.

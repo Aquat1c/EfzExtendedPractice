@@ -1,6 +1,7 @@
 #include "../include/gui/framebar.h"
 #include "../include/utils/utilities.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../include/core/constants.h"
 #include "../include/core/memory.h"
 #include "../include/game/frame_advantage.h"
@@ -1788,20 +1789,20 @@ void Render(const DrawCtx& ctx) {
     if (showStatus && compactStatus) {
         _snprintf_s(buf, sizeof(buf), _TRUNCATE,
                     "P1 %-8s ID:%-4d F:%-3d FA:%-3d ACT:%-3d BX:%d/%d PB:%d P:%d",
-                    CatName(cl1.cat), (int)cl1.moveID, (int)cl1.frameIdx,
+                    I18n::Tr(CatName(cl1.cat)), (int)cl1.moveID, (int)cl1.frameIdx,
                     cl1.firstActive, cl1.activeCount,
                     cl1.activeHitbox ? (int)cl1.attackBoxes : 0, (int)cl1.attackBoxes,
                     (int)cl1.projectileBoxes, (int)cl1.projectiles);
         _snprintf_s(buf3, sizeof(buf3), _TRUNCATE,
                     "P2 %-8s ID:%-4d F:%-3d FA:%-3d ACT:%-3d BX:%d/%d PB:%d P:%d",
-                    CatName(cl2.cat), (int)cl2.moveID, (int)cl2.frameIdx,
+                    I18n::Tr(CatName(cl2.cat)), (int)cl2.moveID, (int)cl2.frameIdx,
                     cl2.firstActive, cl2.activeCount,
                     cl2.activeHitbox ? (int)cl2.attackBoxes : 0, (int)cl2.attackBoxes,
                     (int)cl2.projectileBoxes, (int)cl2.projectiles);
     } else if (showStatus) {
         _snprintf_s(buf, sizeof(buf), _TRUNCATE,
                     "P1 %-8s ID:%-4d F:%-3d BX:%d/%d PB:%d P:%d AM:%d/%d ST:%-3d UT:%-3d ATK:%-3d",
-                    CatName(cl1.cat), (int)cl1.moveID, (int)cl1.frameIdx,
+                    I18n::Tr(CatName(cl1.cat)), (int)cl1.moveID, (int)cl1.frameIdx,
                     cl1.activeHitbox ? (int)cl1.attackBoxes : 0, (int)cl1.attackBoxes,
                     (int)cl1.projectileBoxes, (int)cl1.projectiles,
                     (int)cl1.airMobility1, (int)cl1.airMobility2,
@@ -1816,7 +1817,7 @@ void Render(const DrawCtx& ctx) {
                     (int)cl1.frameLockout, (int)cl1.collisionLockout);
         _snprintf_s(buf3, sizeof(buf3), _TRUNCATE,
                     "P2 %-8s ID:%-4d F:%-3d BX:%d/%d PB:%d P:%d AM:%d/%d ST:%-3d UT:%-3d ATK:%-3d",
-                    CatName(cl2.cat), (int)cl2.moveID, (int)cl2.frameIdx,
+                    I18n::Tr(CatName(cl2.cat)), (int)cl2.moveID, (int)cl2.frameIdx,
                     cl2.activeHitbox ? (int)cl2.attackBoxes : 0, (int)cl2.attackBoxes,
                     (int)cl2.projectileBoxes, (int)cl2.projectiles,
                     (int)cl2.airMobility1, (int)cl2.airMobility2,

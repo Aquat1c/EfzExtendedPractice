@@ -8,6 +8,7 @@
 #include "../include/gui/imgui_impl.h"
 #include "../include/utils/utilities.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../include/utils/debug_log.h"
 #include "../include/core/constants.h"
 #include "../include/core/version.h"
@@ -200,7 +201,7 @@ void OnDebugFileLogging() {
 
 const char* CurrentConfigPathInfo() {
     static char buf[320];
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Config file: %s", Config::GetConfigFilePath().c_str());
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("Config file: %s"), Config::GetConfigFilePath().c_str());
     return buf;
 }
 
@@ -1086,7 +1087,7 @@ const char* FormatActionPoolChoice(const Row&, int choiceValue) {
 }
 
 const char* FormatActionPoolChoiceHelp(const Row&, int choiceValue) {
-    static char s_buf[176];
+    static char s_buf[256];
     choiceValue = ClampIndex(choiceValue, kActionPoolCount);
     const char* name = kActionPoolNames[choiceValue];
     const int category = ActionPoolCategoryForIndex(choiceValue);
@@ -1112,8 +1113,8 @@ const char* FormatActionPoolChoiceHelp(const Row&, int choiceValue) {
             break;
     }
     _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE,
-                "Adds %s as an exact %s; only checked entries can be rolled by Random Pool.",
-                name, kind);
+                I18n::Tr("Adds %s as an exact %s; only checked entries can be rolled by Random Pool."),
+                I18n::Tr(name), I18n::Tr(kind));
     return s_buf;
 }
 
@@ -1490,7 +1491,8 @@ const char* FormatTriggerActionPopupChoice(const Row& row, int choiceValue) {
         strength = AvailableStrengthForMotion(
             EffectiveAutoActionCharId(), choice.motionIdx, strength);
     }
-    return FormatTriggerActionChoiceLabel(choiceValue, strength, g_mirrorFwdDashFollowup, false);
+    const int dashFollowup = row.choiceVariantPtr ? *row.choiceVariantPtr : g_mirrorFwdDashFollowup;
+    return FormatTriggerActionChoiceLabel(choiceValue, strength, dashFollowup, false);
 }
 
 bool AdjustTriggerActionPopupChoice(const Row& row, int choiceValue, int direction) {
@@ -1513,8 +1515,8 @@ bool AdjustTriggerActionPopupChoice(const Row& row, int choiceValue, int directi
             *row.intPtr = (*row.intPtr + direction + count) % count;
             return true;
         case TriggerButtonMode::FdFollowup:
-            g_mirrorFwdDashFollowup = (g_mirrorFwdDashFollowup + direction + count) % count;
-            forwardDashFollowup.store(g_mirrorFwdDashFollowup);
+            if (!row.choiceVariantPtr) return false;
+            *row.choiceVariantPtr = (*row.choiceVariantPtr + direction + count) % count;
             return true;
         default:
             return false;
@@ -1695,7 +1697,7 @@ bool HideRGCharge() {
 
 constexpr int kMaxMacroSlotEntries = 17;   // 1 "none" + up to 16 slots
 static const char* g_macroSlotChoiceArr[kMaxMacroSlotEntries];
-static char s_macroSlotLabels[kMaxMacroSlotEntries][16];
+static char s_macroSlotLabels[kMaxMacroSlotEntries][32];
 static int g_macroSlotChoiceCount = 1;
 
 void RefreshMacroSlotChoices() {
@@ -1707,7 +1709,7 @@ void RefreshMacroSlotChoices() {
     strncpy_s(s_macroSlotLabels[0], sizeof(s_macroSlotLabels[0]), "NONE", _TRUNCATE);
     g_macroSlotChoiceArr[0] = s_macroSlotLabels[0];
     for (int i = 1; i <= slots; ++i) {
-        _snprintf_s(s_macroSlotLabels[i], sizeof(s_macroSlotLabels[i]), _TRUNCATE, "SLOT %d", i);
+        _snprintf_s(s_macroSlotLabels[i], sizeof(s_macroSlotLabels[i]), _TRUNCATE, I18n::Tr("SLOT %d"), i);
         g_macroSlotChoiceArr[i] = s_macroSlotLabels[i];
     }
 }
@@ -1715,6 +1717,12 @@ void RefreshMacroSlotChoices() {
 const char* const kUiFontChoices[2] = { "DEFAULT", "SEGOE UI" };
 void OnUiFont() {
     PersistInt("General", "uiFont", MutableSettings().uiFontMode);
+}
+// Index order matches I18n::Language; each language is named in its own script once active.
+const char* const kLanguageChoices[2] = { "ENGLISH", "JAPANESE" };
+void OnLanguage() {
+    Config::SetSetting("General", "language",
+                       MutableSettings().language == I18n::Japanese ? "ja" : "en");
 }
 void OnPracticeHint() {
     PersistBool("General", "showPracticeEntryHint", MutableSettings().showPracticeEntryHint);
@@ -1783,7 +1791,7 @@ const char* ValDisplaySettings() {
     if (enabled == 0) {
         return "OFF";
     }
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d ON / %d%%", enabled, s.collisionDisplayFillAlphaPercent);
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("%d ON / %d%%"), enabled, s.collisionDisplayFillAlphaPercent);
     return buf;
 }
 
@@ -1844,6 +1852,8 @@ Row* BuildSettingsInterfaceRows(int& count) {
     s_rows[n++] = Toggle    ("USE CUSTOM MENU",        &s.useCustomMenu,       OnUseCustomMenu);
     s_rows[n++] = FloatNum  ("UI SCALE",               &s.uiScale,      0.70f, 1.50f, 0.05f, 0.10f, "%.2f", OnUiScale);
     s_rows[n++] = ChoicesRow("UI FONT (ADVANCED MENU)", &s.uiFontMode,   kUiFontChoices, 2, OnUiFont);
+    s_rows[n] = ChoicesRow("LANGUAGE", &s.language, kLanguageChoices, 2, OnLanguage);
+    s_rows[n++].helpText = "Chooses the language of the custom menu and in-game overlays.";
     s_rows[n++] = Toggle    ("PRACTICE OVERLAY HINT",  &s.showPracticeEntryHint, OnPracticeHint);
     s_rows[n++] = Toggle    ("CHECK FOR UPDATES",       &s.checkForUpdates,     OnCheckForUpdates);
     count = n;
@@ -1962,6 +1972,10 @@ void BindUiExit()         { auto& s = MutableSettings(); BindFooterHotkey("UI EX
 void BindFramestepPause() { auto& s = MutableSettings(); BindHotkey("FRAMESTEP PAUSE", &s.framestepPauseKey,     "FramestepPauseKey"); }
 void BindFramestepStep()  { auto& s = MutableSettings(); BindHotkey("FRAMESTEP STEP",  &s.framestepStepKey,      "FramestepStepKey"); }
 void BindSwapCustom()     { auto& s = MutableSettings(); BindHotkey("SWAP CUSTOM KEY", &s.swapCustomKey,         "SwapCustomKey"); }
+void BindMenuKey()        { auto& s = MutableSettings(); BindHotkey("OPEN MENU",       &s.configMenuKey,         "MenuKey"); }
+// Esc cancels a capture, so it needs its own reset row.
+void ResetMenuKeyToEsc()  { auto& s = MutableSettings(); s.configMenuKey = VK_ESCAPE; Config::SetSetting("Hotkeys", "MenuKey", "0x1B"); }
+bool MenuKeyIsEsc()       { return Config::GetSettings().configMenuKey == VK_ESCAPE; }
 
 struct ManualKeybindEditorState {
     bool active = false;
@@ -1989,6 +2003,7 @@ bool ManualKeybindAllowed(int vk, bool disallowMenuReserved) {
     if (vk == VK_LWIN || vk == VK_RWIN) return false;
     if (vk == VK_CLEAR) return false;
     if (vk == VK_ESCAPE) return false;
+    if (vk == Config::GetSettings().configMenuKey) return false;
     if (disallowMenuReserved && (vk == VK_RETURN || vk == VK_SPACE)) return false;
     return true;
 }
@@ -2091,7 +2106,7 @@ std::string ManualKeybindPreviewText() {
         return "Preview: blocked by key restrictions";
     }
     char buf[96];
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Preview: 0x%X  %s", parsed, Config::GetKeyName(parsed).c_str());
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("Preview: 0x%X  %s"), parsed, Config::GetKeyName(parsed).c_str());
     return std::string(buf);
 }
 
@@ -2122,33 +2137,33 @@ bool TickManualKeybindEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings;
-    if (ImGui::Begin("MANUAL KEYBIND EDITOR", nullptr, flags)) {
-        ImGui::TextUnformatted(g_manualKeybindEditor.title);
-        ImGui::TextDisabled("Enter a raw virtual-key code as hex or decimal. Example: 0x48 or 72.");
+    if (ImGui::Begin(I18n::Tr("MANUAL KEYBIND EDITOR"), nullptr, flags)) {
+        ImGui::TextUnformatted(I18n::Tr(g_manualKeybindEditor.title));
+        ImGui::TextDisabled("%s", I18n::Tr("Enter a raw virtual-key code as hex or decimal. Example: 0x48 or 72."));
         if (g_manualKeybindEditor.disallowMenuReserved) {
-            ImGui::TextDisabled("Footer bindings reserve Enter, Escape, and Space.");
+            ImGui::TextDisabled("%s", I18n::Tr("Footer bindings reserve Enter, Escape, and Space."));
         }
 
         if (g_manualKeybindEditor.errorBuf[0]) {
             ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", g_manualKeybindEditor.errorBuf);
         } else {
             const std::string preview = ManualKeybindPreviewText();
-            ImGui::TextDisabled("%s", preview.c_str());
+            ImGui::TextDisabled("%s", I18n::Tr(preview.c_str()));
         }
 
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputText("##manual_vk_value", g_manualKeybindEditor.valueBuf, sizeof(g_manualKeybindEditor.valueBuf));
 
-        if (ImGui::Button("Apply")) {
+        if (ImGui::Button(I18n::Tr("Apply"))) {
             ApplyManualKeybindEditor();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Disable")) {
+        if (ImGui::Button(I18n::Tr("Disable"))) {
             strncpy_s(g_manualKeybindEditor.valueBuf, sizeof(g_manualKeybindEditor.valueBuf), "-1", _TRUNCATE);
             ApplyManualKeybindEditor();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
+        if (ImGui::Button(I18n::Tr("Cancel"))) {
             CloseManualKeybindEditor();
             Input::ResetEdges();
         }
@@ -2202,6 +2217,7 @@ const char* ValUiExit()         { return HotkeyNameValue(Config::GetSettings().u
 const char* ValFramestepPause() { return HotkeyNameValue(Config::GetSettings().framestepPauseKey); }
 const char* ValFramestepStep()  { return HotkeyNameValue(Config::GetSettings().framestepStepKey); }
 const char* ValSwapCustom()     { return HotkeyNameValue(Config::GetSettings().swapCustomKey); }
+const char* ValMenuKey()        { return HotkeyNameValue(Config::GetSettings().configMenuKey); }
 const char* ValTeleportCode()       { return HotkeyCodeValue(Config::GetSettings().teleportKey); }
 const char* ValSavePositionCode()   { return HotkeyCodeValue(Config::GetSettings().recordKey); }
 const char* ValToggleStatsCode()    { return HotkeyCodeValue(Config::GetSettings().toggleTitleKey); }
@@ -2327,7 +2343,7 @@ void RefreshHotkeyStrings() {
 const char* ValHotkeyGameplay() { return "5 KEYS"; }
 const char* ValHotkeySavestate() { return "4 KEYS"; }
 const char* ValHotkeyMacros()   { return "3 KEYS"; }
-const char* ValHotkeyMenu()     { return "5 KEYS"; }
+const char* ValHotkeyMenu()     { return "6 KEYS"; }
 const char* ValHotkeyController() { return "12 BINDS"; }
 const char* ValHotkeyManual()   { return "RAW VK"; }
 
@@ -2374,6 +2390,9 @@ Row* BuildHotkeysMenuRows(int& count) {
     int n = 0;
 
     s_rows[n++] = Header("MENU CONTROL");
+    s_rows[n++] = Action("OPEN MENU",       BindMenuKey,        ValMenuKey);
+    s_rows[n++] = Action("USE ESC TO OPEN MENU", ResetMenuKeyToEsc, nullptr, MenuKeyIsEsc);
+    s_rows[n++] = Info("With any key other than Esc, Esc does its normal EFZ job again (it leaves the match). Inside this menu Esc still goes back. Avoid keys EfzRevival uses for Practice.");
     s_rows[n++] = Action("UI ACCEPT",       BindUiAccept,       ValUiAccept);
     s_rows[n++] = Action("UI REFRESH",      BindUiRefresh,      ValUiRefresh);
     s_rows[n++] = Action("UI EXIT",         BindUiExit,         ValUiExit);
@@ -2796,9 +2815,9 @@ void RefreshDebugRuntimeMirrors() {
     }
 
     _snprintf_s(g_debugAiControlInfo, sizeof(g_debugAiControlInfo), _TRUNCATE,
-                "AI Control Flags: P1=%s  P2=%s",
-                IsAIControlFlagHuman(1) ? "Human" : "AI",
-                IsAIControlFlagHuman(2) ? "Human" : "AI");
+                I18n::Tr("AI Control Flags: P1=%s  P2=%s"),
+                I18n::Tr(IsAIControlFlagHuman(1) ? "Human" : "AI"),
+                I18n::Tr(IsAIControlFlagHuman(2) ? "Human" : "AI"));
 
     uint8_t p2CpuFlag = 0xFF;
     uintptr_t efzBase = GetEFZBase();
@@ -2810,7 +2829,7 @@ void RefreshDebugRuntimeMirrors() {
     }
     if (p2CpuFlag != 0xFF) {
         _snprintf_s(g_debugPracticeCpuInfo, sizeof(g_debugPracticeCpuInfo), _TRUNCATE,
-                    "Practice P2 CPU flag: %s (byte=%u)", p2CpuFlag ? "CPU" : "Human", (unsigned)p2CpuFlag);
+                    I18n::Tr("Practice P2 CPU flag: %s (byte=%u)"), I18n::Tr(p2CpuFlag ? "CPU" : "Human"), (unsigned)p2CpuFlag);
     } else {
         strncpy_s(g_debugPracticeCpuInfo, sizeof(g_debugPracticeCpuInfo), "Practice P2 CPU flag: unknown", _TRUNCATE);
     }
@@ -2824,7 +2843,7 @@ void RefreshDebugRuntimeMirrors() {
     }
     if (curSpeed != 0xFF) {
         _snprintf_s(g_debugGamespeedInfo, sizeof(g_debugGamespeedInfo), _TRUNCATE,
-                    "Gamespeed: %u (0=freeze, 3=normal)", (unsigned)curSpeed);
+                    I18n::Tr("Gamespeed: %u (0=freeze, 3=normal)"), (unsigned)curSpeed);
     } else {
         strncpy_s(g_debugGamespeedInfo, sizeof(g_debugGamespeedInfo), "Gamespeed: unknown", _TRUNCATE);
     }
@@ -2836,12 +2855,12 @@ void RefreshDebugRuntimeMirrors() {
         double value = 0.0;
         activeOut = false;
         if (!GetRFFreezeStatus(player, active, value, colorManaged, colorBlue)) {
-            _snprintf_s(buf, bufSz, _TRUNCATE, "P%d RF Freeze: unknown", player);
+            _snprintf_s(buf, bufSz, _TRUNCATE, I18n::Tr("P%d RF Freeze: unknown"), player);
             return;
         }
         activeOut = active;
         if (!active) {
-            _snprintf_s(buf, bufSz, _TRUNCATE, "P%d RF Freeze: inactive", player);
+            _snprintf_s(buf, bufSz, _TRUNCATE, I18n::Tr("P%d RF Freeze: inactive"), player);
             return;
         }
 
@@ -2852,12 +2871,12 @@ void RefreshDebugRuntimeMirrors() {
         else if (origin == RFFreezeOrigin::Other) originLabel = "Other";
 
         _snprintf_s(buf, bufSz, _TRUNCATE,
-                    "P%d RF Freeze: ACTIVE  RF=%.1f  Color=%s%s  Source=%s",
+                    I18n::Tr("P%d RF Freeze: ACTIVE  RF=%.1f  Color=%s%s  Source=%s"),
                     player,
                     value,
-                    colorManaged ? "Locked" : "Off",
-                    colorManaged ? (colorBlue ? " (Blue)" : " (Red)") : "",
-                    originLabel);
+                    I18n::Tr(colorManaged ? "Locked" : "Off"),
+                    I18n::Tr(colorManaged ? (colorBlue ? " (Blue)" : " (Red)") : ""),
+                    I18n::Tr(originLabel));
     };
     fillRfInfo(1, g_debugRfFreezeP1Info, sizeof(g_debugRfFreezeP1Info), g_debugRfFreezeP1Active);
     fillRfInfo(2, g_debugRfFreezeP2Info, sizeof(g_debugRfFreezeP2Info), g_debugRfFreezeP2Active);
@@ -2946,7 +2965,7 @@ void ActResetMission() {
 }
 const char* ValMissionRecordSteps() {
     static char b[48];
-    _snprintf_s(b, sizeof(b), _TRUNCATE, "%d steps / %d setup breaks",
+    _snprintf_s(b, sizeof(b), _TRUNCATE, I18n::Tr("%d steps / %d setup breaks"),
                 Mission::Engine::Recorder::GetStepCount(),
                 Mission::Engine::Recorder::GetComboEndCount());
     return b;
@@ -4350,7 +4369,7 @@ static Row* BuildMissionBrowserRows(int& count) {
     int n = 0;
     s_rows[n++] = Header("RECORD & AUTHOR");
     _snprintf_s(bindingLine, sizeof(bindingLine), _TRUNCATE,
-                "Macro Record: %s", Mission::Engine::Recorder::GetMacroRecordBindingLabel().c_str());
+                I18n::Tr("Macro Record: %s"), Mission::Engine::Recorder::GetMacroRecordBindingLabel().c_str());
     s_rows[n++] = Info(bindingLine);
     const auto recPhase = Mission::Engine::Recorder::GetPhase();
     SeedMissionAuthoringSessionIfNeeded(recPhase);
@@ -4369,7 +4388,7 @@ static Row* BuildMissionBrowserRows(int& count) {
             static char value[32];
             const int milliseconds = row.intPtr ? *row.intPtr : 0;
             if (milliseconds <= 0) return "OFF";
-            _snprintf_s(value, sizeof(value), _TRUNCATE, "%.1f SEC",
+            _snprintf_s(value, sizeof(value), _TRUNCATE, I18n::Tr("%.1f SEC"),
                         static_cast<double>(milliseconds) / 1000.0);
             return value;
         };
@@ -4542,27 +4561,27 @@ Row* BuildSettingsDebugRows(int& count) {
 
 // HELP screen
 char g_helpVersionStr[64];
-char g_helpBuildStr[64];
-char g_helpUpdateStr[192];
-char g_helpUpdateHeadline[64];
+char g_helpBuildStr[96];
+char g_helpUpdateStr[256];
+char g_helpUpdateHeadline[96];
 char g_helpOpenHelp[96];
-char g_helpToggleOverlay[128];
-char g_helpSavePos[128];
-char g_helpLoadPos[128];
-char g_helpSwapPos[128];
-char g_helpToggleStats[96];
-char g_helpSwitchPlayers[128];
-char g_helpUiFooter[128];
-char g_helpTopTabs[160];
-char g_helpSubTabs[192];
+char g_helpToggleOverlay[256];
+char g_helpSavePos[256];
+char g_helpLoadPos[256];
+char g_helpSwapPos[256];
+char g_helpToggleStats[192];
+char g_helpSwitchPlayers[256];
+char g_helpUiFooter[256];
+char g_helpTopTabs[256];
+char g_helpSubTabs[320];
 char g_helpControllerSupport[192];
-char g_helpMacroRecord[128];
-char g_helpMacroPlay[128];
-char g_helpMacroSlot[96];
-char g_helpSavestateSave[128];
-char g_helpSavestateLoad[128];
-char g_helpFaDuration[80];
-char g_helpDetectedVersion[96];
+char g_helpMacroRecord[256];
+char g_helpMacroPlay[256];
+char g_helpMacroSlot[192];
+char g_helpSavestateSave[256];
+char g_helpSavestateLoad[256];
+char g_helpFaDuration[192];
+char g_helpDetectedVersion[160];
 char g_helpP1WikiLabel[96];
 char g_helpP2WikiLabel[96];
 char g_helpP1WikiUrl[192];
@@ -4573,7 +4592,7 @@ void RefreshHelpStrings() {
     _snprintf_s(g_helpVersionStr, sizeof(g_helpVersionStr), _TRUNCATE,
                 "EfzExtendedPractice v%s", EFZ_TRAINING_MODE_VERSION);
     _snprintf_s(g_helpBuildStr, sizeof(g_helpBuildStr), _TRUNCATE,
-                "Build %s %s", EFZ_TRAINING_MODE_BUILD_DATE, EFZ_TRAINING_MODE_BUILD_TIME);
+                I18n::Tr("Build %s %s"), EFZ_TRAINING_MODE_BUILD_DATE, EFZ_TRAINING_MODE_BUILD_TIME);
     // Sole place worker-published update state is copied into the display buffer;
     // RefreshHelpStrings is a throttled, SEH-wrapped mirror step, keeping the render path
     // single-threaded. Two surfaces: a SHORT header-font headline (DrawUpdateNotice; one
@@ -4581,14 +4600,14 @@ void RefreshHelpStrings() {
     switch (UpdateCheck::GetStatus()) {
         case UpdateCheck::Status::UpdateAvailable:
             _snprintf_s(g_helpUpdateHeadline, sizeof(g_helpUpdateHeadline), _TRUNCATE,
-                        "UPDATE AVAILABLE: %s", UpdateCheck::LatestVersion().c_str());
+                        I18n::Tr("UPDATE AVAILABLE: %s"), UpdateCheck::LatestVersion().c_str());
             _snprintf_s(g_helpUpdateStr, sizeof(g_helpUpdateStr), _TRUNCATE,
                         "Open GitHub Releases below to download it.");
             break;
         case UpdateCheck::Status::UpToDate:
             g_helpUpdateHeadline[0] = 0;
             _snprintf_s(g_helpUpdateStr, sizeof(g_helpUpdateStr), _TRUNCATE,
-                        "You are running the latest release (%s).",
+                        I18n::Tr("You are running the latest release (%s)."),
                         EFZ_TRAINING_MODE_VERSION);
             break;
         case UpdateCheck::Status::Disabled:
@@ -4610,62 +4629,63 @@ void RefreshHelpStrings() {
     _snprintf_s(g_helpOpenHelp, sizeof(g_helpOpenHelp), _TRUNCATE,
                 "Open Help from the Help tab in the menu.");
     _snprintf_s(g_helpToggleOverlay, sizeof(g_helpToggleOverlay), _TRUNCATE,
-                "Open or close the menu: Esc (Controller: %s).",
+                I18n::Tr("Open the menu: %s (Controller: %s)."),
+                Config::GetKeyName(s.configMenuKey).c_str(),
                 Config::GetGamepadButtonName(s.gpToggleMenuButton).c_str());
     _snprintf_s(g_helpSavePos, sizeof(g_helpSavePos), _TRUNCATE,
-                "Save the current position: %s (Controller: %s).",
+                I18n::Tr("Save the current position: %s (Controller: %s)."),
                 Config::GetKeyName(s.recordKey).c_str(),
                 Config::GetGamepadButtonName(s.gpSavePositionButton).c_str());
     _snprintf_s(g_helpLoadPos, sizeof(g_helpLoadPos), _TRUNCATE,
-                "Load a saved or directional position: %s (Controller: %s).",
+                I18n::Tr("Load a saved or directional position: %s (Controller: %s)."),
                 Config::GetKeyName(s.teleportKey).c_str(),
                 Config::GetGamepadButtonName(s.gpTeleportButton).c_str());
     _snprintf_s(g_helpSwapPos, sizeof(g_helpSwapPos), _TRUNCATE,
-                "Swap positions: hold Load + D, or press %s on controller.",
+                I18n::Tr("Swap positions: hold Load + D, or press %s on controller."),
                 Config::GetGamepadButtonName(s.gpSwapPositionsButton).c_str());
     _snprintf_s(g_helpToggleStats, sizeof(g_helpToggleStats), _TRUNCATE,
-                "Toggle the stats display: %s.", Config::GetKeyName(s.toggleTitleKey).c_str());
+                I18n::Tr("Toggle the stats display: %s."), Config::GetKeyName(s.toggleTitleKey).c_str());
     _snprintf_s(g_helpSwitchPlayers, sizeof(g_helpSwitchPlayers), _TRUNCATE,
-                "Switch player control: %s (Controller: %s).",
+                I18n::Tr("Switch player control: %s (Controller: %s)."),
                 Config::GetKeyName(s.switchPlayersKey).c_str(),
                 Config::GetGamepadButtonName(s.gpSwitchPlayersButton).c_str());
     _snprintf_s(g_helpUiFooter, sizeof(g_helpUiFooter), _TRUNCATE,
-                "Footer shortcuts: Apply=%s, Refresh=%s, Exit=%s.",
+                I18n::Tr("Footer shortcuts: Apply=%s, Refresh=%s, Exit=%s."),
                 Config::GetKeyName(s.uiAcceptKey).c_str(),
                 Config::GetKeyName(s.uiRefreshKey).c_str(),
                 Config::GetKeyName(s.uiExitKey).c_str());
     _snprintf_s(g_helpTopTabs, sizeof(g_helpTopTabs), _TRUNCATE,
-                "Top tabs: %s / %s on controller, or PgUp / PgDn on keyboard.",
+                I18n::Tr("Top tabs: %s / %s on controller, or PgUp / PgDn on keyboard."),
                 Config::GetGamepadButtonName(s.gpUiTopTabPrev).c_str(),
                 Config::GetGamepadButtonName(s.gpUiTopTabNext).c_str());
     _snprintf_s(g_helpSubTabs, sizeof(g_helpSubTabs), _TRUNCATE,
-                "Subtabs: %s / %s on controller, or [ / ] on keyboard. These also work while you are inside submenus.",
+                I18n::Tr("Subtabs: %s / %s on controller, or [ / ] on keyboard. These also work while you are inside submenus."),
                 Config::GetGamepadButtonName(s.gpUiSubTabPrev).c_str(),
                 Config::GetGamepadButtonName(s.gpUiSubTabNext).c_str());
     _snprintf_s(g_helpControllerSupport, sizeof(g_helpControllerSupport), _TRUNCATE,
                 "Controller support: native XInput pads and DirectInput fallback pads use the same binds. Button names are shown with Xbox labels; on many PlayStation-style pads A/B/X/Y map to Cross/Circle/Square/Triangle.");
     _snprintf_s(g_helpMacroRecord, sizeof(g_helpMacroRecord), _TRUNCATE,
-                "Record macro: %s (Controller: %s).",
+                I18n::Tr("Record macro: %s (Controller: %s)."),
                 Config::GetKeyName(s.macroRecordKey).c_str(),
                 Config::GetGamepadButtonName(s.gpMacroRecordButton).c_str());
     _snprintf_s(g_helpMacroPlay, sizeof(g_helpMacroPlay), _TRUNCATE,
-                "Play macro: %s (Controller: %s).",
+                I18n::Tr("Play macro: %s (Controller: %s)."),
                 Config::GetKeyName(s.macroPlayKey).c_str(),
                 Config::GetGamepadButtonName(s.gpMacroPlayButton).c_str());
     _snprintf_s(g_helpMacroSlot, sizeof(g_helpMacroSlot), _TRUNCATE,
-                "Cycle macro slots: %s.", Config::GetKeyName(s.macroSlotKey).c_str());
+                I18n::Tr("Cycle macro slots: %s."), Config::GetKeyName(s.macroSlotKey).c_str());
     _snprintf_s(g_helpSavestateSave, sizeof(g_helpSavestateSave), _TRUNCATE,
-                "Save Practice snapshot: %s.", Config::GetKeyName(s.savestateSaveKey).c_str());
+                I18n::Tr("Save Practice snapshot: %s."), Config::GetKeyName(s.savestateSaveKey).c_str());
     _snprintf_s(g_helpSavestateLoad, sizeof(g_helpSavestateLoad), _TRUNCATE,
-                "Load Practice snapshot: %s.", Config::GetKeyName(s.savestateLoadKey).c_str());
+                I18n::Tr("Load Practice snapshot: %s."), Config::GetKeyName(s.savestateLoadKey).c_str());
     _snprintf_s(g_helpFaDuration, sizeof(g_helpFaDuration), _TRUNCATE,
-                "Frame advantage labels last about %.1f sec.", s.frameAdvantageDisplayDuration);
+                I18n::Tr("Frame advantage labels last about %.1f sec."), s.frameAdvantageDisplayDuration);
 
     const EfzRevivalVersion rv = GetEfzRevivalVersion();
     _snprintf_s(g_helpDetectedVersion, sizeof(g_helpDetectedVersion), _TRUNCATE,
-                "Detected: %s %s",
+                I18n::Tr("Detected: %s %s"),
                 EfzRevivalVersionName(rv),
-                IsEfzRevivalVersionSupported(rv) ? "(supported)" : "(unsupported)");
+                I18n::Tr(IsEfzRevivalVersionSupported(rv) ? "(supported)" : "(unsupported)"));
 
     g_helpP1WikiLabel[0] = '\0';
     g_helpP2WikiLabel[0] = '\0';
@@ -4706,7 +4726,7 @@ void RefreshHelpStrings() {
         if (name.empty() || name == "Undefined") {
             name = (rawName && rawName[0]) ? rawName : "CHARACTER";
         }
-        _snprintf_s(label, labelSz, _TRUNCATE, "OPEN P%d WIKI: %s", player, name.c_str());
+        _snprintf_s(label, labelSz, _TRUNCATE, I18n::Tr("OPEN P%d WIKI: %s"), player, name.c_str());
         _snprintf_s(url, urlSz, _TRUNCATE, "https://wiki.gbl.gg/w/Eternal_Fighter_Zero/%s", path);
     };
     fillWiki(d.p1CharID, d.p1CharName, 1, g_helpP1WikiLabel, sizeof(g_helpP1WikiLabel), g_helpP1WikiUrl, sizeof(g_helpP1WikiUrl));
@@ -5173,8 +5193,12 @@ Row* BuildHelpResourcesRows(int& count) {
     s_rows[n++] = Spacer();
     s_rows[n++] = Header("CURRENT CHARACTERS");
     s_rows[n++] = Info("The two rows below stay greyed out until each side's character is identified.");
-    s_rows[n++] = Action(g_helpP1WikiLabel[0] ? g_helpP1WikiLabel : "OPEN P1 WIKI", OpenP1Wiki, ValWiki, P1WikiDisabled);
-    s_rows[n++] = Action(g_helpP2WikiLabel[0] ? g_helpP2WikiLabel : "OPEN P2 WIKI", OpenP2Wiki, ValWiki, P2WikiDisabled);
+    // Translated labels no longer match the label-keyed default help.
+    const char* kCharacterWikiHelp = "Opens the current character's wiki page in your browser.";
+    s_rows[n] = Action(g_helpP1WikiLabel[0] ? g_helpP1WikiLabel : "OPEN P1 WIKI", OpenP1Wiki, ValWiki, P1WikiDisabled);
+    s_rows[n++].helpText = kCharacterWikiHelp;
+    s_rows[n] = Action(g_helpP2WikiLabel[0] ? g_helpP2WikiLabel : "OPEN P2 WIKI", OpenP2Wiki, ValWiki, P2WikiDisabled);
+    s_rows[n++].helpText = kCharacterWikiHelp;
     count = n;
     return s_rows;
 }
@@ -5262,12 +5286,12 @@ const char* ValPoolDelaySummary() {
     }
     if (mixed) {
         _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE,
-                    "%d MOVES / MIXED", selected);
+                    I18n::Tr("%d MOVES / MIXED"), selected);
     } else {
         _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE,
-                    "%d %s / %dF",
+                    I18n::Tr("%d %s / %dF"),
                     selected,
-                    selected == 1 ? "MOVE" : "MOVES",
+                    I18n::Tr(selected == 1 ? "MOVE" : "MOVES"),
                     firstDelay);
     }
     return s_buf;
@@ -5276,7 +5300,7 @@ const char* ValPoolDelaySummary() {
 Row* BuildPoolDelayRows(int& count) {
     static Row s_rows[224];
     static char s_labels[MAX_ACTION_POOL_OPTIONS][48];
-    static char s_help[MAX_ACTION_POOL_OPTIONS][128];
+    static char s_help[MAX_ACTION_POOL_OPTIONS][160];
     static char s_chargeLabels[MAX_ACTION_POOL_OPTIONS][48];
     static char s_chargeHelp[MAX_ACTION_POOL_OPTIONS][160];
 
@@ -5311,9 +5335,9 @@ Row* BuildPoolDelayRows(int& count) {
         if (!CharacterActionCatalog::IsPoolIndexAvailable(
                 EffectiveAutoActionCharId(), i)) continue;
         _snprintf_s(s_labels[i], sizeof(s_labels[i]), _TRUNCATE,
-                    "%s DELAY", kActionPoolNames[i]);
+                    I18n::Tr("%s DELAY"), kActionPoolNames[i]);
         _snprintf_s(s_help[i], sizeof(s_help[i]), _TRUNCATE,
-                    "Waits this many frames when Random Pool rolls %s.",
+                    I18n::Tr("Waits this many frames when Random Pool rolls %s."),
                     kActionPoolNames[i]);
         s_rows[n++] = WithHelp(IntNum(s_labels[i],
                                       &delays[i],
@@ -5329,9 +5353,9 @@ Row* BuildPoolDelayRows(int& count) {
             ActionSupportsChargeFollowup(action)) {
             charges[i] = ClampIndex(charges[i], 3);
             _snprintf_s(s_chargeLabels[i], sizeof(s_chargeLabels[i]), _TRUNCATE,
-                        "%s AFTER MOVE", kActionPoolNames[i]);
+                        I18n::Tr("%s AFTER MOVE"), kActionPoolNames[i]);
             _snprintf_s(s_chargeHelp[i], sizeof(s_chargeHelp[i]), _TRUNCATE,
-                        "IC adds 22C once %s connects; FIC uses that move's own fixed 22C window.",
+                        I18n::Tr("IC adds 22C once %s connects; FIC uses that move's own fixed 22C window."),
                         kActionPoolNames[i]);
             s_rows[n++] = WithHelp(ChoicesRow(s_chargeLabels[i],
                                               &charges[i],
@@ -5378,6 +5402,7 @@ void AddTriggerRows(Row* rows, int& n,
     actionRow.inlineAdjuster = AdjustTriggerActionChoiceRow;
     actionRow.choiceValueFormatter = FormatTriggerActionPopupChoice;
     actionRow.choiceValueAdjuster = AdjustTriggerActionPopupChoice;
+    actionRow.choiceVariantPtr = &g_mirrorFwdDashFollowup;
     actionRow.choiceCategoryMap = g_triggerActionCategoryMap;
     actionRow.categoryChoices = kTriggerActionCategoryChoices;
     actionRow.categoryCount = kTriggerActionCategoryCount;
@@ -5419,7 +5444,7 @@ void AddTriggerRows(Row* rows, int& n,
 const char* AutoActionTargetInfo() {
     static char s_buf[64];
     const int target = ResolveAutoActionTargetPlayer();
-    _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE, "TARGET: P%d (OPPONENT SIDE)", target);
+    _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE, I18n::Tr("TARGET: P%d (OPPONENT SIDE)"), target);
     return s_buf;
 }
 
@@ -7155,42 +7180,69 @@ int    g_crRfModeP1, g_crRfModeP2;
 float  g_crRfCustomP1, g_crRfCustomP2;
 bool   g_crForceBlueICP1, g_crForceBlueICP2;
 
+// localData is the CR source of truth: ApplyImGuiSettings copies it into displayData and
+// the runtime atomics, so values written anywhere else are reverted by the next apply.
 void RefreshCrMirrors() {
-    g_crEnabledP1     = g_contRecEnabledP1.load();
-    g_crHpModeP1      = g_contRecHpModeP1.load();
-    g_crHpCustomP1    = g_contRecHpCustomP1.load();
-    g_crMeterModeP1   = g_contRecMeterModeP1.load();
-    g_crMeterCustomP1 = g_contRecMeterCustomP1.load();
-    g_crRfModeP1      = g_contRecRfModeP1.load();
-    g_crRfCustomP1    = (float)g_contRecRfCustomP1.load();
-    g_crForceBlueICP1 = g_contRecRfForceBlueICP1.load();
+    const DisplayData& d = ImGuiGui::guiState.localData;
+    g_crEnabledP1     = d.p1ContinuousRecoveryEnabled;
+    g_crHpModeP1      = d.p1RecoveryHpMode;
+    g_crHpCustomP1    = d.p1RecoveryHpCustom;
+    g_crMeterModeP1   = d.p1RecoveryMeterMode;
+    g_crMeterCustomP1 = d.p1RecoveryMeterCustom;
+    g_crRfModeP1      = d.p1RecoveryRfMode;
+    g_crRfCustomP1    = (float)d.p1RecoveryRfCustom;
+    g_crForceBlueICP1 = d.p1RecoveryRfForceBlueIC;
 
-    g_crEnabledP2     = g_contRecEnabledP2.load();
-    g_crHpModeP2      = g_contRecHpModeP2.load();
-    g_crHpCustomP2    = g_contRecHpCustomP2.load();
-    g_crMeterModeP2   = g_contRecMeterModeP2.load();
-    g_crMeterCustomP2 = g_contRecMeterCustomP2.load();
-    g_crRfModeP2      = g_contRecRfModeP2.load();
-    g_crRfCustomP2    = (float)g_contRecRfCustomP2.load();
-    g_crForceBlueICP2 = g_contRecRfForceBlueICP2.load();
+    g_crEnabledP2     = d.p2ContinuousRecoveryEnabled;
+    g_crHpModeP2      = d.p2RecoveryHpMode;
+    g_crHpCustomP2    = d.p2RecoveryHpCustom;
+    g_crMeterModeP2   = d.p2RecoveryMeterMode;
+    g_crMeterCustomP2 = d.p2RecoveryMeterCustom;
+    g_crRfModeP2      = d.p2RecoveryRfMode;
+    g_crRfCustomP2    = (float)d.p2RecoveryRfCustom;
+    g_crForceBlueICP2 = d.p2RecoveryRfForceBlueIC;
 }
 
-void OnCrEnabledP1()     { g_contRecEnabledP1.store(g_crEnabledP1); }
-void OnCrEnabledP2()     { g_contRecEnabledP2.store(g_crEnabledP2); }
-void OnCrHpModeP1()      { g_contRecHpModeP1.store(g_crHpModeP1); }
-void OnCrHpModeP2()      { g_contRecHpModeP2.store(g_crHpModeP2); }
-void OnCrHpCustomP1()    { g_contRecHpCustomP1.store(g_crHpCustomP1); }
-void OnCrHpCustomP2()    { g_contRecHpCustomP2.store(g_crHpCustomP2); }
-void OnCrMeterModeP1()   { g_contRecMeterModeP1.store(g_crMeterModeP1); }
-void OnCrMeterModeP2()   { g_contRecMeterModeP2.store(g_crMeterModeP2); }
-void OnCrMeterCustomP1() { g_contRecMeterCustomP1.store(g_crMeterCustomP1); }
-void OnCrMeterCustomP2() { g_contRecMeterCustomP2.store(g_crMeterCustomP2); }
-void OnCrRfModeP1()      { g_contRecRfModeP1.store(g_crRfModeP1); }
-void OnCrRfModeP2()      { g_contRecRfModeP2.store(g_crRfModeP2); }
-void OnCrRfCustomP1()    { g_contRecRfCustomP1.store((double)g_crRfCustomP1); }
-void OnCrRfCustomP2()    { g_contRecRfCustomP2.store((double)g_crRfCustomP2); }
-void OnCrForceBlueICP1() { g_contRecRfForceBlueICP1.store(g_crForceBlueICP1); }
-void OnCrForceBlueICP2() { g_contRecRfForceBlueICP2.store(g_crForceBlueICP2); }
+DisplayData& CrLocal() { return ImGuiGui::guiState.localData; }
+
+void OnCrEnabledP1() {
+    CrLocal().p1ContinuousRecoveryEnabled = g_crEnabledP1;
+    if (g_crEnabledP1) WriteEngineRegenParams(0, 0);
+    OnAutoApply();
+}
+void OnCrEnabledP2() {
+    CrLocal().p2ContinuousRecoveryEnabled = g_crEnabledP2;
+    if (g_crEnabledP2) WriteEngineRegenParams(0, 0);
+    OnAutoApply();
+}
+void OnCrHpModeP1()      { CrLocal().p1RecoveryHpMode = g_crHpModeP1;                   OnAutoApply(); }
+void OnCrHpModeP2()      { CrLocal().p2RecoveryHpMode = g_crHpModeP2;                   OnAutoApply(); }
+void OnCrHpCustomP1()    { CrLocal().p1RecoveryHpCustom = g_crHpCustomP1;               OnAutoApply(); }
+void OnCrHpCustomP2()    { CrLocal().p2RecoveryHpCustom = g_crHpCustomP2;               OnAutoApply(); }
+void OnCrMeterModeP1()   { CrLocal().p1RecoveryMeterMode = g_crMeterModeP1;             OnAutoApply(); }
+void OnCrMeterModeP2()   { CrLocal().p2RecoveryMeterMode = g_crMeterModeP2;             OnAutoApply(); }
+void OnCrMeterCustomP1() { CrLocal().p1RecoveryMeterCustom = g_crMeterCustomP1;         OnAutoApply(); }
+void OnCrMeterCustomP2() { CrLocal().p2RecoveryMeterCustom = g_crMeterCustomP2;         OnAutoApply(); }
+void OnCrRfCustomP1()    { CrLocal().p1RecoveryRfCustom = (double)g_crRfCustomP1;       OnAutoApply(); }
+void OnCrRfCustomP2()    { CrLocal().p2RecoveryRfCustom = (double)g_crRfCustomP2;       OnAutoApply(); }
+void OnCrForceBlueICP1() { CrLocal().p1RecoveryRfForceBlueIC = g_crForceBlueICP1;       OnAutoApply(); }
+void OnCrForceBlueICP2() { CrLocal().p2RecoveryRfForceBlueIC = g_crForceBlueICP2;       OnAutoApply(); }
+void OnCrRfModeP1() {
+    CrLocal().p1RecoveryRfMode = g_crRfModeP1;
+    if (g_crRfModeP1 == 3 || g_crRfModeP1 == 4) {
+        g_crForceBlueICP1 = false;
+        CrLocal().p1RecoveryRfForceBlueIC = false;
+    }
+    OnAutoApply();
+}
+void OnCrRfModeP2() {
+    CrLocal().p2RecoveryRfMode = g_crRfModeP2;
+    if (g_crRfModeP2 == 3 || g_crRfModeP2 == 4) {
+        g_crForceBlueICP2 = false;
+        CrLocal().p2RecoveryRfForceBlueIC = false;
+    }
+    OnAutoApply();
+}
 
 bool CrP1HpCustomHidden()    { return g_crHpModeP1    != 3; }
 bool CrP1MeterCustomHidden() { return g_crMeterModeP1 != 5; }
@@ -7834,7 +7886,7 @@ bool MacroRedoDisabled() { return g_macroRedoStack.empty(); }
 
 const char* MacroStateStr() {
     static char buf[64];
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "SLOT %d/%d",
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("SLOT %d/%d"),
                 MacroController::GetCurrentSlot(), MacroController::GetSlotCount());
     return buf;
 }
@@ -7870,7 +7922,7 @@ const char* MacroStatsStr() {
     const int slot = MacroController::GetCurrentSlot();
     const auto stats = MacroController::GetSlotStats(slot);
     if (!stats.hasData) return "EMPTY";
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d TICKS", stats.totalTicks);
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("%d TICKS"), stats.totalTicks);
     return buf;
 }
 
@@ -7968,7 +8020,7 @@ Row* BuildMacroSerializedRows(int& count) {
 Row* BuildMacroStatsRows(int& count) {
     static Row s_rows[24];
     static char status[128];
-    static char slot[64];
+    static char slot[96];
     static char spans[64];
     static char ticks[96];
     static char effective[64];
@@ -7981,19 +8033,19 @@ Row* BuildMacroStatsRows(int& count) {
     const int effectiveTicks = MacroController::GetEffectiveTicks(curSlot);
     const int firstButtonTick = MacroController::GetFirstButtonTick(curSlot);
 
-    _snprintf_s(status, sizeof(status), _TRUNCATE, "State: %s", MacroController::GetStatusLine().c_str());
-    _snprintf_s(slot, sizeof(slot), _TRUNCATE, "Current slot: %d / %d (%s)",
-                curSlot, MacroController::GetSlotCount(), stats.hasData ? "has data" : "empty");
-    _snprintf_s(spans, sizeof(spans), _TRUNCATE, "Spans: %d", stats.spanCount);
-    _snprintf_s(ticks, sizeof(ticks), _TRUNCATE, "Total ticks: %d (~%.2f sec)",
+    _snprintf_s(status, sizeof(status), _TRUNCATE, I18n::Tr("State: %s"), MacroController::GetStatusLine().c_str());
+    _snprintf_s(slot, sizeof(slot), _TRUNCATE, I18n::Tr("Current slot: %d / %d (%s)"),
+                curSlot, MacroController::GetSlotCount(), I18n::Tr(stats.hasData ? "has data" : "empty"));
+    _snprintf_s(spans, sizeof(spans), _TRUNCATE, I18n::Tr("Spans: %d"), stats.spanCount);
+    _snprintf_s(ticks, sizeof(ticks), _TRUNCATE, I18n::Tr("Total ticks: %d (~%.2f sec)"),
                 stats.totalTicks, stats.totalTicks / 64.0f);
-    _snprintf_s(effective, sizeof(effective), _TRUNCATE, "Effective ticks: %d", effectiveTicks);
+    _snprintf_s(effective, sizeof(effective), _TRUNCATE, I18n::Tr("Effective ticks: %d"), effectiveTicks);
     _snprintf_s(firstButton, sizeof(firstButton), _TRUNCATE,
-                firstButtonTick >= 0 ? "First button tick: %d" : "First button tick: none",
+                I18n::Tr(firstButtonTick >= 0 ? "First button tick: %d" : "First button tick: none"),
                 firstButtonTick);
-    _snprintf_s(buffers, sizeof(buffers), _TRUNCATE, "Buffer entries: %d  Buffer ticks: %d",
+    _snprintf_s(buffers, sizeof(buffers), _TRUNCATE, I18n::Tr("Buffer entries: %d  Buffer ticks: %d"),
                 stats.bufEntries, stats.bufTicks);
-    _snprintf_s(indexes, sizeof(indexes), _TRUNCATE, "Buffer idx: %u -> %u  Samples: %d",
+    _snprintf_s(indexes, sizeof(indexes), _TRUNCATE, I18n::Tr("Buffer idx: %u -> %u  Samples: %d"),
                 (unsigned)stats.bufStartIdx, (unsigned)stats.bufEndIdx, stats.bufIndexTicks);
 
     s_rows[n++] = Header("SLOT STATUS");
@@ -8051,14 +8103,23 @@ Row* BuildMacrosRows(int& count) {
     return s_rows;
 }
 
-bool IsTextEditorActive() {
+static bool InlineTextEditorActive() {
     return g_macroEditor.active || g_missionTextEditor.active;
+}
+
+bool IsTextEditorActive() {
+    return InlineTextEditorActive() || IsManualKeybindEditorActive();
+}
+
+bool IsRawVkEditorActive() {
+    return IsManualKeybindEditorActive();
 }
 
 void ResetTextEditor() {
     g_macroEditor.active = false;
     g_macroEditor.wantFocus = false;
     g_missionTextEditor = MissionTextEditorState{};
+    CloseManualKeybindEditor();
 }
 
 bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
@@ -8090,7 +8151,7 @@ bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
             ImGuiWindowFlags_NoSavedSettings;
         if (ImGui::Begin(g_missionTextEditor.title, nullptr, flags)) {
             ImGui::TextDisabled("%s", g_missionTextEditor.help);
-            ImGui::TextDisabled("%zu / %zu bytes",
+            ImGui::TextDisabled(I18n::Tr("%zu / %zu bytes"),
                 strnlen_s(g_missionTextEditor.buffer.data(),
                           g_missionTextEditor.buffer.size()),
                 g_missionTextEditor.maxBytes);
@@ -8150,14 +8211,14 @@ bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings;
-    if (ImGui::Begin("MACRO TEXT EDITOR", nullptr, flags)) {
-        ImGui::Text("Slot %d / %d", MacroController::GetCurrentSlot(), MacroController::GetSlotCount());
+    if (ImGui::Begin(I18n::Tr("MACRO TEXT EDITOR"), nullptr, flags)) {
+        ImGui::Text(I18n::Tr("Slot %d / %d"), MacroController::GetCurrentSlot(), MacroController::GetSlotCount());
         ImGui::SameLine();
-        ImGui::TextDisabled(g_macroIncludeBuffers ? "with buffers" : "without buffers");
+        ImGui::TextDisabled("%s", I18n::Tr(g_macroIncludeBuffers ? "with buffers" : "without buffers"));
         if (!g_macroApplyError.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Error: %s", g_macroApplyError.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), I18n::Tr("Error: %s"), g_macroApplyError.c_str());
         } else {
-            ImGui::TextDisabled("Use EFZMACRO text notation. Apply normalizes whitespace.");
+            ImGui::TextDisabled("%s", I18n::Tr("Use EFZMACRO text notation. Apply normalizes whitespace."));
         }
 
         const float buttonH = 28.0f;
@@ -8180,29 +8241,29 @@ bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
             }
         }
 
-        if (ImGui::Button("Apply")) {
+        if (ImGui::Button(I18n::Tr("Apply"))) {
             g_macroText = g_macroEditor.buffer.data();
             MacroApplyTextToSlot();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Done")) {
+        if (ImGui::Button(I18n::Tr("Done"))) {
             g_macroText = g_macroEditor.buffer.data();
             g_macroEditor.active = false;
             Input::ResetEdges();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
+        if (ImGui::Button(I18n::Tr("Cancel"))) {
             MacroReloadFromSlot();
             g_macroEditor.active = false;
             Input::ResetEdges();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Reload")) {
+        if (ImGui::Button(I18n::Tr("Reload"))) {
             MacroReloadFromSlot();
             g_macroEditor.wantFocus = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Sample")) {
+        if (ImGui::Button(I18n::Tr("Sample"))) {
             MacroInsertSample();
             g_macroEditor.wantFocus = true;
         }
@@ -8346,7 +8407,7 @@ void TickTriggers(ImDrawList* dl, const ScreenLayout& layout, int& focus, Scroll
 }
 void TickMacros(ImDrawList* dl, const ScreenLayout& layout, int& focus, ScrollState& scroll, bool& backEdge) {
     int n = 0; Row* rows = BuildMacrosRows(n);
-    if (IsTextEditorActive()) {
+    if (InlineTextEditorActive()) {
         ClampFocus(rows, n, focus);
         backEdge = false;
         RenderList(dl, layout, "MACROS", rows, n, focus, scroll);
@@ -8395,7 +8456,7 @@ void TickSettingsDebug(ImDrawList* dl, const ScreenLayout& layout, int& focus, S
         RefreshDebugRuntimeMirrors();
     }
     int n = 0; Row* rows = BuildSettingsDebugRows(n);
-    if (IsTextEditorActive()) {
+    if (InlineTextEditorActive()) {
         ClampFocus(rows, n, focus);
         backEdge = false;
         // RenderList substitutes the active Missions submenu, so the authoring

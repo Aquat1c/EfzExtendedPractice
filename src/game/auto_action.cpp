@@ -2649,6 +2649,7 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
         dstate.chosenCustomId = wakePick.customId;
         dstate.chosenDelay = wakePick.delay;
         dstate.chosenChargeFollowup = CLAMP(wakePick.chargeFollowup, 0, 2);
+        delayFrames = ResolvePickedDelayForTrigger(triggerType, delayFrames, wakePick.delay);
         LogOut("[AUTO-ACTION] Wake pre-picked option reused: action=" +
                std::to_string(wakePick.action) +
                " strength=" + std::to_string(wakePick.strength) +
@@ -3941,12 +3942,14 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
 
         // Determine macro slot and delay: prefer pre-picked option, fallback to global.
         int macroSlot = s_p2WakeOptionPicked ? s_p2WakePrePickedOption.macroSlot : triggerOnWakeupMacroSlot.load();
-        s_p2WakeMacroSlot = macroSlot;
         int userDelayF = s_p2WakeOptionPicked ? s_p2WakePrePickedOption.delay : triggerOnWakeupDelay.load();
         // For wake trigger, delay mapping: 0/1 => 0, else (n-1)
         if (s_p2WakeOptionPicked) {
             userDelayF = (userDelayF <= 1) ? 0 : (userDelayF - 1);
         }
+        // Only a 0F row is a pre-buffer macro (as on P1); a delayed row must
+        // reach the generic On-Wakeup trigger, not the 96-exit fallback.
+        s_p2WakeMacroSlot = (userDelayF == 0) ? macroSlot : -1;
 
         // Only care about macros in this path.
         int macroSel = CLAMP(macroSlot, 1, MacroController::GetSlotCount());
@@ -4566,10 +4569,11 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 shouldTrigger = true;
                 triggerType = TRIGGER_ON_WAKEUP;
                 {
-                    int userDelay = triggerOnWakeupDelay.load();
+                    int userDelay = s_p2WakeOptionPicked ? s_p2WakePrePickedOption.delay : triggerOnWakeupDelay.load();
                     delay = (userDelay <= 1) ? 0 : (userDelay - 1);
                 }
-                actionMoveID = GetActionMoveID(triggerOnWakeupAction.load(), TRIGGER_ON_WAKEUP, 2);
+                int actionForMove = s_p2WakeOptionPicked ? s_p2WakePrePickedOption.action : triggerOnWakeupAction.load();
+                actionMoveID = GetActionMoveID(actionForMove, TRIGGER_ON_WAKEUP, 2);
                 
                 LogOut("[AUTO-ACTION] P2 On Wakeup trigger activated", detailedLogging.load());
                 TraceAutoActionWakeEvent("p2-wakeup-trigger", 2, prevMoveID2, moveID2,

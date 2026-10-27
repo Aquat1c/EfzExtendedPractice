@@ -6,6 +6,7 @@
 #include "../include/game/frame_monitor.h"
 #include "../include/utils/utilities.h"
 #include "../include/core/globals.h"
+#include "../include/game/game_thread_queue.h"
 #include <atomic>
 #pragma message("[build] compiling updated character_settings.cpp")
 
@@ -1404,6 +1405,34 @@ namespace CharacterSettings {
         }; ApplyMai(1); ApplyMai(2);
     }
     
+    // Posted by enforceRumi; the world may have moved since, so every gate is re-read here.
+    static void RestoreRumiNormalModeOnGameThread(uintptr_t pi) {
+        const uintptr_t gameBase = GetEFZBase();
+        if (!gameBase || !AreCharactersInitialized()) return;
+        const int off = (pi == 1) ? EFZ_BASE_OFFSET_P1 : EFZ_BASE_OFFSET_P2;
+        char name[16] = {0};
+        const uintptr_t nameAddr = ResolvePointer(gameBase, off, CHARACTER_NAME_OFFSET);
+        if (!nameAddr || !SafeReadMemory(nameAddr, name, sizeof(name) - 1)) return;
+        if (GetCharacterID(name) != CHAR_ID_NANASE) return;
+        const uintptr_t modeAddr = ResolvePointer(gameBase, off, RUMI_MODE_BYTE_OFFSET);
+        const uintptr_t gateAddr = ResolvePointer(gameBase, off, RUMI_WEAPON_GATE_OFFSET);
+        if (!(modeAddr && gateAddr)) return;
+        uint8_t curMode = 0;
+        short mv = 0;
+        SafeReadMemory(modeAddr, &curMode, sizeof(uint8_t));
+        if (auto mvAddr = ResolvePointer(gameBase, off, MOVE_ID_OFFSET)) SafeReadMemory(mvAddr, &mv, sizeof(short));
+        if (curMode == 0 || !IsActionable(mv)) return;
+        if (mv == RUMI_SUPER_TOSS_A || mv == RUMI_SUPER_TOSS_B || mv == RUMI_SUPER_TOSS_C) return;
+        uintptr_t playerThis = 0;
+        SafeReadMemory(gameBase + off, &playerThis, sizeof(uintptr_t));
+        if (!playerThis) return;
+        using ToggleModeFn = int(__fastcall*)(uintptr_t, int, char);
+        ToggleModeFn ToggleCharacterMode = reinterpret_cast<ToggleModeFn>(gameBase + TOGGLE_CHARACTER_MODE_RVA);
+        ToggleCharacterMode(playerThis, 0, 0);
+        uint8_t z = 0;
+        SafeWriteMemory(gateAddr, &z, sizeof(uint8_t));
+    }
+
     void TickCharacterEnforcements(uintptr_t base, const DisplayData& localData) {
         if (!base) return;
         if (!g_featuresEnabled.load()) return;
@@ -1521,11 +1550,7 @@ namespace CharacterSettings {
             if (inTossSuper) { delayRef = 60; return; }
             if (delayRef > 0) { delayRef--; return; }
             if (curMode != 0 && IsActionable(mv)) {
-                using ToggleModeFn = int(__fastcall*)(uintptr_t, int, char);
-                uintptr_t gameBase = GetEFZBase();
-                ToggleModeFn ToggleCharacterMode = reinterpret_cast<ToggleModeFn>(gameBase + TOGGLE_CHARACTER_MODE_RVA);
-                uintptr_t playerThis = 0; SafeReadMemory(gameBase + ((pi==1)?EFZ_BASE_OFFSET_P1:EFZ_BASE_OFFSET_P2), &playerThis, sizeof(uintptr_t));
-                if (!playerThis) return; ToggleCharacterMode(playerThis, 0, 0); uint8_t z2=0; SafeWriteMemory(gateAddr,&z2,sizeof(uint8_t)); didWriteThisTick = true;
+                if (GameThread::Post(&RestoreRumiNormalModeOnGameThread, static_cast<uintptr_t>(pi))) didWriteThisTick = true;
             }
         }; if (AreCharactersInitialized()) { enforceRumi(1); enforceRumi(2); }
 

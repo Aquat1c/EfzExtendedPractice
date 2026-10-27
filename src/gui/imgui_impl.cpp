@@ -40,13 +40,15 @@ static std::atomic<DWORD> g_imguiWorkThread{0};
 static EfzOverlayResetGate g_resetGate;
 // Non-static for legacy external references during LTCG; prefer accessors.
 bool g_imguiVisible = false;
+static std::atomic<unsigned> g_visibilityGeneration{0};
 namespace CharacterSettings {
     std::atomic<bool> g_guiVisible{false};
 }
 static IDirect3DDevice9* g_d3dDevice = nullptr;
-static WNDPROC g_originalWndProc = nullptr;
 // g_originalWndProc stays valid across a detach so in-flight calls still forward.
-static bool g_wndProcAttached = false;
+// Attach/detach run on the lifecycle watcher while the window thread reads both.
+static std::atomic<WNDPROC> g_originalWndProc{nullptr};
+static std::atomic<bool> g_wndProcAttached{false};
 // Window messages arrive on the creating thread only; no TLS in the XP injected-DLL build.
 struct WndProcVisit {
     HWND hwnd = nullptr;
@@ -726,8 +728,9 @@ LRESULT CALLBACK ImGuiWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     ImGuiImpl::DeviceRenderScope input;
     const auto forward = [&]() -> LRESULT {
         input.Release();
-        return g_originalWndProc
-            ? CallWindowProc(g_originalWndProc, hWnd, msg, wParam, lParam)
+        const WNDPROC original = g_originalWndProc.load(std::memory_order_acquire);
+        return original
+            ? CallWindowProc(original, hWnd, msg, wParam, lParam)
             : DefWindowProc(hWnd, msg, wParam, lParam);
     };
     if (!input.Admitted() || !g_imguiInitialized || !TrainingUiInputActive()) {
@@ -940,7 +943,7 @@ namespace ImGuiImpl {
             g_d3dDevice = device;
             g_imguiHostWindow = hostWindow;
             g_externalFallbackHost = externalFallback;
-            g_originalWndProc = nullptr;
+            g_originalWndProc.store(nullptr, std::memory_order_release);
 
             IMGUI_CHECKVERSION();
             g_imguiContext = ImGui::CreateContext();
@@ -1000,10 +1003,11 @@ namespace ImGuiImpl {
 
             if (hookWndProc) {
                 SetLastError(0);
-                g_originalWndProc = (WNDPROC)SetWindowLongPtr(hostWindow, GWLP_WNDPROC, (LONG_PTR)ImGuiWndProc);
+                const WNDPROC previousProc = (WNDPROC)SetWindowLongPtr(hostWindow, GWLP_WNDPROC, (LONG_PTR)ImGuiWndProc);
                 DWORD wndProcErr = GetLastError();
-                g_wndProcAttached = !(g_originalWndProc == nullptr && wndProcErr != 0);
-                if (!g_originalWndProc && wndProcErr != 0) {
+                g_originalWndProc.store(previousProc, std::memory_order_release);
+                g_wndProcAttached.store(!(previousProc == nullptr && wndProcErr != 0), std::memory_order_release);
+                if (!previousProc && wndProcErr != 0) {
                     LogOut("[IMGUI] Error: Failed to hook window procedure (err=" + std::to_string(wndProcErr) + ")", true);
                     ImGui_ImplDX9_Shutdown();
                     ImGui_ImplWin32_Shutdown();
@@ -1045,6 +1049,7 @@ namespace ImGuiImpl {
             if (useContext) context.emplace(g_imguiContext);
             const bool wasVisible = g_imguiVisible;
             g_imguiVisible = visible;
+            if (wasVisible != visible) g_visibilityGeneration.fetch_add(1, std::memory_order_acq_rel);
             if (wasVisible != visible && useContext) {
                 ImGuiIO& io = ImGui::GetIO();
                 io.ClearEventsQueue();
@@ -1225,6 +1230,17 @@ namespace ImGuiImpl {
             g_externalFallbackReady.store(true, std::memory_order_release);
             int idleFrames = 0;
             int notResetCount = 0;
+            // Caller holds a DeviceRenderScope. The DX9 backend owns a device
+            // reference; shut it down or the device outlives the release.
+            const auto releaseDevice = [&]() {
+                if (g_d3dDevice) ImGui_ImplDX9_Shutdown();
+                g_d3dDevice = nullptr;
+                g_resetGate.UnbindBackend();
+                device->Release();
+                device = nullptr;
+                d3d9->Release();
+                d3d9 = nullptr;
+            };
 
             while (!g_externalFallbackExit.load(std::memory_order_acquire) && !g_isShuttingDown.load(std::memory_order_relaxed)) {
                 MSG msg;
@@ -1245,13 +1261,12 @@ namespace ImGuiImpl {
                     // A second live D3D9 device blocks the game's exclusive Reset.
                     ++idleFrames;
                     if (device && idleFrames > 60) {
-                        ImGui_ImplDX9_InvalidateDeviceObjects();
-                        device->Release();
-                        device = nullptr;
-                        d3d9->Release();
-                        d3d9 = nullptr;
-                        LogOut("[IMGUI] fallback device released while idle "
-                               "(cooperative exclusive fullscreen)", true);
+                        DeviceRenderScope idle(device);
+                        if (idle.Admitted()) {
+                            releaseDevice();
+                            LogOut("[IMGUI] fallback device released while idle "
+                                   "(cooperative exclusive fullscreen)", true);
+                        }
                     }
                     Sleep(16);
                     continue;
@@ -1275,7 +1290,20 @@ namespace ImGuiImpl {
                         Sleep(250);
                         continue;
                     }
-                    ImGui_ImplDX9_CreateDeviceObjects();
+                    bool rebound = false;
+                    {
+                        DeviceRenderScope rebind(device);
+                        rebound = rebind.Admitted()
+                            && InitializeForHost(device, hwnd, false, true);
+                    }
+                    if (!rebound) {
+                        device->Release();
+                        device = nullptr;
+                        d3d9->Release();
+                        d3d9 = nullptr;
+                        Sleep(250);
+                        continue;
+                    }
                 }
                 idleFrames = 0;
 
@@ -1292,11 +1320,7 @@ namespace ImGuiImpl {
                     }
                     // Windowed reset cannot succeed during game-exclusive fullscreen.
                     if (++notResetCount > 30) {
-                        ImGui_ImplDX9_InvalidateDeviceObjects();
-                        device->Release();
-                        device = nullptr;
-                        d3d9->Release();
-                        d3d9 = nullptr;
+                        releaseDevice();
                         notResetCount = 0;
                         LogOut("[IMGUI] fallback device stood down (game "
                                "exclusive fullscreen active)", true);
@@ -1321,12 +1345,18 @@ namespace ImGuiImpl {
                 device->Present(nullptr, nullptr, nullptr, nullptr);
             }
 
-            if (g_imguiInitialized && g_externalFallbackHost) {
+            // Not ready: an open request must not target a host that is shutting down.
+            g_externalFallbackReady.store(false, std::memory_order_release);
+            // Shutdown try-locks the reset gate; a game-thread admission probe can hold it briefly.
+            // A released host must not outlive its thread, so retry until it is gone unless the process is exiting.
+            for (unsigned attempt = 0; g_imguiInitialized && g_externalFallbackHost
+                    && (attempt < 200 || !g_isShuttingDown.load(std::memory_order_relaxed)); ++attempt) {
                 Shutdown();
+                if (g_imguiInitialized && g_externalFallbackHost) Sleep(1);
             }
 
-            device->Release();
-            d3d9->Release();
+            if (device) device->Release();
+            if (d3d9) d3d9->Release();
             DestroyWindow(hwnd);
             g_externalFallbackWindow = nullptr;
             g_externalFallbackReady.store(false, std::memory_order_release);
@@ -1362,10 +1392,11 @@ namespace ImGuiImpl {
         LogOut("[IMGUI] Shutting down ImGui", true);
 
         HWND hostWindow = GetActiveHostWindow();
-        if (hostWindow && g_originalWndProc) {
+        const WNDPROC originalWndProc = g_originalWndProc.load(std::memory_order_acquire);
+        if (hostWindow && originalWndProc) {
             WNDPROC currentWndProc = reinterpret_cast<WNDPROC>(GetWindowLongPtr(hostWindow, GWLP_WNDPROC));
             if (currentWndProc == ImGuiWndProc) {
-                SetWindowLongPtr(hostWindow, GWLP_WNDPROC, (LONG_PTR)g_originalWndProc);
+                SetWindowLongPtr(hostWindow, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
             } else {
                 LogOut("[IMGUI] Skipping WndProc restore because another hook owns the window proc", true);
             }
@@ -1379,17 +1410,24 @@ namespace ImGuiImpl {
         g_imguiContextThread = 0;
         g_resetGate.UnbindBackend();
         
+        // The atlas died with the context; a later host must rebuild its fonts.
+        CustomMenu::Fonts::InvalidateAtlasReferences();
+        g_lastFontScaleApplied = 0.0f;
+        g_lastFontModeApplied = -1;
+
         g_imguiInitialized = false;
         g_imguiVisible = false;
         g_d3dDevice = nullptr;
-        g_originalWndProc = nullptr;
-        g_wndProcAttached = false;
+        g_originalWndProc.store(nullptr, std::memory_order_release);
+        g_wndProcAttached.store(false, std::memory_order_release);
         g_imguiHostWindow = nullptr;
         g_externalFallbackHost = false;
     }
 
     bool DetachWndProc() {
-        if (!g_imguiInitialized || g_externalFallbackHost || !g_wndProcAttached || !g_originalWndProc) {
+        const WNDPROC originalWndProc = g_originalWndProc.load(std::memory_order_acquire);
+        if (!g_imguiInitialized || g_externalFallbackHost
+            || !g_wndProcAttached.load(std::memory_order_acquire) || !originalWndProc) {
             return false;
         }
         HWND hostWindow = g_imguiHostWindow;
@@ -1403,19 +1441,25 @@ namespace ImGuiImpl {
             return false;
         }
         SetLastError(0);
-        const LONG_PTR previous = SetWindowLongPtr(hostWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_originalWndProc));
+        const LONG_PTR previous = SetWindowLongPtr(hostWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(originalWndProc));
         const DWORD err = GetLastError();
         if (previous == 0 && err != 0) {
             LogOut("[IMGUI] WndProc detach failed (err=" + std::to_string(err) + ")", true);
             return false;
         }
-        g_wndProcAttached = false;
+        if (reinterpret_cast<WNDPROC>(previous) != ImGuiWndProc) {
+            // A peer subclassed between the read and the write; put it back on top.
+            SetWindowLongPtr(hostWindow, GWLP_WNDPROC, previous);
+            LogOut("[IMGUI] WndProc detach raced a peer subclass; restored it", true);
+            return false;
+        }
+        g_wndProcAttached.store(false, std::memory_order_release);
         LogOut("[IMGUI] WndProc detached for netplay suspend", true);
         return true;
     }
 
     bool AttachWndProc() {
-        if (!g_imguiInitialized || g_externalFallbackHost || g_wndProcAttached) {
+        if (!g_imguiInitialized || g_externalFallbackHost || g_wndProcAttached.load(std::memory_order_acquire)) {
             return false;
         }
         HWND hostWindow = g_imguiHostWindow;
@@ -1424,18 +1468,29 @@ namespace ImGuiImpl {
         }
         const WNDPROC currentWndProc = reinterpret_cast<WNDPROC>(GetWindowLongPtr(hostWindow, GWLP_WNDPROC));
         if (currentWndProc == ImGuiWndProc) {
-            g_wndProcAttached = true;
+            g_wndProcAttached.store(true, std::memory_order_release);
             return true;
         }
+        // Publish the forward target before the slot: this runs off the window
+        // thread, so a message can reach ImGuiWndProc right after the write.
+        const WNDPROC savedOriginal = g_originalWndProc.exchange(currentWndProc, std::memory_order_acq_rel);
         SetLastError(0);
         const LONG_PTR previous = SetWindowLongPtr(hostWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(ImGuiWndProc));
         const DWORD err = GetLastError();
         if (previous == 0 && err != 0) {
+            g_originalWndProc.store(savedOriginal, std::memory_order_release);
             LogOut("[IMGUI] WndProc attach failed (err=" + std::to_string(err) + ")", true);
             return false;
         }
-        g_originalWndProc = reinterpret_cast<WNDPROC>(previous);
-        g_wndProcAttached = true;
+        if (reinterpret_cast<WNDPROC>(previous) != currentWndProc) {
+            // A peer subclassed between the read and the write. Put it back on top;
+            // calls already inside ImGuiWndProc forward to it, not past it.
+            g_originalWndProc.store(reinterpret_cast<WNDPROC>(previous), std::memory_order_release);
+            SetWindowLongPtr(hostWindow, GWLP_WNDPROC, previous);
+            LogOut("[IMGUI] WndProc attach raced a peer subclass; restored it and left ours detached", true);
+            return false;
+        }
+        g_wndProcAttached.store(true, std::memory_order_release);
         LogOut("[IMGUI] WndProc re-attached after netplay suspend", true);
         return true;
     }
@@ -1484,6 +1539,22 @@ namespace ImGuiImpl {
     bool IsExternalFallbackHost() {
         return g_externalFallbackHost;
     }
+
+    bool ReleaseExternalFallbackHost(DWORD timeoutMs) {
+        if (!g_externalFallbackHost) return true;
+        // The fallback thread shuts ImGui down itself; it cannot wait for its own exit.
+        if (g_imguiVisible || g_imguiContextThread == GetCurrentThreadId()) return false;
+        if (g_externalFallbackThreadRunning.load(std::memory_order_acquire)) {
+            g_externalFallbackExit.store(true, std::memory_order_release);
+            const DWORD start = GetTickCount();
+            while (g_externalFallbackThreadRunning.load(std::memory_order_acquire)
+                && (GetTickCount() - start) < timeoutMs) {
+                Sleep(10);
+            }
+        }
+        return !g_externalFallbackThreadRunning.load(std::memory_order_acquire)
+            && !g_externalFallbackHost;
+    }
     
     void ToggleVisibility() {
         if (g_onlineModeActive.load(std::memory_order_relaxed)) {
@@ -1505,6 +1576,10 @@ namespace ImGuiImpl {
     
     bool IsVisible() {
         return g_imguiVisible;
+    }
+
+    unsigned VisibilityGeneration() {
+        return g_visibilityGeneration.load(std::memory_order_acquire);
     }
     
     LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {

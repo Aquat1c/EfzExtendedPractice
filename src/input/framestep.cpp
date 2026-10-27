@@ -2,12 +2,14 @@
 #include "../../include/core/logger.h"
 #include "../../include/game/efzrevival_addrs.h"
 #include "../../include/game/game_state.h"
+#include "../../include/game/game_thread_queue.h"
 #include "../../include/game/practice_hotkey_gate.h"
 #include "../../include/utils/pause_integration.h"
 #include "../../include/core/memory.h"
 #include "../../include/utils/network.h"
 #include "../../include/utils/utilities.h"
 #include "../../include/utils/config.h"
+#include "../../include/utils/i18n.h"
 #include "../../include/utils/debug_log.h"
 #include "../../include/gui/overlay.h"
 #include "../../include/gui/imgui_impl.h"
@@ -204,65 +206,8 @@ namespace {
         LogOut(oss.str(), true);
     }
 
-    // Visual effect patches (same as pause_integration.cpp)
-    struct PatchEntry {
-        uintptr_t rva;
-        SIZE_T size;
-        BYTE nops[5];
-        BYTE original[5];
-    };
-
-    static PatchEntry s_patches[] = {
-        {0x36425F, 5, {0x90,0x90,0x90,0x90,0x90}, {}},
-        {0x35E183, 3, {0x90,0x90,0x90}, {}},
-        {0x35DFB5, 3, {0x90,0x90,0x90}, {}},
-        {0x35DFD0, 3, {0x90,0x90,0x90}, {}},
-        {0x35E055, 3, {0x90,0x90,0x90}, {}},
-        {0x35E0DA, 3, {0x90,0x90,0x90}, {}},
-        {0x36420A, 5, {0x90,0x90,0x90,0x90,0x90}, {}},
-        {0x364AEB, 3, {0x90,0x90,0x90}, {}},
-        {0x365E59, 5, {0x90,0x90,0x90,0x90,0x90}, {}},
-        {0x365E7A, 5, {0x90,0x90,0x90,0x90,0x90}, {}}
-    };
-
-    static bool s_originalsSaved = false;
-
     bool ApplyVisualPatches(bool freeze) {
-        HMODULE hEfz = GetModuleHandleA("efz.exe");
-        if (!hEfz) return false;
-        uintptr_t base = reinterpret_cast<uintptr_t>(hEfz);
-
-        if (freeze && !s_originalsSaved) {
-            for (auto& patch : s_patches) {
-                uintptr_t addr = base + patch.rva;
-                if (!SafeReadMemory(addr, patch.original, patch.size)) {
-                    LogOut("[FRAMESTEP] Failed to save original bytes", true);
-                    return false;
-                }
-            }
-            s_originalsSaved = true;
-        }
-
-        int successCount = 0;
-        for (auto& patch : s_patches) {
-            uintptr_t addr = base + patch.rva;
-            const BYTE* data = freeze ? patch.nops : patch.original;
-
-            DWORD oldProtect;
-            if (!VirtualProtect((void*)addr, patch.size, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                continue;
-            }
-
-            memcpy((void*)addr, data, patch.size);
-            FlushInstructionCache(GetCurrentProcess(), (void*)addr, patch.size);
-
-            DWORD dummy;
-            VirtualProtect((void*)addr, patch.size, oldProtect, &dummy);
-
-            successCount++;
-        }
-
-        return successCount == _countof(s_patches);
+        return PauseIntegration::SetVisualFreeze(PauseIntegration::VisualFreezeUser::Framestep, freeze);
     }
 
     bool ReadBattleGamespeed(uintptr_t battleContext, uint8_t& outValue) {
@@ -539,6 +484,15 @@ namespace {
         return configured == defaultKey;
     }
 
+    void ContinueRevivalStepOnGameThread(uintptr_t) {
+        if (!s_inFrameStep.load()) return;  // canceled while queued
+        if (!PauseIntegration::RequestPracticeSubframeStep()) {
+            s_pendingRevivalNativeSteps.store(0);
+            s_inFrameStep.store(false);
+            s_revivalStepQueuedTick.store(0);
+        }
+    }
+
     void HandleRevivalStepDelta(uint32_t delta) {
         if (delta == 0) {
             return;
@@ -560,12 +514,11 @@ namespace {
 
             if (remaining > 0) {
                 s_pendingRevivalNativeSteps.store(remaining - 1);
-                if (!PauseIntegration::RequestPracticeSubframeStep()) {
+                s_revivalStepQueuedTick.store(GetTickCount());
+                if (!GameThread::Post(&ContinueRevivalStepOnGameThread)) {
                     s_pendingRevivalNativeSteps.store(0);
                     s_inFrameStep.store(false);
                     s_revivalStepQueuedTick.store(0);
-                } else {
-                    s_revivalStepQueuedTick.store(GetTickCount());
                 }
             } else {
                 s_pendingRevivalNativeSteps.store(0);
@@ -761,6 +714,16 @@ namespace {
         LogOut("[FRAMESTEP] Restored paused state after menu close", true);
     }
 
+    void RestorePauseStateAfterMenuOnGameThread(uintptr_t backend) {
+        if (ImGuiImpl::IsVisible()) return;  // reopened while queued; the next close re-posts
+        if (!SehRestorePauseStateAfterMenu(static_cast<Backend>(backend))) {
+            LogOut("[FRAMESTEP][SEH] Exception while restoring pause state after menu close", true);
+            TraceFramestep("[FRAMESTEP][TRACE] Menu restore crashed under SEH");
+            s_restorePausedAfterMenu.store(false);
+            s_restoreWePausedAfterMenu.store(false);
+        }
+    }
+
     void SyncRevivalFramestep() {
         PauseIntegration::EnsurePracticePointerCapture();
         const bool paused = PauseIntegration::IsPracticePaused();
@@ -845,10 +808,8 @@ namespace Framestep {
 
         if (!IsValidFramestepMode()) {
             if (UsesRevivalNativeStep(backend)) {
-                if (s_wePaused.load()) {
-                    PauseIntegration::SetPracticePausedForFramestep(false);
-                    s_wePaused.store(false);
-                }
+                // Revival's pause was released on the game thread at battle exit.
+                s_wePaused.store(false);
                 s_paused.store(false);
                 ResetRevivalStepTracking();
             } else if (s_paused.load()) {
@@ -891,9 +852,8 @@ namespace Framestep {
                 << " restorePaused=" << (s_restorePausedAfterMenu.load() ? 1 : 0)
                 << " restoreWePaused=" << (s_restoreWePausedAfterMenu.load() ? 1 : 0);
             TraceFramestep(oss.str());
-            if (!SehRestorePauseStateAfterMenu(backend)) {
-                LogOut("[FRAMESTEP][SEH] Exception while restoring pause state after menu close", true);
-                TraceFramestep("[FRAMESTEP][TRACE] Menu restore crashed under SEH");
+            if (!GameThread::Post(&RestorePauseStateAfterMenuOnGameThread, static_cast<uintptr_t>(backend))) {
+                TraceFramestep("[FRAMESTEP][TRACE] Menu restore refused: game-thread queue unavailable");
                 s_restorePausedAfterMenu.store(false);
                 s_restoreWePausedAfterMenu.store(false);
             }
@@ -1130,19 +1090,20 @@ namespace Framestep {
         const Config::Settings cfg = Config::GetSettings();
         const int pauseKey = (cfg.framestepPauseKey > 0) ? cfg.framestepPauseKey : VK_SPACE;
         const int stepKey = (cfg.framestepStepKey > 0) ? cfg.framestepStepKey : 'P';
-        std::string text = "Paused [" + GetKeyName(pauseKey) + "=Resume " + GetKeyName(stepKey) + "=Step]";
+        const std::string pauseName = GetKeyName(pauseKey);
+        const std::string stepName = GetKeyName(stepKey);
+        const uint32_t steps = s_stepCounter.load();
+        std::string text;
         COLORREF color = RGB(255, 100, 100);
-        
-        if (s_stepCounter.load() > 0) {
-            text += " (" + std::to_string(s_stepCounter.load());
-            
-            if (s_stepMode.load() == StepMode::Subframe) {
-                float visualFrames = s_stepCounter.load() / 3.0f;
-                char buf[32];
-                snprintf(buf, sizeof(buf), " = %.2ff", visualFrames);
-                text += buf;
-            }
-            text += ")";
+
+        if (steps == 0) {
+            text = I18n::TrFormat("Paused [%s=Resume %s=Step]", pauseName.c_str(), stepName.c_str());
+        } else if (s_stepMode.load() == StepMode::Subframe) {
+            const float visualFrames = steps / 3.0f;
+            text = I18n::TrFormat("Paused [%s=Resume %s=Step] (%d = %.2ff)",
+                                  pauseName.c_str(), stepName.c_str(), (int)steps, visualFrames);
+        } else {
+            text = I18n::TrFormat("Paused [%s=Resume %s=Step] (%d)", pauseName.c_str(), stepName.c_str(), (int)steps);
         }
 
         // Position below Revival's built-in top-right practice text block.

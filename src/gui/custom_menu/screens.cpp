@@ -6,6 +6,8 @@
 #include "../include/gui/custom_menu/sound.h"
 #include "../include/core/constants.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
+#include "../include/utils/utilities.h"     // detectedBindings
 #include "../include/utils/xinput_shim.h"
 #include "../3rdparty/imgui/imgui.h"
 
@@ -234,7 +236,9 @@ const char* DefaultActionHelpText(const char* label) {
     if (TextEquals(label, "UI EXIT")) return "Sets the menu back or close input.";
     if (TextEquals(label, "FRAMESTEP PAUSE")) return "Sets the input used to pause frame stepping.";
     if (TextEquals(label, "FRAMESTEP STEP")) return "Sets the input used to advance one frame step.";
-    if (TextEquals(label, "TOGGLE MENU")) return "Sets the controller button used with Esc to open and close this menu.";
+    if (TextEquals(label, "TOGGLE MENU")) return "Sets the controller button that opens this menu.";
+    if (TextEquals(label, "OPEN MENU")) return "Sets the keyboard key that opens this menu. Any key other than Esc gives Esc back to EFZ.";
+    if (TextEquals(label, "USE ESC TO OPEN MENU")) return "Sets the menu key back to Esc.";
     if (TextEquals(label, "TOP TAB PREVIOUS")) return "Sets the controller button for the previous top tab.";
     if (TextEquals(label, "TOP TAB NEXT")) return "Sets the controller button for the next top tab.";
     if (TextEquals(label, "SUBTAB PREVIOUS")) return "Sets the controller button for the previous subtab.";
@@ -574,6 +578,48 @@ void PushWrappedLine(std::vector<std::string>& out, const std::string& line) {
     }
 }
 
+// Decodes one UTF-8 code point at p; returns its byte length (1 for invalid bytes).
+int DecodeUtf8(const char* p, unsigned& cp) {
+    const unsigned char c = static_cast<unsigned char>(p[0]);
+    int len = 1;
+    if (c >= 0xF0) { cp = c & 0x07; len = 4; }
+    else if (c >= 0xE0) { cp = c & 0x0F; len = 3; }
+    else if (c >= 0xC0) { cp = c & 0x1F; len = 2; }
+    else { cp = c; return 1; }
+    for (int i = 1; i < len; ++i) {
+        const unsigned char cc = static_cast<unsigned char>(p[i]);
+        if ((cc & 0xC0) != 0x80) { cp = c; return 1; }
+        cp = (cp << 6) | (cc & 0x3F);
+    }
+    return len;
+}
+
+bool IsCjkBreakable(unsigned cp) {
+    return (cp >= 0x2E80 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+           (cp >= 0xFF00 && cp <= 0xFFEF);
+}
+
+// Kinsoku: closing punctuation and small kana never start a line.
+bool NoBreakBefore(unsigned cp) {
+    switch (cp) {
+        case 0x3001: case 0x3002: case 0x300D: case 0x300F: case 0x3011:
+        case 0x30FC: case 0xFF09: case 0xFF0C: case 0xFF0E: case 0xFF1A:
+        case 0xFF01: case 0xFF1F: case 0x3063: case 0x30C3: case 0x3083:
+        case 0x3085: case 0x3087: case 0x30E3: case 0x30E5: case 0x30E7:
+        case 0x3041: case 0x3043: case 0x3045: case 0x3047: case 0x3049:
+        case 0x30A1: case 0x30A3: case 0x30A5: case 0x30A7: case 0x30A9:
+        case ')': case ']': case ',': case '.': case ':': case ';': case '!': case '?':
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool NoBreakAfter(unsigned cp) {
+    return cp == 0x300C || cp == 0x300E || cp == 0x3010 || cp == 0xFF08 ||
+           cp == '(' || cp == '[';
+}
+
 void WrapTextLine(ImFont* font, float px, const char* text, float maxW,
                   std::vector<std::string>& out) {
     if (!text || !*text) return;
@@ -584,6 +630,8 @@ void WrapTextLine(ImFont* font, float px, const char* text, float maxW,
 
     std::string current;
     std::string word;
+    bool spaceBeforeWord = false;
+    unsigned prevCp = 0;
 
     auto flushWord = [&]() {
         if (word.empty()) return;
@@ -591,7 +639,7 @@ void WrapTextLine(ImFont* font, float px, const char* text, float maxW,
             current = word;
         } else {
             std::string candidate = current;
-            candidate.push_back(' ');
+            if (spaceBeforeWord) candidate.push_back(' ');
             candidate += word;
             if (Layout::MeasureTextW(font, px, candidate.c_str()) <= maxW) {
                 current = candidate;
@@ -601,22 +649,37 @@ void WrapTextLine(ImFont* font, float px, const char* text, float maxW,
             }
         }
         word.clear();
+        spaceBeforeWord = false;
     };
 
-    for (const char* p = text; *p; ++p) {
+    for (const char* p = text; *p;) {
         const char c = *p;
-        if (c == '\r') continue;
+        if (c == '\r') { ++p; continue; }
         if (c == '\n') {
             flushWord();
             PushWrappedLine(out, current);
             current.clear();
+            spaceBeforeWord = false;
+            prevCp = 0;
+            ++p;
             continue;
         }
         if (c == ' ' || c == '\t') {
             flushWord();
+            spaceBeforeWord = true;
+            prevCp = 0;
+            ++p;
             continue;
         }
-        word.push_back(c);
+        unsigned cp = 0;
+        const int len = DecodeUtf8(p, cp);
+        if (!word.empty() && (IsCjkBreakable(cp) || IsCjkBreakable(prevCp)) &&
+            !NoBreakBefore(cp) && !NoBreakAfter(prevCp)) {
+            flushWord();
+        }
+        word.append(p, static_cast<size_t>(len));
+        prevCp = cp;
+        p += len;
     }
     flushWord();
     PushWrappedLine(out, current);
@@ -657,9 +720,9 @@ void RebuildInfoWrapCacheEntry(InfoWrapCacheEntry& entry,
                                float px,
                                int widthKey,
                                int fontPxKey) {
-    const char* text = r.label ? r.label : "";
+    const char* text = I18n::Tr(r.label ? r.label : "");
     entry.valid = true;
-    entry.labelPtr = text;
+    entry.labelPtr = r.label ? r.label : "";
     entry.widthKey = widthKey;
     entry.font = font;
     entry.fontPxKey = fontPxKey;
@@ -678,7 +741,8 @@ void RebuildInfoWrapCacheEntry(InfoWrapCacheEntry& entry,
 }
 
 const InfoWrapCacheEntry& GetInfoWrapCacheEntry(const Row& r, float contentW) {
-    const char* text = r.label ? r.label : "";
+    const char* label = r.label ? r.label : "";
+    const char* text = I18n::Tr(label);
     ImFont* font = Layout::BodyFont();
     const float px = font ? font->FontSize : 13.0f;
     const int widthKey = InfoWrapWidthKey(contentW);
@@ -691,7 +755,7 @@ const InfoWrapCacheEntry& GetInfoWrapCacheEntry(const Row& r, float contentW) {
             reusableSlot = i;
             break;
         }
-        if (entry.labelPtr == text &&
+        if (entry.labelPtr == label &&
             entry.widthKey == widthKey &&
             entry.font == font &&
             entry.fontPxKey == fontPxKey) {
@@ -1272,6 +1336,12 @@ struct PopupState {
     Row sourceRow{};
     void (*onChange)() = nullptr;
     PairedChoiceChange onPrimaryChoiceChange = nullptr;
+    // Live targets of sourceRow.intPtr / choiceVariantPtr while those point at the
+    // pending copies below; written back only when a choice is confirmed.
+    int* variantTarget = nullptr;
+    int* variant2Target = nullptr;
+    int pendingVariant = 0;
+    int pendingVariant2 = 0;
 };
 PopupState g_popup;
 
@@ -1545,11 +1615,7 @@ bool PopupAdjustFocusedChoice(int direction) {
     }
     if (g_popup.focusIdx < 0 || g_popup.focusIdx >= g_popup.choiceCount) return false;
     const int choiceValue = PopupChoiceValueAt(g_popup.focusIdx);
-    if (!g_popup.sourceRow.choiceValueAdjuster(g_popup.sourceRow, choiceValue, direction)) {
-        return false;
-    }
-    if (g_popup.onChange) g_popup.onChange();
-    return true;
+    return g_popup.sourceRow.choiceValueAdjuster(g_popup.sourceRow, choiceValue, direction);
 }
 
 const char* PopupHelpText() {
@@ -1568,8 +1634,8 @@ const char* PopupHelpText() {
         g_popup.focusIdx >= 0 && g_popup.focusIdx < g_popup.choiceCount) {
         const char* choice = PopupChoiceDisplayText(g_popup.focusIdx);
         _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE,
-                    "Select %s for this row; left and right change variants before confirming.",
-                    (choice && *choice) ? choice : "this option");
+                    I18n::Tr("Select %s for this row; left and right change variants before confirming."),
+                    I18n::Tr((choice && *choice) ? choice : "this option"));
         return s_buf;
     }
     if (PopupIsMulti()) {
@@ -1769,6 +1835,18 @@ void OpenDropdownPopup(const Row& r) {
     g_popup.maskHiPtr = nullptr;
     g_popup.companionIdxPtr = (r.kind == RowKind::ActionStrength) ? r.choice2IdxPtr : nullptr;
     g_popup.sourceRow = r;
+    g_popup.variantTarget = nullptr;
+    g_popup.variant2Target = nullptr;
+    if (r.choiceValueAdjuster && r.intPtr) {
+        g_popup.variantTarget = r.intPtr;
+        g_popup.pendingVariant = *r.intPtr;
+        g_popup.sourceRow.intPtr = &g_popup.pendingVariant;
+    }
+    if (r.choiceValueAdjuster && r.choiceVariantPtr) {
+        g_popup.variant2Target = r.choiceVariantPtr;
+        g_popup.pendingVariant2 = *r.choiceVariantPtr;
+        g_popup.sourceRow.choiceVariantPtr = &g_popup.pendingVariant2;
+    }
     g_popup.allChoices = nullptr;
     g_popup.allChoiceCount = 0;
     g_popup.choiceCategoryMap = nullptr;
@@ -1886,6 +1964,8 @@ void ClosePopup() {
     g_popup.sourceRow = Row{};
     g_popup.onChange = nullptr;
     g_popup.onPrimaryChoiceChange = nullptr;
+    g_popup.variantTarget = nullptr;
+    g_popup.variant2Target = nullptr;
 }
 
 bool PopupActive() { return g_popup.active; }
@@ -1957,6 +2037,8 @@ void PopupTickInputOnly(const ScreenLayout& layout) {
             const int choiceValue = PopupChoiceValueAt(i);
             PopupToggleMaskBit(choiceValue);
         } else {
+            if (g_popup.variantTarget) *g_popup.variantTarget = g_popup.pendingVariant;
+            if (g_popup.variant2Target) *g_popup.variant2Target = g_popup.pendingVariant2;
             *g_popup.choiceIdxPtr = PopupUsesMappedChoiceValues() ? g_popup.choiceValueMap[i] : i;
             if (g_popup.onPrimaryChoiceChange) {
                 g_popup.onPrimaryChoiceChange(g_popup.choiceIdxPtr, g_popup.companionIdxPtr);
@@ -2911,8 +2993,35 @@ bool VkCountsTowardsPriming(int vk) {
     return VkIsBindable(vk);
 }
 
+// The menu key must not collide with key.ini game binds (menu nav) or any other hotkey.
+bool MenuKeyCaptureAllowed(int vk) {
+    if (!Config::IsMenuKeyAllowed(vk)) return false;
+    const KeyBindings& kb = detectedBindings;
+    if (kb.directionsDetected &&
+        (vk == kb.upKey || vk == kb.downKey || vk == kb.leftKey || vk == kb.rightKey)) return false;
+    if (kb.attacksDetected &&
+        (vk == kb.aButton || vk == kb.bButton || vk == kb.cButton || vk == kb.dButton)) return false;
+    const Config::Settings& s = Config::GetSettings();
+    // Effective keys as MonitorKeys resolves them, plus its hardwired '4'/'5'/'6'/F9.
+    const auto eff = [](int vk, int fallback) { return vk > 0 ? vk : fallback; };
+    const int others[] = {
+        eff(s.teleportKey, '1'), eff(s.recordKey, '2'), s.toggleTitleKey, s.resetFrameCounterKey,
+        eff(s.savestateSaveKey, 'U'), eff(s.savestateLoadKey, 'J'), eff(s.switchPlayersKey, 'L'),
+        eff(s.macroRecordKey, 'I'), eff(s.macroPlayKey, 'O'), eff(s.macroSlotKey, 'K'),
+        s.uiAcceptKey, s.uiRefreshKey, s.uiExitKey,
+        s.framestepPauseKey, eff(s.framestepStepKey, 'P'), s.swapCustomKey,
+        '4', '5', '6', VK_F9,
+    };
+    for (int other : others) if (vk == other) return false;
+    return true;
+}
+
 bool VkAllowedForCurrentCapture(int vk) {
     if (!VkIsBindable(vk)) return false;
+    if (g_keybind.settingsField == &Config::GetSettings().configMenuKey) {
+        return MenuKeyCaptureAllowed(vk);
+    }
+    if (vk == Config::GetSettings().configMenuKey) return false;
     if (g_keybind.disallowMenuReserved && (vk == VK_RETURN || vk == VK_SPACE)) {
         return false;
     }
@@ -3043,7 +3152,7 @@ bool TickKeybindIfActive(ImDrawList* dl, const ScreenLayout& layout) {
         const int cancelMask = Config::GetSettings().gpToggleMenuButton;
         if (cancelMask >= 0) {
             _snprintf_s(cancelBuf, sizeof(cancelBuf), _TRUNCATE,
-                        "%s TO CANCEL",
+                        I18n::Tr("%s TO CANCEL"),
                         Config::GetGamepadButtonName(cancelMask).c_str());
         } else {
             _snprintf_s(cancelBuf, sizeof(cancelBuf), _TRUNCATE,

@@ -115,8 +115,8 @@ int SyncFinalMemoryBypassForCurrentMode(const char* reason) {
     const bool onlineSuspended = g_onlineModeActive.load(std::memory_order_acquire);
     const GameMode currentMode = GetCurrentGameMode();
     const GamePhase currentPhase = GetCurrentGamePhase();
-    const bool inPracticeMatch = (currentMode == GameMode::Practice) && (currentPhase == GamePhase::Match);
-    const bool shouldInstall = requested && featuresActive && !onlineSuspended && inPracticeMatch;
+    const bool inPracticeMatch = IsPracticeContext() && (currentPhase == GamePhase::Match);
+    const bool shouldInstall = requested && featuresActive && inPracticeMatch;
 
     if (shouldInstall) {
         const int applied = ApplyFinalMemoryHPBypass();

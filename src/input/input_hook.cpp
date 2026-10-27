@@ -1187,7 +1187,24 @@ struct NormalProcessRoute {
 };
 
 // HookedPoll runs synchronously inside the matching ProcessCharacterInput call; thread-local context is an exact acknowledgement.
-thread_local NormalProcessRoute s_nativeNormalPollRoute;
+// Explicit Win32 TLS: implicit TLS is not allocated for LoadLibrary'd DLLs on XP. Slot holds a caller-stack route or null; never freed.
+const DWORD s_nativeNormalPollRouteTls = TlsAlloc();
+
+NormalProcessRoute* ActiveNativeNormalPollRoute() {
+    if (s_nativeNormalPollRouteTls == TLS_OUT_OF_INDEXES) return nullptr;
+    const DWORD lastError = GetLastError();
+    auto* route = static_cast<NormalProcessRoute*>(
+        TlsGetValue(s_nativeNormalPollRouteTls));
+    SetLastError(lastError);
+    return route;
+}
+
+void BindNativeNormalPollRoute(NormalProcessRoute* route) {
+    if (s_nativeNormalPollRouteTls == TLS_OUT_OF_INDEXES) return;
+    const DWORD lastError = GetLastError();
+    (void)TlsSetValue(s_nativeNormalPollRouteTls, route);
+    SetLastError(lastError);
+}
 
 constexpr uintptr_t kNativeHeldButtonOffsets[4] = {400u, 404u, 408u, 412u};
 constexpr uintptr_t kReplayIoModeOffset = 82563u;
@@ -3029,11 +3046,12 @@ int RunNormalRoute(int characterPtr,
                 static_cast<uintptr_t>(characterPtr) +
                     kNativeHeldButtonOffsets[selectedButtonIndex],
                 &selectedHeldBefore, sizeof(selectedHeldBefore));
-        s_nativeNormalPollRoute = route;
+        NormalProcessRoute pollRoute = route;
+        BindNativeNormalPollRoute(&pollRoute);
         ret = CallOriginalProcessCharacterInputWithContext(
             characterPtr, route.player);
-        route.nativePollObserved = s_nativeNormalPollRoute.observed;
-        s_nativeNormalPollRoute = {};
+        BindNativeNormalPollRoute(nullptr);
+        route.nativePollObserved = pollRoute.observed;
         // Keep native edge/held bookkeeping but make the consumer hand-off authoritative.
         if (route.nativePollObserved) {
             // EFZ stores directions plus button rising edges, not the held mask; derive from the captured DWORD latch.
@@ -3605,10 +3623,10 @@ static uint8_t TutorialP2PollMask() {
         // An authored press keeps priority; the native normal relinquishes/retries.
         return immediate;
     }
-    if (s_nativeNormalPollRoute.active &&
-        s_nativeNormalPollRoute.player == 2) {
-        s_nativeNormalPollRoute.observed = true;
-        return s_nativeNormalPollRoute.mask;
+    NormalProcessRoute* const nativeRoute = ActiveNativeNormalPollRoute();
+    if (nativeRoute && nativeRoute->active && nativeRoute->player == 2) {
+        nativeRoute->observed = true;
+        return nativeRoute->mask;
     }
     // Zero is authoritative between motions; physical/CPU input must not leak into a scripted episode.
     return 0;
@@ -3727,12 +3745,14 @@ static int __fastcall HookedPollPlayerInputState(int inputManagerPtr, int /*edx*
             static_cast<int>(g_pollOverrideMask[idxFromPollArg].load(std::memory_order_relaxed)));
     }
 
-    if (idxFromProcessContext != 0 && s_nativeNormalPollRoute.active &&
-        s_nativeNormalPollRoute.player == static_cast<int>(idxFromProcessContext)) {
-        s_nativeNormalPollRoute.observed = true;
+    NormalProcessRoute* const nativeRoute =
+        idxFromProcessContext != 0 ? ActiveNativeNormalPollRoute() : nullptr;
+    if (nativeRoute && nativeRoute->active &&
+        nativeRoute->player == static_cast<int>(idxFromProcessContext)) {
+        nativeRoute->observed = true;
         return RecordInputPollResult(
             idxFromProcessContext,
-            static_cast<int>(s_nativeNormalPollRoute.mask));
+            static_cast<int>(nativeRoute->mask));
     }
 
     const int result = oPollPlayerInputState

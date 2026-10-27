@@ -43,6 +43,7 @@ namespace Config {
     bool showPracticeEntryHint;
     float uiScale;               // 0.70..1.50
     int uiFontMode;              // 0=ImGui default, 1=Segoe UI
+    int language;                // I18n::Language; INI value en|ja
     int savestateBackendMode;    // 0=Custom, 1=Revival, 2=Custom with Revival fallback
     bool savestateLoadCustomPalettes; // 1=restore saved custom palette usage, 0=force default palettes on load
 
@@ -65,7 +66,7 @@ namespace Config {
 
         int teleportKey;
         int recordKey;
-        int configMenuKey;          // Legacy, ignored; menu uses Esc
+        int configMenuKey;          // VK; VK_ESCAPE intercepts Esc, any other key leaves Esc to EFZ
         int toggleTitleKey;
         int resetFrameCounterKey;
         int helpKey;                // Legacy, ignored
@@ -149,6 +150,7 @@ namespace Config {
 
     int ParseKeyValue(const std::string& value);
     std::string GetKeyName(int keyCode);
+    bool IsMenuKeyAllowed(int vk);
     int ParseGamepadButton(const std::string& value);
     std::string GetGamepadButtonName(int mask);
 

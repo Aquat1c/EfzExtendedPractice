@@ -1935,7 +1935,8 @@ bool BindPracticeWorld(const EfzTmEntryV1& world) {
 }
 
 void CancelPracticeWork() {
-    s_practiceWorkClosed.store(true, std::memory_order_release);
+    // Only BindPracticeWorld reopens work; never close it without a bound world.
+    if (s_boundWorld.id.battleWorld) s_practiceWorkClosed.store(true, std::memory_order_release);
 }
 
 uint32_t RetirePracticeWorld(const EfzTmEntryV1& world) {

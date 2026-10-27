@@ -1,6 +1,7 @@
 #include "../include/gui/custom_menu/layout.h"
 #include "../include/gui/custom_menu/fonts.h"
 #include "../include/gui/custom_menu/scale.h"
+#include "../include/utils/i18n.h"
 #include "../3rdparty/imgui/imgui.h"
 
 #include <algorithm>
@@ -89,6 +90,7 @@ ImFont* HeaderFont() { return Fonts::Header(); }
 
 void DrawString(ImDrawList* dl, ImFont* font, float px, float x, float y, ImU32 col, const char* text) {
     if (!dl || !text || !*text) return;
+    text = I18n::Tr(text);
     const float sx = Scale::Snap(x);
     const float sy = Scale::Snap(y);
     if (font) {
@@ -101,6 +103,7 @@ void DrawString(ImDrawList* dl, ImFont* font, float px, float x, float y, ImU32 
 
 float MeasureTextW(ImFont* font, float px, const char* text) {
     if (!text || !*text) return 0.0f;
+    text = I18n::Tr(text);
     if (font) {
         const float sizePx = Scale::Snap((px > 0.0f) ? px : font->FontSize);
         ImVec2 sz = font->CalcTextSizeA(sizePx, FLT_MAX, 0.0f, text);

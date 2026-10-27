@@ -16,6 +16,7 @@
 #include "../include/core/logger.h"
 #include "../include/utils/utilities.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../include/core/constants.h"
 #include "../include/core/version.h"
 #include "../include/game/character_hotswap.h"
@@ -235,6 +236,7 @@ struct ShellState {
 
     bool menuWasVisible = false;
     bool lastWasCustom  = false;
+    unsigned lastVisibilityGen = 0;
 
     bool keybindWasActive = false;
 };
@@ -487,7 +489,12 @@ std::string FitTextToWidth(ImFont* font, float px, const char* text, float maxW)
     std::string out = text;
     const char* suffix = "...";
     while (!out.empty()) {
-        out.pop_back();
+        // Drop one whole UTF-8 code point.
+        while (!out.empty()) {
+            const unsigned char c = static_cast<unsigned char>(out.back());
+            out.pop_back();
+            if ((c & 0xC0) != 0x80) break;
+        }
         std::string candidate = out + suffix;
         if (Layout::MeasureTextW(font, px, candidate.c_str()) <= maxW) {
             return candidate;
@@ -1677,11 +1684,36 @@ void HandleMainScreenInput(const MainLayout& L, const GuiValueLocks::State& lock
     }
 }
 
-void MaybeRefreshOnOpen() {
+void TearDownOnClose() {
+    LogMenuTrace("MaybeRefreshOnOpen: visibility 1->0, tearing down");
+    LogMenuDetail("Closed custom menu");
+    CancelEditMode();
+    SehInvokeStep("close: ResetSubmenus", &Screens::ResetSubmenus);
+    SehInvokeStep("close: ResetHotswapMenuSeed", &Screens::ResetHotswapMenuSeed);
+    SehInvokeStep("close: ResetTextEditor", &Screens::ResetTextEditor);
+    SehInvokeStep("close: ClosePopup", &Screens::ClosePopup);
+    SehInvokeStep("close: CloseKeybind", &Screens::CloseKeybind);
+    g_shell.keybindWasActive = false;
+}
+
+// Returns true when the open sequence ran this frame.
+bool MaybeRefreshOnOpen() {
     const bool visibleNow = ImGuiImpl::IsVisible();
     const bool customNow  = ImGuiImpl::IsExternalFallbackHost() || Config::GetSettings().useCustomMenu;
 
+    // Render() is only called while the menu is shown; a generation change means it
+    // was hidden (and maybe reopened) in between.
+    const unsigned visibilityGen = ImGuiImpl::VisibilityGeneration();
+    const bool flipped = visibilityGen != g_shell.lastVisibilityGen;
+    g_shell.lastVisibilityGen = visibilityGen;
+    if (g_shell.menuWasVisible && flipped) {
+        TearDownOnClose();
+        g_shell.menuWasVisible = false;
+    }
+
+    bool opened = false;
     if (visibleNow && !g_shell.menuWasVisible) {
+        opened = true;
         LogMenuTrace("MaybeRefreshOnOpen: visibility 0->1 (custom=%d), beginning open sequence", customNow ? 1 : 0);
     // Drop the .pal lookup cache on open so newly added palette files are found.
         CharacterHotswap::InvalidateCustomPaletteCache();
@@ -1728,20 +1760,13 @@ void MaybeRefreshOnOpen() {
             ScreenName(ActivePane()),
             DescribeFocus(ActivePane(), CurFocus()).c_str(),
             MainModeName(g_main.mode));
-    } else if (!visibleNow) {
-        if (g_shell.menuWasVisible && g_shell.lastWasCustom) {
-            LogMenuTrace("MaybeRefreshOnOpen: visibility 1->0, tearing down");
-            LogMenuDetail("Closed custom menu");
-        }
-        CancelEditMode();
-        SehInvokeStep("close: ResetSubmenus", &Screens::ResetSubmenus);
-        SehInvokeStep("close: ResetHotswapMenuSeed", &Screens::ResetHotswapMenuSeed);
-        SehInvokeStep("close: ResetTextEditor", &Screens::ResetTextEditor);
-        g_shell.keybindWasActive = false;
+    } else if (!visibleNow && g_shell.menuWasVisible) {
+        TearDownOnClose();
     }
 
     g_shell.menuWasVisible = visibleNow;
     g_shell.lastWasCustom  = customNow;
+    return opened;
 }
 
 } // namespace
@@ -1752,7 +1777,8 @@ void PrepareFrame() {
     // fonts; the atlas must be ready while they are up (menu closed).
     if (!ImGuiImpl::IsVisible() && !PracticeMenu::TitleScreen::WantsDraw() &&
         !Mission::PauseMenu::WantsDraw() &&
-        !Mission::TutorialSession::WantsDraw()) return;
+        !Mission::TutorialSession::WantsDraw() &&
+        I18n::GetLanguage() != I18n::Japanese) return;
 
     Scale::Update(Config::GetSettings().uiScale);
 
@@ -1764,21 +1790,16 @@ void PrepareFrame() {
 void Render() {
     if (!ImGui::GetCurrentContext()) return;
 
-    static bool s_prevVisible = false;
     static unsigned long s_renderFrame = 0;
     static unsigned long s_framesSinceOpen = 0xFFFFFFFFul;
-    const bool visibleBeforeMaybe = ImGuiImpl::IsVisible();
-    if (visibleBeforeMaybe && !s_prevVisible) {
+    if (MaybeRefreshOnOpen()) {
         s_framesSinceOpen = 0;
         LogMenuTrace("Render: visibility edge 0->1 detected at frame %lu", s_renderFrame + 1);
-    } else if (!visibleBeforeMaybe) {
+    } else if (!ImGuiImpl::IsVisible()) {
         s_framesSinceOpen = 0xFFFFFFFFul;
     } else if (s_framesSinceOpen != 0xFFFFFFFFul && s_framesSinceOpen < 32) {
         ++s_framesSinceOpen;
     }
-    s_prevVisible = visibleBeforeMaybe;
-
-    MaybeRefreshOnOpen();
 
     if (!ImGuiImpl::IsVisible()) return;
 
@@ -2022,6 +2043,9 @@ void Render() {
     } else if (Screens::IsPopupActive()) {
         hint = "UP/DOWN MOVE   ENTER SELECT   ESC CANCEL";
         setDescription(Screens::CurrentPopupHelpText());
+    } else if (Screens::IsRawVkEditorActive()) {
+        hint = "TYPE VK CODE   APPLY   ESC CANCEL";
+        setDescription("Type a raw virtual-key code, then apply it or return without changing it.");
     } else if (Screens::IsTextEditorActive()) {
         hint = "TYPE TEXT   CTRL+V PASTE   DONE COMMIT   ESC CANCEL";
         setDescription("Edit the selected text field, then commit it or return without changing it.");
@@ -2047,10 +2071,10 @@ void Render() {
         const int focus = CurFocus();
         const bool focusLocked = RowIsLocked(valueLocks, focus);
         statusText = LockStatusText(valueLocks, focus);
-        static char s_desc[160];
+        static char s_desc[256];
         _snprintf_s(s_desc, sizeof(s_desc), _TRUNCATE,
-                    "Edit %s for the current match; locked values are managed by recovery settings.",
-                    DescribeFocus(PANE_VALUES, focus).c_str());
+                    I18n::Tr("Edit %s for the current match; locked values are managed by recovery settings."),
+                    I18n::Tr(DescribeFocus(PANE_VALUES, focus).c_str()));
         setDescription(s_desc);
         if (g_main.mode == MainMode::Browse) {
             if (focusLocked) {
@@ -2099,7 +2123,7 @@ void Render() {
 
     const float textPadX = Scale::Snap(8.0f * metrics.layoutScale);
     const float maxTextW = hintBoxW - textPadX * 2.0f;
-    const std::string topLine = !statusText.empty() ? statusText : descriptionText;
+    const std::string topLine = I18n::Tr(!statusText.empty() ? statusText.c_str() : descriptionText.c_str());
     const std::string topDraw = FitTextToWidth(bFont, bPx, topLine.c_str(), maxTextW);
     const ImU32 topCol = !statusText.empty() ? Theme::kTextStatus : Theme::kTextActive;
     const float topY = Scale::Snap(hintBoxY + 5.0f * metrics.layoutScale);
@@ -2108,7 +2132,7 @@ void Render() {
     if (topX < hintBoxX + textPadX) topX = hintBoxX + textPadX;
     Layout::DrawString(dl, bFont, bPx, topX, topY, topCol, topDraw.c_str());
 
-    const std::string hintDraw = FitTextToWidth(bFont, bPx, hint, maxTextW);
+    const std::string hintDraw = FitTextToWidth(bFont, bPx, I18n::Tr(hint), maxTextW);
     const float hintY = Scale::Snap(hintBoxY + hintBoxH - bPx - 5.0f * metrics.layoutScale);
     const float hw = Layout::MeasureTextW(bFont, bPx, hintDraw.c_str());
     float hintX = Scale::Snap(hintBoxX + (hintBoxW - hw) * 0.5f);

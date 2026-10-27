@@ -521,6 +521,15 @@ if(BUILD_TESTING)
     add_test(NAME macro_playback_start_policy_tests
              COMMAND macro_playback_start_policy_tests)
 
+    add_executable(menu_key_policy_tests
+        tests/menu_key_policy_tests.cpp)
+    target_include_directories(menu_key_policy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_property(TARGET menu_key_policy_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME menu_key_policy_tests
+             COMMAND menu_key_policy_tests)
+
     add_executable(mission_contact_attribution_policy_tests
         tests/mission_contact_attribution_policy_tests.cpp)
     target_include_directories(mission_contact_attribution_policy_tests PRIVATE

@@ -2096,7 +2096,7 @@ namespace ImGuiGui {
                     if (ImGui::BeginTabBar("##HelpGettingStartedTabs", ImGuiTabBarFlags_None)) {
                         if (ImGui::BeginTabItem("Quick Start")) {
                             ImGui::TextWrapped("Open the menu, adjust options, then press Apply at the bottom. While the menu is open, practice hotkeys are disabled and the game auto-pauses; it resumes on close.");
-                            BulletTextWrapped("Open Menu: Esc (Controller: %s)", Config::GetGamepadButtonName(cfg.gpToggleMenuButton).c_str());
+                            BulletTextWrapped("Open Menu: %s (Controller: %s)", GetKeyName(cfg.configMenuKey).c_str(), Config::GetGamepadButtonName(cfg.gpToggleMenuButton).c_str());
                             BulletTextWrapped("Help is available from the Help tab.");
                             BulletTextWrapped("Save Position: %s (Controller: %s)", GetKeyName(cfg.recordKey).c_str(), Config::GetGamepadButtonName(cfg.gpSavePositionButton).c_str());
                             BulletTextWrapped("Load Position: %s (Controller: %s)", GetKeyName(cfg.teleportKey).c_str(), Config::GetGamepadButtonName(cfg.gpTeleportButton).c_str());

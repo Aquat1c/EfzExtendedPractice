@@ -1,5 +1,7 @@
 #include <windows.h>
 
 #define IDR_ITC_BOLT_BOLD_REGULAR 101
+#define IDR_NOTO_SANS_JP_SUBSET 102
 
-IDR_ITC_BOLT_BOLD_REGULAR RCDATA "..\\..\\assets\\fonts\\ITC Bolt Bold Regular.otf"
+IDR_ITC_BOLT_BOLD_REGULAR RCDATA "..\\..\\assets\\fonts\\ITC Bolt.ttf"
+IDR_NOTO_SANS_JP_SUBSET RCDATA "..\\..\\assets\\fonts\\NotoSansJP-subset.ttf"

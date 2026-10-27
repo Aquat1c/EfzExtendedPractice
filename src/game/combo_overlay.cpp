@@ -8,6 +8,7 @@
 #include "../include/gui/overlay.h"
 #include "../include/game/mission/mission_engine.h" // suppress overlay during missions
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../include/utils/switch_players.h"
 #include "../include/utils/utilities.h"
 #include "../include/utils/xp_compat.h"
@@ -348,12 +349,6 @@ namespace {
         return oss.str();
     }
 
-    std::string FormatScalePercent(double value) {
-        std::ostringstream oss;
-        oss << std::fixed << std::setprecision(3) << value << "%";
-        return oss.str();
-    }
-
     std::string FormatOptionalDamage(bool valid, int damage) {
         if (!valid || damage <= 0) {
             return "--";
@@ -643,6 +638,10 @@ namespace {
             ClearDisplayUnlocked();
             return;
         }
+        if (g_state.finalized && nowMs >= g_state.lingerUntilMs) {
+            ResetStateUnlocked("final summary expired", false, false);
+            return;
+        }
 
         const bool menuVisible = ImGuiImpl::IsVisible();
         if (cfg.comboOverlayHideWhenImGuiVisible && menuVisible) {
@@ -679,15 +678,15 @@ namespace {
         const double remoteRfDelta = (remotePlayer == 1) ? p1RfDelta : p2RfDelta;
 
         if (compact) {
-            line1 << "Move " << FormatOptionalDamage(g_state.lastHitDamage > 0, g_state.lastHitDamage)
-                  << "  Combo " << g_state.totalDamage
-                  << "  Max " << g_sessionMaxComboDamage;
+            line1 << I18n::TrFormat("Move %s  Combo %d  Max %d",
+                                    FormatOptionalDamage(g_state.lastHitDamage > 0, g_state.lastHitDamage).c_str(),
+                                    (int)g_state.totalDamage, g_sessionMaxComboDamage);
             line2 << "HP " << g_state.defenderHpStart << " > " << g_state.defenderHpCurrent
                   << " (-" << g_state.defenderHpDelta << ")";
-            line3 << "YOU  M " << FormatMeterDelta(localMeterDelta)
-                << "   RF " << FormatRfDelta(localRfDelta);
-            line4 << "OPP  M " << FormatMeterDelta(remoteMeterDelta)
-                << "   RF " << FormatRfDelta(remoteRfDelta);
+            line3 << I18n::TrFormat("YOU  M %s   RF %s", FormatMeterDelta(localMeterDelta).c_str(),
+                                    FormatRfDelta(localRfDelta).c_str());
+            line4 << I18n::TrFormat("OPP  M %s   RF %s", FormatMeterDelta(remoteMeterDelta).c_str(),
+                                    FormatRfDelta(remoteRfDelta).c_str());
         } else {
             line1 << "MOVE " << FormatOptionalDamage(g_state.lastHitDamage > 0, g_state.lastHitDamage)
                   << "  COMBO " << g_state.totalDamage
@@ -700,16 +699,14 @@ namespace {
                 << "   RF " << FormatRfDelta(remoteRfDelta);
         }
 
+        line5 << I18n::TrFormat("PRORATION %.3f%%", g_state.scalePercent);
         if (showDetail) {
-            line5 << "PRORATION " << FormatScalePercent(g_state.scalePercent);
             if (cfg.comboOverlayDetailRowSource == 1 && g_state.attackDetail.valid) {
-                line5 << "   Move " << g_state.attackerMoveId
-                      << "   Untech " << g_state.defenderUntech;
+                line5 << I18n::TrFormat("   Move %d   Untech %d",
+                                        (int)g_state.attackerMoveId, g_state.defenderUntech);
             } else {
-                line5 << "   Untech " << g_state.defenderUntech;
+                line5 << I18n::TrFormat("   Untech %d", g_state.defenderUntech);
             }
-        } else {
-            line5 << "PRORATION " << FormatScalePercent(g_state.scalePercent);
         }
 
         if (showRfMultiplier) {

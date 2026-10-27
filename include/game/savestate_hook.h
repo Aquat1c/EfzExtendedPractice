@@ -25,6 +25,8 @@ namespace SavestateHook {
     void EndInlinePracticeHotkey(uint8_t actionMask);
 
     bool IsInstalled();
+    // Game thread only: lazy Practice-battle install, retried at most every 5 s.
+    void EnsureInstalled();
 
     unsigned int GetSaveCount();
 

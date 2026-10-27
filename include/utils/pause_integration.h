@@ -81,4 +81,14 @@ namespace PauseIntegration {
     void ResetCachedPointers(const char* reason);
 
     void SetRuntimeHooksActive(bool active);
+
+    // Single owner of the 10 efz.exe visual-update sites NOPed by the vanilla
+    // pause. Bytes are NOPed while any user holds them and restored to the
+    // known originals when the last user releases. Refuses to patch unless
+    // every site holds its known original bytes.
+    enum class VisualFreezeUser : uint8_t {
+        Menu = 1u << 0,
+        Framestep = 1u << 1,
+    };
+    bool SetVisualFreeze(VisualFreezeUser user, bool freeze);
 }

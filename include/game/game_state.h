@@ -49,6 +49,7 @@ enum class FrontendExitTarget : uint8_t {
 // instead of EFZ's character-select exit, and lets requested battle cleanup
 // return to Title or Loading instead of Character Select.
 bool EnsureFrontendControlHooksInstalled();
+bool AreFrontendControlHooksInstalled();
 
 using BattleUpdateCallback = void (*)(void* battleContext);
 void SetBattleUpdateCallbacks(BattleUpdateCallback beforeUpdate, BattleUpdateCallback afterUpdate);

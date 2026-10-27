@@ -106,6 +106,9 @@ struct Row {
     RowAdjuster inlineAdjuster;
     RowChoiceValueFormatter choiceValueFormatter;
     RowChoiceValueAdjuster choiceValueAdjuster;
+    // Second variant target for choiceValueAdjuster beside intPtr. Popups redirect both
+    // to popup-local copies and write them back only on confirm.
+    int* choiceVariantPtr;
     RowChoiceHelpFormatter choiceHelpFormatter;
     // Optional display filter. choiceValue remains the original stable value;
     // hidden mask choices keep their stored bits and per-entry data intact.
@@ -300,6 +303,8 @@ void TickHelpAbout    (ImDrawList* dl, const ScreenLayout& layout, int& focus, S
 // query whether it is consuming input.
 bool IsPopupActive();
 bool TickPopupIfOpen(ImDrawList* dl, const ScreenLayout& layout);
+// Discards any pending popup choice/variant without writing it back.
+void ClosePopup();
 bool IsSubmenuActive();
 const char* CurrentHelpText();
 const char* CurrentPopupHelpText();
@@ -309,6 +314,7 @@ void ResetSubmenus();
 void ResetMouseTracking();
 void ResetHotswapMenuSeed();
 bool IsTextEditorActive();
+bool IsRawVkEditorActive();
 void ResetTextEditor();
 bool ConsumeFocusAboveRequest();
 
@@ -365,5 +371,6 @@ void OpenKeybind(const char* title, int* field,
 void OpenGamepadKeybind(const char* title, int* field,
                         const char* section, const char* key);
 bool TickKeybindIfActive(ImDrawList* dl, const ScreenLayout& layout);
+void CloseKeybind();
 
 } // namespace CustomMenu::Screens

@@ -12,6 +12,7 @@
 #include "../include/game/character_settings.h"
 #include "../include/game/frame_monitor.h"
 #include "../include/game/game_state.h"
+#include "../include/game/game_thread_queue.h"
 #include "../include/utils/bgm_control.h"
 #include "../include/utils/minhook_utils.h"
 #include "../include/utils/network.h"
@@ -1441,6 +1442,10 @@ void LogQueuedRequest(GamePhase phase,
 void ApplyQueuedSelections(uintptr_t capturedContext,uintptr_t capturedGameSystem) {
     auto expected=RequestState::PendingApply;
     if(!s_state.compare_exchange_strong(expected,RequestState::ApplyingSelections,std::memory_order_acq_rel))return;
+    if(!IsPracticeContext()) {
+        FailRequest("character select apply refused outside Practice", GamePhase::CharacterSelect);
+        return;
+    }
             {
                 RawApplyResult result{};
                 const int p1CharId = s_requestedP1Char.load(std::memory_order_relaxed);
@@ -1491,6 +1496,19 @@ void ApplyQueuedSelections(uintptr_t capturedContext,uintptr_t capturedGameSyste
             return;
 }
 
+void PlayBgmOverrideOnGameThread(uintptr_t track) {
+    const uintptr_t gameStatePtr = GetGameStatePtr();
+    const int liveBgmBuffer = gameStatePtr ? GetBGMBufferIndex(gameStatePtr) : -1;
+    if (gameStatePtr && PlayBGM(gameStatePtr, static_cast<unsigned short>(track))) {
+        LogOut("[HOTSWAP] applied BGM override track=" + std::to_string(track), true);
+        return;
+    }
+    std::ostringstream oss;
+    oss << "[HOTSWAP] failed to apply BGM override track=" << track
+        << " liveBufferBeforeCall=" << liveBgmBuffer;
+    LogOut(oss.str(), true);
+}
+
 void CompleteReload(GamePhase currentPhase, bool publishReceipt = true, uintptr_t capturedGameSystem = 0) {
     auto expected=s_state.load(std::memory_order_acquire);
     if(expected!=RequestState::AwaitingLoading && expected!=RequestState::AwaitingMatch &&
@@ -1512,15 +1530,9 @@ void CompleteReload(GamePhase currentPhase, bool publishReceipt = true, uintptr_
     if (!publishReceipt) {
         LogOut("[HOTSWAP][DIRECT] skipped mission BGM override for canceled handoff", true);
     } else if (gameStatePtr && requestedBgmTrack >= 0) {
-        const int liveBgmBuffer = GetBGMBufferIndex(gameStatePtr);
-        const unsigned short bgmTrack = static_cast<unsigned short>(requestedBgmTrack);
-        if (PlayBGM(gameStatePtr, bgmTrack)) {
-            LogOut("[HOTSWAP] applied BGM override track=" + std::to_string(requestedBgmTrack), true);
-        } else {
-            std::ostringstream oss;
-            oss << "[HOTSWAP] failed to apply BGM override track=" << requestedBgmTrack
-                << " liveBufferBeforeCall=" << liveBgmBuffer;
-            LogOut(oss.str(), true);
+        if (!GameThread::Post(&PlayBgmOverrideOnGameThread, static_cast<uintptr_t>(requestedBgmTrack))) {
+            LogOut("[HOTSWAP] BGM override track=" + std::to_string(requestedBgmTrack)
+                   + " refused: game-thread queue unavailable", true);
         }
     } else if (!gameStatePtr) {
         LogOut("[HOTSWAP] skipped BGM override because game state pointer was unavailable", true);
@@ -2051,6 +2063,10 @@ void Tick(GamePhase currentPhase, GameMode /*currentMode*/) {
             return;
 
         case RequestState::PendingApply:
+            if (!IsPracticeContext()) {
+                FailRequest("left Practice before character select apply", currentPhase);
+                return;
+            }
             if (currentPhase != GamePhase::CharacterSelect) {
                 if (waited > kWaitExitTicks) {
                     FailRequest("character select disappeared before apply", currentPhase);

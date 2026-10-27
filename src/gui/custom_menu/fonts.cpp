@@ -4,6 +4,7 @@
 #include "../include/game/mission/mission_render.h"
 #include "../include/core/logger.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../3rdparty/imgui/imgui.h"
 #include "../3rdparty/imgui/backends/imgui_impl_dx9.h"
 
@@ -25,21 +26,23 @@ ImFont* g_tutorialHeaderFont = nullptr;
 
 float g_appliedScale = 0.0f;
 int g_appliedFontMode = -1;
+int g_appliedLanguage = -1;
 
 std::chrono::steady_clock::time_point g_lastAttempt{};
+bool g_lastBuildFailed = false;
 
 struct ResourceBlob {
     const void* data = nullptr;
     DWORD size = 0;
 };
 
-ResourceBlob LoadEmbeddedFont() {
+ResourceBlob LoadEmbeddedFont(int resourceId = IDR_ITC_BOLT_BOLD_REGULAR) {
     ResourceBlob blob;
     if (!g_hSelfModule) return blob;
 
     HRSRC hRes = FindResourceA(
         g_hSelfModule,
-        MAKEINTRESOURCEA(IDR_ITC_BOLT_BOLD_REGULAR),
+        MAKEINTRESOURCEA(resourceId),
         RT_RCDATA);
     if (!hRes) return blob;
 
@@ -82,9 +85,10 @@ bool Rebuild(float uiScale) {
     // nearest hundredth
     float rounded = std::floor(metrics.fontScale * 100.0f + 0.5f) / 100.0f;
     const int fontMode = Config::GetSettings().uiFontMode;
+    const int language = I18n::GetLanguage();
 
     const bool scaleChanged = !(std::fabs(rounded - g_appliedScale) < 0.005f);
-    const bool modeChanged = fontMode != g_appliedFontMode;
+    const bool modeChanged = fontMode != g_appliedFontMode || language != g_appliedLanguage;
     const bool fontsMissing =
         !AtlasContainsFont(io.Fonts, g_bodyFont) ||
         !AtlasContainsFont(io.Fonts, g_headerFont) ||
@@ -98,11 +102,16 @@ bool Rebuild(float uiScale) {
         // Missing faces must be repaired immediately; an intact atlas may defer.
         return true;
     }
+    // A failed build must not rebuild the atlas every frame.
+    if (g_lastBuildFailed && (now - g_lastAttempt) < std::chrono::milliseconds(1000)) {
+        return false;
+    }
     g_lastAttempt = now;
+    g_lastBuildFailed = true;
 
     ResourceBlob blob = LoadEmbeddedFont();
     if (!blob.data || blob.size == 0) {
-        LogOut("[CUSTOM_MENU][FONT] Failed to locate embedded ITC Bolt OTF resource.", true);
+        LogOut("[CUSTOM_MENU][FONT] Failed to locate embedded ITC Bolt font resource.", true);
         return false;
     }
 
@@ -111,6 +120,42 @@ bool Rebuild(float uiScale) {
         void* copy = IM_ALLOC(blob.size);
         if (copy) memcpy(copy, blob.data, blob.size);
         return copy;
+    };
+
+    // Resource memory lives as long as the module; the atlas must never free it.
+    const ResourceBlob jaBlob = LoadEmbeddedFont(IDR_NOTO_SANS_JP_SUBSET);
+    if (!jaBlob.data || jaBlob.size == 0) {
+        LogOut("[CUSTOM_MENU][FONT] Failed to locate embedded Noto font resource.", true);
+    }
+    // ITC Bolt lacks " # ' < > @ \ ^ _ { | } ~ and most accents; merging never
+    // overwrites existing glyphs, so Noto only fills those gaps.
+    auto fillBoltGaps = [&](float px) {
+        if (!jaBlob.data || jaBlob.size == 0) return;
+        static const ImWchar kLatin1[] = { 0x0020, 0x00FF, 0 };
+        ImFontConfig cfg;
+        cfg.MergeMode = true;
+        cfg.FontDataOwnedByAtlas = false;
+        cfg.OversampleH = 1;
+        cfg.OversampleV = 1;
+        cfg.PixelSnapH = true;
+        io.Fonts->AddFontFromMemoryTTF(const_cast<void*>(jaBlob.data), (int)jaBlob.size, px, &cfg,
+                                       kLatin1);
+    };
+    static_assert(sizeof(ImWchar) == sizeof(unsigned short), "glyph ranges are 16-bit");
+    auto mergeJapanese = [&](float px) {
+        if (language != I18n::Japanese || !jaBlob.data || jaBlob.size == 0) return;
+        ImFontConfig cfg;
+        cfg.MergeMode = true;
+        cfg.FontDataOwnedByAtlas = false;
+        cfg.OversampleH = 1;
+        cfg.OversampleV = 1;
+        cfg.PixelSnapH = true;
+        // Noto's em box is ~1.45x taller than ITC Bolt's, so CJK at the same px reads
+        // smaller than Latin caps. Merged glyphs keep the destination baseline.
+        constexpr float kJapaneseGlyphScale = 1.2f;
+        io.Fonts->AddFontFromMemoryTTF(const_cast<void*>(jaBlob.data), (int)jaBlob.size,
+                                       Scale::Snap(px * kJapaneseGlyphScale), &cfg,
+                                       reinterpret_cast<const ImWchar*>(I18n::JapaneseGlyphRanges()));
     };
 
     ImGui_ImplDX9_InvalidateDeviceObjects();
@@ -139,6 +184,7 @@ bool Rebuild(float uiScale) {
             cfgMain.SizePixels = mainPx;
             mainFont = io.Fonts->AddFontDefault(&cfgMain);
         }
+        if (mainFont) mergeJapanese(mainPx);
     }
 
     ImFontConfig cfgBase;
@@ -178,6 +224,7 @@ bool Rebuild(float uiScale) {
     g_bodyFont = bodyBytes
         ? io.Fonts->AddFontFromMemoryTTF(bodyBytes, (int)blob.size, bodyPx, &cfgBody)
         : nullptr;
+    if (g_bodyFont) { fillBoltGaps(bodyPx); mergeJapanese(bodyPx); }
 
     ImFontConfig cfgHeader = cfgBase;
     cfgHeader.SizePixels = headerPx;
@@ -185,6 +232,7 @@ bool Rebuild(float uiScale) {
     g_headerFont = headerBytes
         ? io.Fonts->AddFontFromMemoryTTF(headerBytes, (int)blob.size, headerPx, &cfgHeader)
         : nullptr;
+    if (g_headerFont) { fillBoltGaps(headerPx); mergeJapanese(headerPx); }
 
     ImFontConfig cfgTutorialHeader = cfgBase;
     const float tutorialHeaderPx = Scale::Snap(32.0f * rounded);
@@ -194,6 +242,7 @@ bool Rebuild(float uiScale) {
         ? io.Fonts->AddFontFromMemoryTTF(tutorialHeaderBytes, (int)blob.size,
                                         tutorialHeaderPx, &cfgTutorialHeader)
         : nullptr;
+    if (g_tutorialHeaderFont) fillBoltGaps(tutorialHeaderPx);
 
     io.FontDefault = mainFont ? mainFont : g_bodyFont;
 
@@ -208,6 +257,7 @@ bool Rebuild(float uiScale) {
 
     g_appliedScale = rounded;
     g_appliedFontMode = fontMode;
+    g_appliedLanguage = language;
     char msg[192];
     _snprintf_s(msg, sizeof(msg), _TRUNCATE,
         "[CUSTOM_MENU][FONT] Loaded menu fonts: body=%.0fpx header=%.0fpx "
@@ -216,7 +266,8 @@ bool Rebuild(float uiScale) {
         Scale::Snap(32.0f * rounded), rounded);
     LogOut(msg, true);
 
-    return (g_bodyFont != nullptr && g_headerFont != nullptr);
+    g_lastBuildFailed = !(g_bodyFont != nullptr && g_headerFont != nullptr);
+    return !g_lastBuildFailed;
 }
 
 ImFont* Body()     { return g_bodyFont; }

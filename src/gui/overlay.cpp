@@ -32,6 +32,7 @@
 #include "../3rdparty/minhook/include/MinHook.h"
 #include "../include/gui/imgui_impl.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include <Xinput.h>
 #include "../include/utils/xinput_shim.h"
 #include <cmath>
@@ -479,6 +480,9 @@ static const char* g_EndSceneTargetSource = "none";
 static std::atomic<bool> g_EndSceneHookEnabled{ false };
 static std::atomic<bool> g_EndSceneObserved{ false };
 static std::atomic<bool> g_ExternalMenuFallbackNeeded{ false };
+static std::atomic<bool> g_FallbackFromWatchdog{ false };
+// GetTickCount of the last detour entry, admitted or not.
+static std::atomic<DWORD> g_EndSceneLastEntryTick{ 0 };
 static std::atomic<bool> g_endSceneImguiInit{ false };
 static std::atomic<bool> g_endSceneRelatchInProgress{ false };
 
@@ -652,6 +656,7 @@ bool AttachEndSceneHookForCandidate(const EndSceneHookCandidate& candidate, cons
             reinterpret_cast<void**>(&oEndScene), "[OVERLAY][D3D9]", "EndScene", nullptr, &MinHookUtils::TicketFor<&HookedEndScene>())) return false;
     // Capture immediately, including failed enables and netplay racing attach.
     g_EndSceneTarget = candidate.target;
+    g_EndSceneTargetSource = candidate.source ? candidate.source : "unknown";
     if (g_onlineModeActive.load(std::memory_order_relaxed)) {
         MinHookUtils::CloseAdmission("[OVERLAY][D3D9]");
         return false;
@@ -775,8 +780,20 @@ HRESULT WINAPI DirectDrawHook::HookedFlip(IDirectDrawSurface7* This, IDirectDraw
 
 HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedEndScene>());
+    g_EndSceneLastEntryTick.store(GetTickCount(), std::memory_order_relaxed);
+    // Any 640x480 frame proves the target live, admitted or not; other devices share
+    // this entry. Polled while a watchdog fallback is published so a late frame lifts it.
+    if ((!g_EndSceneObserved.load(std::memory_order_acquire)
+            || g_FallbackFromWatchdog.load(std::memory_order_acquire))
+        && !g_onlineModeActive.load(std::memory_order_relaxed)) {
+        UINT w = 0, h = 0;
+        if (QueryRenderTargetSize(pDevice, w, h) && w == 640 && h == 480) {
+            g_EndSceneObserved.store(true, std::memory_order_release);
+            if (g_FallbackFromWatchdog.exchange(false, std::memory_order_acq_rel))
+                g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
+        }
+    }
     if (!hookExecution.Admitted()) return oEndScene(pDevice);
-    if (!g_EndSceneObserved.load()) g_EndSceneObserved.store(true);
 
     if (g_onlineModeActive.load(std::memory_order_relaxed)) {
         return oEndScene(pDevice);
@@ -874,7 +891,7 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
             if (ImGuiImpl::Initialize(pDevice)) {
                 g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
                 LogOut("[OVERLAY] ImGui initialized from EndScene hook.", true);
-            } else {
+            } else if (!ImGuiImpl::IsExternalFallbackHost()) {
                 g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
                 LogOut("[OVERLAY] ImGui failed to initialize from EndScene hook.", true);
             }
@@ -887,16 +904,19 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
 
         // Validate device identity every frame; a replaced device must never render
         // through the backend retained for the previous device or host.
-    if (!ImGuiImpl::IsBoundToDevice(pDevice) && !ImGuiImpl::Initialize(pDevice)) {
-        return forward();
+    if (!ImGuiImpl::IsBoundToDevice(pDevice)) {
+        if (!ImGuiImpl::Initialize(pDevice)) return forward();
+        g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
     }
 
         // MISSIONS/TUTORIAL screens and the mission pause menu draw with the
         // custom-menu fonts, so PrepareFrame must also run while they are up.
+    // Japanese overlay glyphs live only in the custom-menu atlas.
     if ((ImGuiImpl::IsVisible() && Config::GetSettings().useCustomMenu) ||
         PracticeMenu::TitleScreen::WantsDraw() ||
         Mission::PauseMenu::WantsDraw() ||
-        Mission::TutorialSession::WantsDraw()) {
+        Mission::TutorialSession::WantsDraw() ||
+        I18n::GetLanguage() == I18n::Japanese) {
         SetEndScenePhase("CustomMenu::PrepareFrame");
         CustomMenu::PrepareFrame();
     }
@@ -1704,7 +1724,7 @@ void DirectDrawHook::AddMessage(const std::string& text, const std::string& cate
     }
 
     auto expireTime = std::chrono::steady_clock::now() + std::chrono::milliseconds(durationMs);
-    messages.push_back({text, color, expireTime, x, y, false, -1, category, 180});
+    messages.push_back({I18n::Tr(text.c_str()), color, expireTime, x, y, false, -1, category, 180});
 }
 
 // Add a permanent message
@@ -1713,20 +1733,21 @@ int DirectDrawHook::AddPermanentMessage(const std::string& text, COLORREF color,
     
     int newId = nextMessageId++;
     
-    permanentMessages.push_back({text, color, {}, x, y, true, newId, "", backgroundAlpha});
+    permanentMessages.push_back({I18n::Tr(text.c_str()), color, {}, x, y, true, newId, "", backgroundAlpha});
     
     return newId;
 }
 
 void DirectDrawHook::UpdatePermanentMessage(int id, const std::string& newText, COLORREF newColor) {
     std::lock_guard<std::mutex> lock(messagesMutex);
+    const char* shown = I18n::Tr(newText.c_str());
     
     for (auto& msg : permanentMessages) {
         if (msg.id == id) {
-            if (msg.text == newText && msg.color == newColor) {
+            if (msg.text == shown && msg.color == newColor) {
                 break;
             }
-            msg.text = newText;
+            msg.text = shown;
             msg.color = newColor;
             break;
         }
@@ -1930,7 +1951,13 @@ bool DirectDrawHook::InitializeD3D9() {
         attached = AttachEndSceneHookForCandidate(*fallbackCandidate, "startup-fallback");
     }
     if (!attached) {
-        g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+        if (g_onlineModeActive.load(std::memory_order_relaxed)) {
+            // Resume enables the captured target through SetD3D9Active.
+            s_lastD3D9InitDeferredForNetplay.store(true, std::memory_order_release);
+            LogOut("[OVERLAY] EndScene attach deferred: netplay suspend became active during attach.", true);
+        } else {
+            g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+        }
         tempDevice->Release();
         d3d9->Release();
         if (dummyWnd) {
@@ -1959,7 +1986,9 @@ bool DirectDrawHook::InitializeD3D9() {
             }
         }
         if (!g_EndSceneObserved.load()) {
+            // Flag before marker: EndScene clears the flag only after taking the marker.
             g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+            g_FallbackFromWatchdog.store(true, std::memory_order_release);
             LogOut("[OVERLAY][D3D9] EndScene not observed within 6s after hook enable.", true);
             LogOut(std::string("[OVERLAY][D3D9] Current hook source=") + g_EndSceneTargetSource
                    + " target=" + FormatPointerValue(reinterpret_cast<uintptr_t>(g_EndSceneTarget)),
@@ -1978,6 +2007,29 @@ bool DirectDrawHook::ShouldUseExternalMenuFallback() {
     return g_ExternalMenuFallbackNeeded.load(std::memory_order_acquire);
 }
 
+// A foreign image is either a peer chained over our live JMP (reachable) or the
+// peer's restored bytes (unreachable); only a recent detour entry tells them apart.
+static bool EndSceneEntryReachable() {
+    const auto image = MinHookUtils::OwnedHooks().Image(g_EndSceneTarget);
+    if (image == PracticeHooks::EntryImage::Installed) return true;
+    const DWORD last = g_EndSceneLastEntryTick.load(std::memory_order_relaxed);
+    if (last != 0 && GetTickCount() - last <= 1000) return true;
+    LogOut(std::string("[OVERLAY][D3D9] EndScene entry not live (image=")
+           + std::to_string(static_cast<int>(image)) + ", no detour entry within 1s)", true);
+    return false;
+}
+
+void DirectDrawHook::RepairD3D9EntryIfRestored() {
+    if (!g_EndSceneTarget || g_onlineModeActive.load(std::memory_order_acquire)
+        || !g_EndSceneHookEnabled.load(std::memory_order_acquire)) {
+        return;
+    }
+    // Enable rewrites only over our exact preimage; any other image is left alone.
+    if (MinHookUtils::OwnedHooks().Image(g_EndSceneTarget) == PracticeHooks::EntryImage::Preimage) {
+        (void)MinHookUtils::EnableOwnedTargets("[OVERLAY][D3D9]");
+    }
+}
+
 bool DirectDrawHook::SetD3D9Active(bool active) {
     if (!active) {
         MinHookUtils::CloseAdmission("[OVERLAY][D3D9]");
@@ -1994,6 +2046,10 @@ bool DirectDrawHook::SetD3D9Active(bool active) {
         }
         return !active;
     }
+    if (active && !isHooked) {
+        // Attach captured the target but netplay raced its enable.
+        isHooked = true;
+    }
 
     const bool currentlyEnabled = g_EndSceneHookEnabled.load(std::memory_order_acquire);
     if (currentlyEnabled == active) {
@@ -2002,7 +2058,7 @@ bool DirectDrawHook::SetD3D9Active(bool active) {
             && g_ExternalMenuFallbackNeeded.load(std::memory_order_acquire)) {
             (void)TryRelatchEndSceneToLiveTarget("reactivate");
         }
-        return active || !MinHookUtils::HasOwnedTarget(g_EndSceneTarget);
+        return active ? EndSceneEntryReachable() : !MinHookUtils::HasOwnedTarget(g_EndSceneTarget);
     }
 
     g_EndSceneHookEnabled.store(active, std::memory_order_release);
@@ -2015,7 +2071,7 @@ bool DirectDrawHook::SetD3D9Active(bool active) {
     LogOut(std::string("[OVERLAY] D3D9 EndScene hook ") + (active ? "enabled" : "disabled")
            + " source=" + g_EndSceneTargetSource,
            true);
-    return active || !MinHookUtils::HasOwnedTarget(g_EndSceneTarget);
+    return active ? EndSceneEntryReachable() : !MinHookUtils::HasOwnedTarget(g_EndSceneTarget);
 }
 
 void DirectDrawHook::ShutdownD3D9() {

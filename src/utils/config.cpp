@@ -1,6 +1,7 @@
 #include "../include/utils/audio_runtime_state.h"
 #include "../include/utils/audio_file_control.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../include/core/logger.h"
 #include "../include/utils/utilities.h"
 #include "../include/input/efz_input_bindings.h"
@@ -23,6 +24,18 @@ namespace Config {
             if (scale < kUiScaleMin) return kUiScaleMin;
             if (scale > kUiScaleMax) return kUiScaleMax;
             return scale;
+        }
+
+        int ParseLanguage(const std::string& value) {
+            std::string v;
+            for (char c : value) {
+                if (c != ' ' && c != '\t') v.push_back((char)std::tolower((unsigned char)c));
+            }
+            return (v == "ja") ? I18n::Japanese : I18n::English;
+        }
+
+        const char* LanguageIniValue(int language) {
+            return language == I18n::Japanese ? "ja" : "en";
         }
     }
 
@@ -147,6 +160,7 @@ namespace Config {
                 LogOut("[CONFIG] Config file does not exist, creating default...", true);
                 if (!CreateDefaultConfig()) {
                     LogOut("[CONFIG] Failed to create default config file", true);
+                    LoadSettings();
                     return false;
                 }
             }
@@ -155,6 +169,7 @@ namespace Config {
                     LogOut("[CONFIG] Config file exists but is empty, creating default content", true);
                     if (!CreateDefaultConfig()) {
                         LogOut("[CONFIG] Failed to create default config file", true);
+                        LoadSettings();
                         return false;
                     }
                 } else {
@@ -171,6 +186,7 @@ namespace Config {
         }
         catch (const std::exception& e) {
             LogOut("[CONFIG] Exception in Initialize: " + std::string(e.what()), true);
+            LoadSettings();
             return false;
         }
     }
@@ -299,6 +315,8 @@ namespace Config {
             file << "uiScale = 0.90\n\n";
             file << "; UI font: 0 = ImGui default font, 1 = Segoe UI (Windows)\n";
             file << "uiFont = 0\n\n";
+            file << "; Custom menu and overlay language: en or ja\n";
+            file << "language = en\n\n";
 
             file << "; ImGui navigation tuning\n";
             file << "; Analog threshold for keyboard-fallback nav (0..1). Default 0.45\n";
@@ -383,7 +401,8 @@ namespace Config {
             file << "; Reset frame counter (disabled by default)\n";
             file << "ResetFrameCounterKey=-1\n\n";
 
-            file << "; The training menu opens with Esc. Help is available from the Help tab.\n";
+            file << "; Key that opens the training menu (0x1B = Esc). With any other key, Esc does its normal EFZ job again.\n";
+            file << "MenuKey=0x1B\n";
             file << "\n; Practice snapshot hotkeys (save/load through EfzRevival)\n";
             file << "SavestateSaveKey=" << keyValue(keyboardPlan.savestateSave) << "\n";
             file << "SavestateLoadKey=" << keyValue(keyboardPlan.savestateLoad) << "\n";
@@ -547,6 +566,16 @@ namespace Config {
                 }
             }
 
+            settings.language = I18n::English;
+            {
+                auto sectionIt = iniData.find("general");
+                if (sectionIt != iniData.end()) {
+                    auto keyIt = sectionIt->second.find("language");
+                    if (keyIt != sectionIt->second.end()) settings.language = ParseLanguage(keyIt->second);
+                }
+            }
+            I18n::SetLanguage(static_cast<I18n::Language>(settings.language));
+
             settings.enableVirtualCursor = GetValueBool("General", "enableVirtualCursor", true);
             settings.virtualCursorAllowWindowed = GetValueBool("General", "virtualCursorAllowWindowed", false);
             settings.virtualCursorBaseSpeed = (float)GetValueInt("General", "virtualCursorBaseSpeed", 900);
@@ -669,7 +698,8 @@ namespace Config {
 
             settings.teleportKey = GetValueInt("Hotkeys", "TeleportKey", 0x31);          // Default: '1'
             settings.recordKey = GetValueInt("Hotkeys", "RecordKey", 0x32);            // Default: '2'
-            settings.configMenuKey = -1;                                                // Menu is fixed to Esc
+            settings.configMenuKey = GetValueInt("Hotkeys", "MenuKey", VK_ESCAPE);    // Legacy ConfigMenuKey ignored
+            if (!IsMenuKeyAllowed(settings.configMenuKey)) settings.configMenuKey = VK_ESCAPE;
             settings.toggleTitleKey = GetValueInt("Hotkeys", "ToggleTitleKey", -1);
             if (settings.toggleTitleKey == 0x34) settings.toggleTitleKey = -1;
             settings.resetFrameCounterKey = GetValueInt("Hotkeys", "ResetFrameCounterKey", -1);
@@ -723,7 +753,7 @@ namespace Config {
             LogOut("[CONFIG] SuppressRevivalFramestep: " + std::to_string(settings.suppressRevivalFramestep), true);
             LogOut("[CONFIG] TeleportKey: " + std::to_string(settings.teleportKey) + " (" + GetKeyName(settings.teleportKey) + ")", true);
             LogOut("[CONFIG] RecordKey: " + std::to_string(settings.recordKey) + " (" + GetKeyName(settings.recordKey) + ")", true);
-            LogOut("[CONFIG] MenuKey: Esc (fixed)", true);
+            LogOut("[CONFIG] MenuKey: " + GetKeyName(settings.configMenuKey), true);
             LogOut("[CONFIG] ToggleTitleKey: " + std::to_string(settings.toggleTitleKey) + " (" + (settings.toggleTitleKey < 0 ? std::string("Disabled") : GetKeyName(settings.toggleTitleKey)) + ")", true);
             LogOut("[CONFIG] ResetFrameCounterKey: " + std::to_string(settings.resetFrameCounterKey) + " (" + (settings.resetFrameCounterKey < 0 ? std::string("Disabled") : GetKeyName(settings.resetFrameCounterKey)) + ")", true);
             LogOut("[CONFIG] SavestateSaveKey: " + std::to_string(settings.savestateSaveKey) + " (" + GetKeyName(settings.savestateSaveKey) + ")", true);
@@ -754,6 +784,7 @@ namespace Config {
             LogOut("[CONFIG] enableFpsDiagnostics: " + std::to_string(settings.enableFpsDiagnostics), true);
             LogOut("[CONFIG] uiScale: " + std::to_string(settings.uiScale), true);
             LogOut("[CONFIG] uiFontMode: " + std::to_string(settings.uiFontMode), true);
+            LogOut(std::string("[CONFIG] language: ") + LanguageIniValue(settings.language), true);
             LogOut("[CONFIG] savestateBackendMode: " + std::to_string(settings.savestateBackendMode), true);
             LogOut("[CONFIG] savestateLoadCustomPalettes: " + std::to_string(settings.savestateLoadCustomPalettes), true);
             
@@ -767,13 +798,15 @@ namespace Config {
     
     bool SaveSettings() {
         try {
-            std::ofstream file(configFilePath, std::ios::trunc);
+            const std::string tempPath = configFilePath + ".tmp";
+            std::ofstream file(tempPath, std::ios::trunc);
             if (!file.is_open()) {
                 LogOut("[CONFIG] SaveSettings: failed to open file for writing", true);
                 return false;
             }
 
             auto toHexString = [](int value) -> std::string {
+                if (value < 0) return std::string("-1");
                 std::ostringstream oss;
                 oss << "0x" << std::hex << std::uppercase << value;
                 return oss.str();
@@ -837,6 +870,8 @@ namespace Config {
             file << "uiScale = " << settings.uiScale << "\n\n";
             file << "; UI font: 0 = ImGui default font, 1 = Segoe UI (Windows)\n";
             file << "uiFont = " << settings.uiFontMode << "\n\n";
+            file << "; Custom menu and overlay language: en or ja\n";
+            file << "language = " << LanguageIniValue(settings.language) << "\n\n";
             file << "; ImGui navigation tuning\n";
             file << "guiNavAnalogThreshold = " << settings.guiNavAnalogThreshold << "\n";
             file << "guiNavRepeatDelay = " << settings.guiNavRepeatDelay << "\n";
@@ -894,6 +929,7 @@ namespace Config {
             file << "; Use virtual-key codes (hexadecimal, e.g., 0x70 for F1)\n";
             file << "TeleportKey=" << toHexString(settings.teleportKey) << "\n";
             file << "RecordKey=" << toHexString(settings.recordKey) << "\n";
+            file << "MenuKey=" << toHexString(settings.configMenuKey) << "\n";
             file << "ToggleTitleKey=" << toHexString(settings.toggleTitleKey) << "\n";
             file << "ResetFrameCounterKey=" << toHexString(settings.resetFrameCounterKey) << "\n";
             file << "SavestateSaveKey=" << toHexString(settings.savestateSaveKey) << "\n";
@@ -933,6 +969,14 @@ namespace Config {
             file.close();
             if (file.fail()) {
                 LogOut("[CONFIG] SaveSettings: error when closing the file", true);
+                DeleteFileA(tempPath.c_str());
+                return false;
+            }
+            if (!MoveFileExA(tempPath.c_str(), configFilePath.c_str(),
+                             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                LogOut("[CONFIG] SaveSettings: failed to replace config file, error: " +
+                       std::to_string(GetLastError()), true);
+                DeleteFileA(tempPath.c_str());
                 return false;
             }
 
@@ -1008,6 +1052,10 @@ namespace Config {
                 try { settings.uiFontMode = std::stoi(value); } catch (...) {}
                 if (settings.uiFontMode < 0 || settings.uiFontMode > 1) settings.uiFontMode = 0;
             }
+            if (k == "language") {
+                settings.language = ParseLanguage(value);
+                I18n::SetLanguage(static_cast<I18n::Language>(settings.language));
+            }
             if (k == "guinavanalogthreshold") { try { settings.guiNavAnalogThreshold = std::stof(value); } catch(...){} }
             if (k == "guinavrepeatdelay") { try { settings.guiNavRepeatDelay = std::stof(value); } catch(...){} }
             if (k == "guinavrepeatrate") { try { settings.guiNavRepeatRate = std::stof(value); } catch(...){} }
@@ -1055,6 +1103,7 @@ namespace Config {
             int intValue = ParseKeyValue(value);
             if (k == "teleportkey") settings.teleportKey = intValue;
             if (k == "recordkey") settings.recordKey = intValue;
+            if (k == "menukey") settings.configMenuKey = IsMenuKeyAllowed(intValue) ? intValue : VK_ESCAPE;
             if (k == "toggletitlekey") settings.toggleTitleKey = (intValue == 0x34) ? -1 : intValue;
             if (k == "resetframecounterkey") settings.resetFrameCounterKey = (intValue == 0x35) ? -1 : intValue;
             if (k == "savestatesavekey") settings.savestateSaveKey = intValue;
@@ -1092,7 +1141,8 @@ namespace Config {
     int ParseKeyValue(const std::string& value) {
         try {
             if (value.substr(0, 2) == "0x") {
-                return std::stoi(value.substr(2), nullptr, 16);
+                // Older saves wrote disabled (-1) as 0xFFFFFFFF.
+                return static_cast<int>(std::stoul(value.substr(2), nullptr, 16));
             }
             return std::stoi(value);
         }
@@ -1105,6 +1155,21 @@ namespace Config {
     std::string GetKeyName(int keyCode) {
         // Reuse existing GetKeyName from utilities.cpp
         return ::GetKeyName(keyCode);
+    }
+
+    bool IsMenuKeyAllowed(int vk) {
+        if (vk <= 0 || vk > 0xFE) return false;
+        if (vk == VK_ESCAPE) return true;
+        if (vk >= 0x01 && vk <= 0x06) return false;
+        switch (vk) {
+        case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT: case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+        case VK_MENU: case VK_LMENU: case VK_RMENU: case VK_LWIN: case VK_RWIN: case VK_CLEAR:
+        case VK_RETURN: case VK_SEPARATOR: case VK_SPACE: case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT:
+        case VK_PRIOR: case VK_NEXT: case VK_OEM_4: case VK_OEM_6:   // fixed custom-menu nav
+        case VK_F4: case VK_F5: case VK_F6: case VK_F7: case VK_F8:  // native battle hotkeys (0x765660)
+            return false;
+        }
+        return true;
     }
 
     int ParseGamepadButton(const std::string& value) {

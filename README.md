@@ -48,7 +48,7 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
    > **Note:** If you also use **InGameNetplay**, that mod has its own launch requirement - launch through **`efz.exe`** when it is enabled. See the InGameNetplay README for details. That rule does not apply to EfzExtendedPractice on its own.
 
 **First Run**
-- The mod loads in-game. Open the training menu with `Esc`.
+- The mod loads in-game. Open the training menu with `Esc` (rebindable).
 - A config file `efz_training_config.ini` is created next to the DLL (`mods\efz_training_mode\`).
 - The debug console is **off** by default. Enable it in Settings → General. Logs since startup are buffered and appear when you turn it on.
 
@@ -143,14 +143,14 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
   - With Up: swap P1 and P2
   - With Down: place at center; with Down+Z: round-start positions
 - `2`: Record current player positions
-- `Esc`: Open or close the training menu
+- `Esc` (default): open the training menu
 
 Macros (configurable):
 - `I`: Record
 - `O`: Play
 - `K`: Next Slot
 
-Most hotkeys are configurable in Settings → Hotkeys or in `efz_training_config.ini`; the menu key is fixed to `Esc`.
+Most hotkeys are configurable in Settings → Hotkeys or in `efz_training_config.ini`; the menu key defaults to `Esc` and can be changed under Settings → Hotkeys → Menu Control (`MenuKey`). With any other key, Esc goes back to its normal EFZ behaviour.
 
 ---
 
@@ -224,6 +224,9 @@ External libraries (bundled under `3rdparty/`):
 
 **License**
 - This project is provided for educational purposes. Eternal Fighter Zero is property of Twilight Frontier and its respective owners.
+- Fonts embedded in the DLL keep their own licenses:
+  - ITC Bolt (`assets/fonts/ITC Bolt.ttf`): fonts made from [Web Fonts](http://www.onlinewebfonts.com) are licensed by CC BY 4.0. Vertical metrics were adjusted; see `assets/fonts/ITC Bolt License.txt`.
+  - Noto Sans CJK JP subset (`assets/fonts/NotoSansJP-subset.ttf`): © The Noto Project Authors, SIL Open Font License 1.1; see `assets/fonts/OFL-NotoSansCJK.txt`.
 
 ---
 

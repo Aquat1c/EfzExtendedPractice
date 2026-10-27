@@ -34,11 +34,11 @@ extern std::atomic<bool> g_manualInputOverride[3];
 extern std::atomic<uint8_t> g_manualInputMask[3];
 
 void SetAIControlFlag(int playerNum, bool human) {
-    std::unique_lock<std::recursive_mutex> p2ControlLock;
+    // Motion producers humanize and restore either side under this mutex; a role write must not land in between.
+    std::unique_lock<std::recursive_mutex> p2ControlLock(g_p2ControlMutex);
+    if (g_onlineModeActive.load(std::memory_order_acquire)) return;
     if (playerNum == 2) {
         // A control-role change supersedes authored P2 commands; retire the generation before the flag becomes visible.
-        p2ControlLock = std::unique_lock<std::recursive_mutex>(g_p2ControlMutex);
-        if (g_onlineModeActive.load(std::memory_order_acquire)) return;
         KaoriRecoilDuck::Cancel(2, "P2 control role changed");
         CancelAutoActionChargeFollowup(2, "P2 control role changed");
         CancelP2AutoActionMotionTransaction("P2 control role changed");

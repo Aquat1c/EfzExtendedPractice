@@ -4,7 +4,7 @@ struct ImFont;
 
 namespace CustomMenu::Fonts {
 
-// Load the embedded ITC Bolt Bold Regular font at two sizes into the current
+// Load the embedded ITC Bolt font at two sizes into the current
 // ImGui atlas (AddFontFromMemoryTTF, pixel-snap, no oversampling, matching
 // EFZ's pixel-aligned bitmap aesthetic). Returns false if the embedded
 // resource is missing; the caller falls back to ImGui's default font.

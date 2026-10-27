@@ -53,6 +53,7 @@
 #include "../include/game/final_memory_patch.h"
 #include "../include/game/timer_freeze_patch.h"
 #include "../include/game/savestate_hook.h"
+#include "../include/game/game_thread_queue.h"
 #include "../include/input/input_hook.h"         
 #include "../3rdparty/minhook/include/MinHook.h" 
 #include "../include/input/immediate_input.h"
@@ -725,8 +726,7 @@ void EnableFeatures() {
     }
 
     g_featuresEnabled.store(true);
-    const int fmApplied = SyncFinalMemoryBypassForCurrentMode("EnableFeatures");
-    TimerFreeze::SyncForCurrentMode("EnableFeatures");
+    const int fmApplied = GameThread::SyncPracticePatches("EnableFeatures");
     if (fmApplied > 0 || detailedLogging.load()) {
         LogOut(
             std::string("[FM_PATCH] EnableFeatures sync")
@@ -755,6 +755,7 @@ void EnableFeatures() {
 }
 
 void DisableFeatures() {
+    GameThread::Clear();
     XInputShim::SetPollingActive(false);
     keyMonitorRunning.store(false, std::memory_order_release);
     if (!g_featuresEnabled.load())
@@ -1102,6 +1103,7 @@ void EnterNetplaySuspend() {
         std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
         wasSuspended = g_onlineModeActive.exchange(true, std::memory_order_acq_rel);
         isOnlineMatch.store(true, std::memory_order_release);
+        GameThread::Clear();
         if (!wasSuspended) {
             // Bookkeeping-only cancellations once online mode is published.
             MacroController::Stop();
@@ -1241,7 +1243,7 @@ void ExitNetplaySuspend() {
     PauseIntegration::SetRuntimeHooksActive(true);
     DirectDrawHook::SetD3D9Active(true);
     ImGuiImpl::AttachWndProc();
-    SavestateHook::Install();
+    // Savestate hooks re-install lazily from the next Practice battle frame.
 
     LogOut(
         std::string("[NETPLAY] Resume cleanup complete: transient overrides cleared, caches invalidated")
@@ -2139,10 +2141,14 @@ std::string GetKeyName(int virtualKey) {
         return std::string(1, (char)virtualKey);
     }
 
-    char keyName[256];
+    // Wide API + UTF-8: the ANSI code page garbles non-ASCII key names in ImGui.
+    wchar_t keyName[256];
     UINT scanCode = MapVirtualKey(virtualKey, MAPVK_VK_TO_VSC);
-    if (GetKeyNameTextA(scanCode << 16, keyName, sizeof(keyName)) > 0) {
-        return std::string(keyName);
+    const int keyLen = GetKeyNameTextW(scanCode << 16, keyName, 256);
+    if (keyLen > 0) {
+        char utf8[768];
+        const int utf8Len = WideCharToMultiByte(CP_UTF8, 0, keyName, keyLen, utf8, (int)sizeof(utf8), nullptr, nullptr);
+        if (utf8Len > 0) return std::string(utf8, static_cast<size_t>(utf8Len));
     }
 
     return "Unknown Key";
@@ -2274,6 +2280,7 @@ void LifecycleWatcherThread() {
 
     Snapshot previous = {};
     bool havePrevious = false;
+    DWORD lastOverlayRepairTick = 0;
 
     while (!g_isShuttingDown.load(std::memory_order_acquire)) {
         RefreshNetplayRuntimeState();
@@ -2379,6 +2386,15 @@ void LifecycleWatcherThread() {
             if (current.inNetplayMenu && !previous.inNetplayMenu) {
                 LogOut("[NETPLAY] Lifecycle watcher detected netplay menu entry; auditing residual training state", true);
                 AuditNetplayMenuEntryState();
+            }
+        }
+
+        // A peer can wipe the shared EndScene entry while we are not suspended.
+        if (!current.suspended) {
+            const DWORD now = GetTickCount();
+            if (now - lastOverlayRepairTick >= 1000) {
+                lastOverlayRepairTick = now;
+                DirectDrawHook::RepairD3D9EntryIfRestored();
             }
         }
 

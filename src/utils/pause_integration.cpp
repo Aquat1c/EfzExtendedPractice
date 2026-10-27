@@ -609,74 +609,59 @@ namespace {
         return SehCall_PatchToggleThis(ctx, fn, static_cast<uint8_t>(enableParam));
     }
 
-    // NOPs animation/effect update CALLs, mirroring Revival's sub_1006B2A0.
+    // Mirrors Revival's sub_1006B2A0 pause. Originals from the qualified
+    // Memorial image: 5-byte sites are E8 rel32 CALLs, 3-byte sites are
+    // SUB r32,1 animation/effect counter decrements.
+    struct VisualSite {
+        uintptr_t rva;
+        uint8_t size;
+        uint8_t original[5];
+    };
+    const VisualSite kVisualSites[] = {
+        {0x36425F, 5, {0xE8, 0x4C, 0x33, 0xCA, 0xFF}},
+        {0x35E183, 3, {0x83, 0xEA, 0x01}},
+        {0x35DFB5, 3, {0x83, 0xE8, 0x01}},
+        {0x35DFD0, 3, {0x83, 0xEA, 0x01}},
+        {0x35E055, 3, {0x83, 0xE9, 0x01}},
+        {0x35E0DA, 3, {0x83, 0xE8, 0x01}},
+        {0x36420A, 5, {0xE8, 0x01, 0x3B, 0xCA, 0xFF}},
+        {0x364AEB, 3, {0x83, 0xE8, 0x01}},
+        {0x365E59, 5, {0xE8, 0x52, 0x01, 0xCA, 0xFF}},
+        {0x365E7A, 5, {0xE8, 0x31, 0x01, 0xCA, 0xFF}},
+    };
+    const uint8_t kVisualNops[5] = {0x90, 0x90, 0x90, 0x90, 0x90};
+
+    std::mutex s_visualFreezeMutex;
+    uint8_t s_visualFreezeUsers = 0;     // guarded by s_visualFreezeMutex
+    bool s_visualFreezeWritten = false;  // guarded by s_visualFreezeMutex
+
+    bool VisualSiteHolds(uintptr_t base, const VisualSite& site, const uint8_t* bytes) {
+        uint8_t live[5] = {};
+        return SafeReadMemory(base + site.rva, live, site.size)
+            && std::memcmp(live, bytes, site.size) == 0;
+    }
+
+    // Moves each site between the two known states only; foreign bytes are left alone.
+    bool WriteVisualSites(uintptr_t base, bool nop) {
+        bool ok = true;
+        for (const auto& site : kVisualSites) {
+            const uint8_t* to = nop ? kVisualNops : site.original;
+            const uint8_t* from = nop ? site.original : kVisualNops;
+            if (VisualSiteHolds(base, site, to)) continue;
+            if (!VisualSiteHolds(base, site, from)) { ok = false; continue; }
+            void* addr = reinterpret_cast<void*>(base + site.rva);
+            DWORD oldProtect = 0;
+            if (!VirtualProtect(addr, site.size, PAGE_EXECUTE_READWRITE, &oldProtect)) { ok = false; continue; }
+            std::memcpy(addr, to, site.size);
+            FlushInstructionCache(GetCurrentProcess(), addr, site.size);
+            DWORD ignored = 0;
+            VirtualProtect(addr, site.size, oldProtect, &ignored);
+        }
+        return ok;
+    }
+
     bool ApplyVisualEffectPatches(bool freeze) {
-        HMODULE hEfz = GetModuleHandleA("efz.exe");
-        if (!hEfz) return false;
-        uintptr_t base = reinterpret_cast<uintptr_t>(hEfz);
-
-        struct PatchEntry {
-            uintptr_t rva;
-            SIZE_T size;
-            BYTE nops[5];
-            BYTE original[5];
-        };
-        
-        static PatchEntry patches[] = {
-            {0x36425F, 5, {0x90,0x90,0x90,0x90,0x90}, {}}, // Character rendering update
-            {0x35E183, 3, {0x90,0x90,0x90}, {}},             // Animation frame update
-            {0x35DFB5, 3, {0x90,0x90,0x90}, {}},             // Effect processing
-            {0x35DFD0, 3, {0x90,0x90,0x90}, {}},             // Effect processing
-            {0x35E055, 3, {0x90,0x90,0x90}, {}},             // Animation update
-            {0x35E0DA, 3, {0x90,0x90,0x90}, {}},             // Animation update
-            {0x36420A, 5, {0x90,0x90,0x90,0x90,0x90}, {}},   // Rendering update
-            {0x364AEB, 3, {0x90,0x90,0x90}, {}},             // Effect update
-            {0x365E59, 5, {0x90,0x90,0x90,0x90,0x90}, {}},   // Animation update
-            {0x365E7A, 5, {0x90,0x90,0x90,0x90,0x90}, {}}    // Animation update
-        };
-        
-        static bool originalsSaved = false;
-
-        if (freeze && !originalsSaved) {
-            for (auto& patch : patches) {
-                uintptr_t addr = base + patch.rva;
-                if (!SafeReadMemory(addr, patch.original, patch.size)) {
-                    LogOut("[PAUSE][VANILLA] Failed to read original bytes for visual effect patch", true);
-                    return false;
-                }
-            }
-            originalsSaved = true;
-        }
-
-        int successCount = 0;
-        for (auto& patch : patches) {
-            uintptr_t addr = base + patch.rva;
-            const BYTE* data = freeze ? patch.nops : patch.original;
-            
-            DWORD oldProtect;
-            if (!VirtualProtect((void*)addr, patch.size, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                continue;
-            }
-            
-            memcpy((void*)addr, data, patch.size);
-            FlushInstructionCache(GetCurrentProcess(), (void*)addr, patch.size);
-            
-            DWORD dummy;
-            VirtualProtect((void*)addr, patch.size, oldProtect, &dummy);
-            
-            successCount++;
-        }
-        
-        if (successCount == _countof(patches)) {
-            LogOut(freeze ? "[PAUSE][VANILLA] Visual effect patches applied (10 CALLs NOPed)" 
-                          : "[PAUSE][VANILLA] Visual effect patches restored", true);
-            return true;
-        } else {
-            std::ostringstream oss;
-            oss << "[PAUSE][VANILLA] Partial visual effect patch: " << successCount << "/" << _countof(patches);
-            LogOut(oss.str(), true);
-            return false;
-        }
+        return PauseIntegration::SetVisualFreeze(PauseIntegration::VisualFreezeUser::Menu, freeze);
     }
 
     tOfficialToggle GetOfficialToggleFn() {
@@ -1105,6 +1090,45 @@ namespace PauseIntegration {
                 << " gamespeed=0x" << gamespeed;
             LogOut(oss.str(), true);
         }
+    }
+
+    bool SetVisualFreeze(VisualFreezeUser user, bool freeze) {
+        const uint8_t bit = static_cast<uint8_t>(user);
+        std::lock_guard<std::mutex> lock(s_visualFreezeMutex);
+        const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA("efz.exe"));
+        if (!freeze) {
+            s_visualFreezeUsers = static_cast<uint8_t>(s_visualFreezeUsers & ~bit);
+            if (s_visualFreezeUsers != 0 || !s_visualFreezeWritten) return true;
+            if (!base || !WriteVisualSites(base, false)) {
+                LogOut("[PAUSE][VISUAL] Restore incomplete; retained for the next release", true);
+                return false;
+            }
+            s_visualFreezeWritten = false;
+            LogOut("[PAUSE][VISUAL] Visual update sites restored", true);
+            return true;
+        }
+        if (!base) return false;
+        if (!s_visualFreezeWritten) {
+            for (const auto& site : kVisualSites) {
+                if (!VisualSiteHolds(base, site, site.original)) {
+                    LogOut("[PAUSE][VISUAL] Visual update sites are not the known originals; freeze refused", true);
+                    return false;
+                }
+            }
+        }
+        if (WriteVisualSites(base, true)) {
+            if (!s_visualFreezeWritten) LogOut("[PAUSE][VISUAL] Visual update sites NOPed", true);
+        } else if (s_visualFreezeUsers == 0 && WriteVisualSites(base, false)) {
+            s_visualFreezeWritten = false;
+            LogOut("[PAUSE][VISUAL] Visual freeze failed; sites rolled back", true);
+            return false;
+        } else if (!s_visualFreezeWritten) {
+            // Partial NOPs stay owned so the last release restores them.
+            LogOut("[PAUSE][VISUAL] Visual freeze incomplete; held for restore", true);
+        }
+        s_visualFreezeWritten = true;
+        s_visualFreezeUsers = static_cast<uint8_t>(s_visualFreezeUsers | bit);
+        return true;
     }
 
     void SetRuntimeHooksActive(bool active) {

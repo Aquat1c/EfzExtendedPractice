@@ -400,6 +400,16 @@ namespace SavestateHook {
         return s_installed.load();
     }
 
+    void EnsureInstalled() {
+        if (s_installed.load(std::memory_order_acquire)) return;
+        if (!GetModuleHandleA("EfzRevival.dll") || !EFZ_RVA_LoadState() || !EFZ_RVA_SaveState()) return;
+        static DWORD s_nextAttemptTick = 0; // game thread only
+        const DWORD now = GetTickCount();
+        if (s_nextAttemptTick != 0 && static_cast<LONG>(now - s_nextAttemptTick) < 0) return;
+        s_nextAttemptTick = now + 5000;
+        (void)Install();
+    }
+
     unsigned int GetSaveCount() {
         return s_saveCount.load();
     }

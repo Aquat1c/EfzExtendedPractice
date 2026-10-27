@@ -3,8 +3,13 @@
 #include "game/character_hotswap.h"
 #include "runtime/practice_battle_gates.h"
 #include "../include/game/game_state.h"
+#include "../include/game/game_thread_queue.h"
+#include "../include/input/framestep.h"
 #include "../include/game/mission/mission_engine.h"
 #include "../include/game/mission/mission_pause_menu.h"
+#include "../include/game/mission/tutorial_session.h"
+#include "../include/game/menu_key_policy.h"
+#include "../include/utils/config.h"
 
 #include "../include/core/memory.h"
 #include "../include/core/constants.h"
@@ -61,7 +66,8 @@ namespace {
     std::atomic<uint32_t> s_currentBattleBatch{0};
     std::atomic<uint32_t> s_completedBattleBatch{0};
     GameFrontend::BattleExitRouting s_exitRouting;
-    std::atomic<bool> s_practiceEscHeld{false};
+    std::atomic<bool> s_practiceEscHeld{false};   // demo/recorder edges only
+    MenuKeyLatch s_menuLatch;                      // game thread only
 
     uint8_t ReadRawScreenStateNoDebounce() {
         uintptr_t base = GetEFZBase();
@@ -122,13 +128,16 @@ namespace {
         return true;
     }
 
-    bool PollEscapeIfGameActive(bool& outEscDown) {
+    bool PollMenuKeysIfGameActive(int menuVk, bool& outEscDown, bool& outMenuDown) {
         outEscDown = false;
+        outMenuDown = false;
         UpdateWindowActiveState();
         if (!g_efzWindowActive.load(std::memory_order_relaxed)) {
             return false;
         }
         outEscDown = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+        outMenuDown = (menuVk == VK_ESCAPE) ? outEscDown
+                                            : (GetAsyncKeyState(menuVk) & 0x8000) != 0;
         return true;
     }
 
@@ -143,6 +152,7 @@ namespace {
         CharacterHotswap::OnBattleFrontendEntry(reinterpret_cast<uintptr_t>(battleContext));
         const uint32_t batch = s_currentBattleBatch.fetch_add(
             1, std::memory_order_acq_rel) + 1;
+        GameThread::Drain();
         if (auto callback = s_beforeBattleUpdate.load(std::memory_order_relaxed)) {
             callback(battleContext);
         }
@@ -156,7 +166,14 @@ namespace {
 
         const uint8_t accepted = ConsumeBattleFrontendResult(static_cast<uint8_t>(result),
             Practice::BattleCleanupHeld(battleContext),0);
-        if (accepted != SCREEN_BATTLE) XInputShim::SetPollingActive(false);
+        if (accepted != SCREEN_BATTLE) {
+            XInputShim::SetPollingActive(false);
+            // Last battle frame: unwind menu/framestep pause while the Practice controller is alive.
+            ImGuiImpl::ForceHide();
+            Framestep::CancelActiveState("battle exit");
+            // Queued work belongs to this battle; the next one may hold other fighters.
+            GameThread::Clear();
+        }
         return static_cast<char>(accepted);
     }
 
@@ -164,12 +181,17 @@ namespace {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedBattleHotkeys>());
     if (!hookExecution.Admitted()) return oBattleHotkeys ? oBattleHotkeys(battleContext) : 0;
         const bool practiceBattle = IsPracticeBattleHotkeyContext();
+        const int cfgMenuVk = Config::GetSettings().configMenuKey;
+        const int menuVk = cfgMenuVk > 0 ? cfgMenuVk : VK_ESCAPE;
         bool escDown = false;
-        const bool gameActive = practiceBattle && PollEscapeIfGameActive(escDown);
+        bool menuDown = false;
+        const bool gameActive = practiceBattle && PollMenuKeysIfGameActive(menuVk, escDown, menuDown);
 
         if (practiceBattle && Mission::Engine::Demo::IsActive()) {
             const bool wasHeld = s_practiceEscHeld.exchange(gameActive && escDown,
                                                              std::memory_order_acq_rel);
+            // The Esc that cancels a demo must not reach EFZ after it ends.
+            if (gameActive && escDown) s_menuLatch.escGuard = true;
             if (gameActive && escDown && !wasHeld) {
                 LogOut("[MISSION][DEMO] Practice ESC intercepted; canceling demonstration", true);
                 Mission::Engine::Demo::Cancel();
@@ -183,7 +205,7 @@ namespace {
             (Mission::Engine::Recorder::IsSessionActive() ||
              Mission::Engine::Recorder::IsMenuInputHandoffActive()) &&
             !ImGuiImpl::IsVisible()) {
-            const bool wasHeld = s_practiceEscHeld.exchange(gameActive && escDown,
+            const bool wasHeld = s_practiceEscHeld.exchange(gameActive && menuDown,
                                                              std::memory_order_acq_rel);
             const bool recorderHandoff =
                 Mission::Engine::Recorder::IsMenuInputHandoffActive() &&
@@ -193,9 +215,9 @@ namespace {
                 // neutral-input transaction.
                 return 0;
             }
-            if (gameActive && escDown) {
+            if (gameActive && menuDown) {
                 if (!wasHeld) {
-                    // Escape opens the phase menu; a take is never auto-sealed.
+                    // The menu key opens the phase menu; a take is never auto-sealed.
                     OpenMenu();
                 }
                 return 0;
@@ -212,30 +234,25 @@ namespace {
         if (!practiceBattle) {
             // Outside a Practice battle EFZ's own dispatcher must always run.
             s_practiceEscHeld.store(false, std::memory_order_relaxed);
+            s_menuLatch = {};
             return oBattleHotkeys ? oBattleHotkeys(battleContext) : 0;
         }
 
-        if (ImGuiImpl::IsVisible()) {
-            s_practiceEscHeld.store(gameActive && escDown, std::memory_order_relaxed);
+        // Pass-through except while our UI is up, for the Esc that closed it,
+        // and while Esc is the menu key or a Tutorial/Runner owns it.
+        const bool uiVisible = ImGuiImpl::IsVisible();
+        if (!gameActive && !uiVisible) {
+            s_menuLatch = {};
             return 0;
         }
-
-        if (!gameActive) {
-            s_practiceEscHeld.store(false, std::memory_order_relaxed);
-            return 0;
+        const bool escOwned = menuVk == VK_ESCAPE ||
+            Mission::TutorialSession::IsActive() || Mission::Engine::Runner::IsActive();
+        const MenuKeyStep step = StepMenuKey(s_menuLatch, uiVisible, escOwned, escDown, menuDown);
+        if (step.openMenu) {
+            LogOut("[FRONTEND] Practice menu key intercepted; opening training menu", true);
+            OpenMenu();
         }
-
-        if (escDown) {
-            const bool wasHeld = s_practiceEscHeld.exchange(true, std::memory_order_acq_rel);
-            if (!wasHeld) {
-                LogOut("[FRONTEND] Practice ESC intercepted; opening training menu", true);
-                OpenMenu();
-            }
-            return 0;
-        }
-
-        s_practiceEscHeld.store(false, std::memory_order_relaxed);
-        return oBattleHotkeys ? oBattleHotkeys(battleContext) : 0;
+        return step.passNative ? (oBattleHotkeys ? oBattleHotkeys(battleContext) : 0) : 0;
     }
 }
 
@@ -511,6 +528,10 @@ bool EnsureFrontendControlHooksInstalled() {
     s_frontendHooksPartial.store(false, std::memory_order_release);
     LogOut("[FRONTEND] Control hooks installed transactionally", true);
     return true;
+}
+
+bool AreFrontendControlHooksInstalled() {
+    return s_frontendHooksInstalled.load(std::memory_order_acquire);
 }
 
 void SetBattleUpdateCallbacks(BattleUpdateCallback beforeUpdate, BattleUpdateCallback afterUpdate) {

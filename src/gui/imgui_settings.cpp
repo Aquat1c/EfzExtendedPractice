@@ -37,6 +37,7 @@ namespace ImGuiSettings {
         if (vk == VK_LWIN || vk == VK_RWIN) return false;
         if (vk == VK_CLEAR) return false;
         if (vk == VK_ESCAPE) return false;
+        if (vk == Config::GetSettings().configMenuKey) return false;
         return true;
     }
 
@@ -431,6 +432,10 @@ namespace ImGuiSettings {
                 int toggleTitle = cfg.toggleTitleKey;
                 int resetFrame = cfg.resetFrameCounterKey;
 
+                int menuKey = cfg.configMenuKey;
+                InputKeyHex("Open Menu", menuKey, "MenuKey");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Use Esc##MenuKey")) Config::SetSetting("Hotkeys", "MenuKey", "0x1B");
                 InputKeyHex("Teleport/Load", teleport, "TeleportKey");
                 InputKeyHex("Record/Save", record, "RecordKey");
                 InputKeyHex("Toggle Title", toggleTitle, "ToggleTitleKey");

@@ -62,6 +62,15 @@ bool OpenPracticeMenuDirect(bool allowOutOfContext) {
 
     const bool d3d9Ready = DirectDrawHook::SetD3D9Active(true);
     const bool useFallbackWindow = !d3d9Ready || DirectDrawHook::ShouldUseExternalMenuFallback();
+    if (!useFallbackWindow && ImGuiImpl::IsExternalFallbackHost()) {
+        // The fallback host holds the only ImGui context; the game window can
+        // initialize again only after that thread has shut it down.
+        if (!ImGuiImpl::ReleaseExternalFallbackHost(2000)) {
+            LogOut("[GUI] In-game render is back but the fallback window did not release ImGui", true);
+            return false;
+        }
+        LogOut("[GUI] In-game render is back; fallback window released", true);
+    }
     if (useFallbackWindow) {
         LogOut("[GUI] In-game render unavailable; opening fallback ImGui window", true);
         if (!ImGuiImpl::ShowFallbackWindow()) {

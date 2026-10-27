@@ -60,9 +60,15 @@ namespace ImGuiImpl {
 
     // True while the separate fallback ImGui host window owns the current menu.
     bool IsExternalFallbackHost();
-    
+
+    // Stops a hidden fallback host so the game window can initialize ImGui again.
+    // Waits at most timeoutMs; never call from the fallback thread.
+    bool ReleaseExternalFallbackHost(DWORD timeoutMs);
+
     // Check if ImGui is visible
     bool IsVisible();
+    // Bumped on every visible/hidden flip.
+    unsigned VisibilityGeneration();
 
     // Handle WndProc messages
     LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
