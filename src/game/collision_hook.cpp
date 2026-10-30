@@ -336,7 +336,7 @@ void ResolveCapturedCollisionLayout(int playerNum) {
 static void __fastcall HookedHandleP2PCollision(void* gameSystem, void* /*edx*/, int attackerPtr, int defenderPtr, int attackerFrameData, const void* defenderFrameData) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedHandleP2PCollision>());
     if (!hookExecution.Admitted() || !s_collisionHookEnabled.load(std::memory_order_acquire)
-        || g_onlineModeActive.load(std::memory_order_relaxed)) {
+        || !PracticeBattleHooksOpen()) {
         oHandleP2PCollision(gameSystem, attackerPtr, defenderPtr, attackerFrameData, defenderFrameData);
         return;
     }
@@ -423,7 +423,7 @@ static void __fastcall HookedHandleEntityToPlayerCollision(
     int entitySlot, const void* defenderFrameData) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedHandleEntityToPlayerCollision>());
     if (!hookExecution.Admitted() || !s_entityCollisionHookEnabled.load(std::memory_order_acquire) ||
-        g_onlineModeActive.load(std::memory_order_relaxed)) {
+        !PracticeBattleHooksOpen()) {
         oHandleEntityToPlayerCollision(
             gameSystem, ownerPtr, defenderPtr, entitySlot, defenderFrameData);
         return;

@@ -101,6 +101,29 @@ void FailedProtectionAndFlushRemainRetryable() {
     CHECK(backend.pins == 0 && ledger.Obligations() == 0);
 }
 
+void PeerExecutableWritableProtectionStillRestores() {
+    for (const uint32_t peer : {0x40u, 0x80u}) {
+        MemoryBackend backend;
+        Practice::PatchLedger ledger(backend);
+        uint64_t id = 0;
+        CHECK(ledger.Acquire(Site(), id).complete);
+        backend.protection[0] = peer;
+        CHECK(ledger.RestoreOwner(15).complete);
+        CHECK((backend.memory == std::array<uint8_t, 32>{}));
+        CHECK(backend.protection[0] == peer && ledger.Obligations() == 0);
+    }
+    MemoryBackend backend;
+    Practice::PatchLedger ledger(backend);
+    uint64_t id = 0;
+    CHECK(ledger.Acquire(Site(), id).complete);
+    backend.protection[0] = 0x02;
+    const int writes = backend.writes;
+    CHECK(!ledger.RestoreOwner(15).complete);
+    CHECK(backend.writes == writes && ledger.Obligations() != 0);
+    backend.protection[0] = 0x20;
+    CHECK(ledger.RestoreOwner(15).complete);
+}
+
 void ForeignReplacementIsNeverOverwritten() {
     MemoryBackend backend;
     Practice::PatchLedger ledger(backend);
@@ -200,6 +223,7 @@ int main() {
     EmptyRestoreHasNoDiscovery();
     CrossPageProtectionsAreRestoredIndividually();
     FailedProtectionAndFlushRemainRetryable();
+    PeerExecutableWritableProtectionStillRestores();
     ForeignReplacementIsNeverOverwritten();
     PartialBytesAndModuleConflictAreRetained();
     NoAdoptionAndNoConflictingOwners();

@@ -754,6 +754,8 @@ void EnableFeatures() {
     
 }
 
+namespace { void ClearTransientInputOverrides(); }
+
 void DisableFeatures() {
     GameThread::Clear();
     XInputShim::SetPollingActive(false);
@@ -792,6 +794,10 @@ void DisableFeatures() {
     }
     
     ImmediateInput::Stop();
+    // Stale values would go live again on the next Practice entry.
+    ClearTransientInputOverrides();
+    (void)ClearMotionInputQueue(1, true);
+    (void)ClearMotionInputQueue(2, true);
 
     if (keyMonitorRunning.load()) {
         LogOut("[SYSTEM] Stopping key monitoring due to invalid game mode.", true);
@@ -1949,7 +1955,8 @@ void CreateDebugConsole() {
     WriteStartupLog("Current code page: " + std::to_string(GetConsoleOutputCP()));
     
     WriteStartupLog("Calling AllocConsole()...");
-    if (!AllocConsole()) {
+    const bool ownsConsole = AllocConsole() != FALSE;
+    if (!ownsConsole) {
         DWORD lastError = GetLastError();
         WriteStartupLog("AllocConsole() failed with error code: " + std::to_string(lastError));
         
@@ -1999,6 +2006,19 @@ void CreateDebugConsole() {
     bool cpInSet = SetConsoleCP(CP_UTF8) != 0;
     WriteStartupLog("SetConsoleCP returned: " + std::to_string(cpInSet));
     
+    // QuickEdit selection blocks console writes while LogOut holds g_logMutex, stalling the game thread.
+    if (ownsConsole) {
+        HANDLE hIn = CreateFileA("CONIN$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 nullptr, OPEN_EXISTING, 0, nullptr);
+        if (hIn != INVALID_HANDLE_VALUE) {
+            DWORD inputMode = 0;
+            if (GetConsoleMode(hIn, &inputMode)) {
+                SetConsoleMode(hIn, (inputMode & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS);
+            }
+            CloseHandle(hIn);
+        }
+    }
+
     WriteStartupLog("Getting console handle...");
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut == INVALID_HANDLE_VALUE) {
@@ -2163,12 +2183,11 @@ bool IsDashState(short moveID) {
 
 
 HWND FindEFZWindow() {
-    // Cache & throttle enumeration: only re-enumerate every 120 internal frames or if handle invalid
+    // Tick-based: frameCounter does not advance before a match, when the window is usually missing.
     static HWND cached = NULL;
-    static int lastRefreshFrame = -99999;
+    static DWORD lastEnumerateTick = 0;
     static DWORD ourPid = GetCurrentProcessId();  // Our process ID (constant per instance)
-    
-    int currentInternal = frameCounter.load();
+
     if (cached && IsWindow(cached)) {
         DWORD cachedPid = 0;
         GetWindowThreadProcessId(cached, &cachedPid);
@@ -2177,10 +2196,11 @@ HWND FindEFZWindow() {
         }
         cached = NULL;
     }
-    if (currentInternal - lastRefreshFrame < 120 && cached) {
-        return cached; // avoid hammering EnumWindows()
+    const DWORD enumerateTick = GetTickCount();
+    if (lastEnumerateTick != 0 && enumerateTick - lastEnumerateTick < 500) {
+        return NULL; // avoid hammering EnumWindows()
     }
-    lastRefreshFrame = currentInternal;
+    lastEnumerateTick = enumerateTick;
 
     struct EnumContext {
         DWORD targetPid;

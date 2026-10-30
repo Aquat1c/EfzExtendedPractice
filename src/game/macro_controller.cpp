@@ -15,6 +15,7 @@
 #include "../include/game/auto_action.h" // Enable/Restore P2 control helpers
 #include "../include/utils/switch_players.h"
 #include "../include/utils/pause_integration.h"
+#include "../include/utils/i18n.h"
 #include "../include/game/practice_offsets.h"
 #include "../include/utils/utilities.h"   // GetEFZBase, IsEFZWindowActive, etc.
 #include "../include/game/frame_monitor.h" // AreCharactersInitialized()
@@ -2063,9 +2064,7 @@ void ReleaseExclusivePlaybackHold() {
 }
 
 std::string GetStatusLine() {
-    std::ostringstream os;
-    os << "Macro " << StateName(s_state.load()) << " | Slot " << s_curSlot.load();
-    return os.str();
+    return I18n::TrFormat("Macro %s | Slot %d", I18n::Tr(StateName(s_state.load()).c_str()), s_curSlot.load());
 }
 
 SlotStats GetSlotStats(int slot) {
@@ -2413,12 +2412,14 @@ static bool DeserializeClip(Slot& dst, const std::string& text, std::string& err
         return true;
     }
 
+    // Five minutes at 192 ticks/s; a repeat in pasted text must not exhaust memory.
+    constexpr uint32_t kMaxImportTicks = 192u * 60u * 5u;
     std::vector<uint8_t> macro;
     std::vector<uint16_t> counts;
     std::vector<uint8_t> buf;
 
     auto parseUInt = [](const std::string& s, size_t i, uint32_t& out)->size_t{
-        out = 0; size_t start = i; while (i < s.size() && std::isdigit((unsigned char)s[i])) { out = out*10 + (s[i]-'0'); ++i; }
+        out = 0; size_t start = i; while (i < s.size() && std::isdigit((unsigned char)s[i])) { if (out < 100000000u) out = out*10 + (s[i]-'0'); ++i; }
         return (i > start) ? i : start;
     };
 
@@ -2433,7 +2434,7 @@ static bool DeserializeClip(Slot& dst, const std::string& text, std::string& err
             while (j > 0 && std::isdigit((unsigned char)pack[j - 1])) --j;
             if (j > 0 && j < end && (pack[j - 1] == 'x' || pack[j - 1] == 'X')) {
                 uint32_t val = 0; size_t k = j; k = parseUInt(pack, k, val);
-                if (k == j || val == 0) { errorOut = "Invalid repeat suffix in '" + pack + "'"; return false; }
+                if (k == j || val == 0 || val > kMaxImportTicks) { errorOut = "Invalid repeat suffix in '" + pack + "'"; return false; }
                 repeat = val;
                 pack = pack.substr(0, j - 1);
                 while (!pack.empty() && std::isspace((unsigned char)pack.back())) pack.pop_back();
@@ -2494,6 +2495,7 @@ static bool DeserializeClip(Slot& dst, const std::string& text, std::string& err
             thisTickK = 1; thisTickBuf.push_back(baseMask);
         }
 
+        if (repeat > kMaxImportTicks - macro.size()) { errorOut = "Macro is too long"; return false; }
         for (uint32_t r = 0; r < repeat; ++r) {
             macro.push_back(baseMask);
             counts.push_back(thisTickK);
@@ -2515,7 +2517,12 @@ static bool DeserializeClip(Slot& dst, const std::string& text, std::string& err
 
 bool DeserializeSlot(int slot, const std::string& text, std::string& errorOut) {
     slot = ClampSlot(slot);
-    return DeserializeClip(s_slots[slot - 1], text, errorOut);
+    // Parse first; only the swap needs the barrier Tick holds.
+    Slot parsed;
+    if (!DeserializeClip(parsed, text, errorOut)) return false;
+    std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+    s_slots[slot - 1] = std::move(parsed);
+    return true;
 }
 
 bool ValidateSerialized(const std::string& text, std::string& errorOut) {

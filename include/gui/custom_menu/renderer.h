@@ -16,4 +16,8 @@ void PrepareFrame();
 // not call ImGui::Begin/End.
 void Render();
 
+// Asks the render thread to play the close animation. False when it can't run
+// (animations off, menu not rendering) and the caller must hide the menu itself.
+bool RequestAnimatedClose();
+
 } // namespace CustomMenu

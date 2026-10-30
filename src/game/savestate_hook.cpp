@@ -1,4 +1,5 @@
 #include "../../include/game/savestate_hook.h"
+#include "../include/game/game_state.h"
 #include "../../include/game/efzrevival_addrs.h"
 #include "../../include/game/auto_action.h"
 #include "../../include/game/character_settings.h"
@@ -55,6 +56,23 @@ namespace {
 
     constexpr uint8_t kInlineSaveAction = 1u << 0;
     constexpr uint8_t kInlineLoadAction = 1u << 1;
+
+    // J's dispatcher reaches its save/load branches only in this state
+    // (sub_7007CF60: screen 3, [0x790110]+1084 in {2,3}, battle +45 != 2).
+    bool InlineSaveLoadBranchReachable() {
+        const uintptr_t base = GetEFZBase();
+        if (!base) return false;
+        uint32_t screen = 0;
+        uintptr_t titleContext = 0;
+        uintptr_t battleContext = 0;
+        uint8_t mode = 0;
+        uint8_t exitState = 2;
+        return SafeReadMemory(base + 0x390148, &screen, sizeof(screen)) && screen == 3
+            && SafeReadMemory(base + 0x390110, &titleContext, sizeof(titleContext)) && titleContext
+            && SafeReadMemory(titleContext + 1084, &mode, sizeof(mode)) && (mode == 2 || mode == 3)
+            && SafeReadMemory(base + 0x390110 + 4 * screen, &battleContext, sizeof(battleContext)) && battleContext
+            && SafeReadMemory(battleContext + 45, &exitState, sizeof(exitState)) && exitState != 2;
+    }
 
     void CanonicalizeSavedControlState(SavedModState& state) {
         if (state.localSide != 0 && state.localSide != 1) {
@@ -189,7 +207,7 @@ namespace {
     bool __fastcall HookedLoadState(void* self, void* /*edx*/) {
         auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedLoadState>());
         if (execution && !execution.Admitted()) return oLoadState ? oLoadState(self) : false;
-        if (g_onlineModeActive.load(std::memory_order_relaxed)) {
+        if (!PracticeBattleHooksOpen()) {
             return oLoadState ? oLoadState(self) : false;
         }
 
@@ -202,7 +220,7 @@ namespace {
     void __fastcall HookedSaveState(void* self, void* /*edx*/) {
         auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedSaveState>());
         if (execution && !execution.Admitted()) {if (oSaveState) oSaveState(self);return;}
-        if (g_onlineModeActive.load(std::memory_order_relaxed)) {
+        if (!PracticeBattleHooksOpen()) {
             if (oSaveState) {
                 oSaveState(self);
             }
@@ -331,7 +349,8 @@ namespace SavestateHook {
             || key == 0
             || GetCurrentGameMode() != GameMode::Practice
             || !IsMatchPhase()
-            || g_onlineModeActive.load(std::memory_order_relaxed)) {
+            || g_onlineModeActive.load(std::memory_order_relaxed)
+            || !InlineSaveLoadBranchReachable()) {
             return 0;
         }
 

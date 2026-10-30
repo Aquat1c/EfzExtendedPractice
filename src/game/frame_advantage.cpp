@@ -5,11 +5,14 @@
 
 #include "../include/core/memory.h"
 #include "../include/core/logger.h"
+#include "../include/game/auto_action.h"
 #include "../include/game/frame_analysis.h"
 #include "../include/game/frame_monitor.h"
-#include "../include/game/per_frame_sample.h"
+#include "../include/game/game_state.h"
+#include "../include/gui/framebar.h"
 #include "../include/gui/overlay.h"
-#include "../include/utils/pause_integration.h"
+#include "../include/input/input_core.h"
+#include "../include/utils/i18n.h"
 #include "../include/utils/xp_compat.h"
 
 // Aggregate-initialiser field order for FrameAdvantageState.
@@ -37,12 +40,10 @@ std::atomic<int> g_SkipRegularFAOverlayUntilFrame{0};
 
 namespace {
 
-struct FrameAdvantageClockState {
-    bool initialized = false;
-    int internalFrame = 0;
-    bool previouslyPaused = false;
-    uint32_t lastStep = 0;
-};
+std::atomic<int> g_engineTick{0};
+std::atomic<int> g_actionableEdgeTick[3];
+std::atomic<bool> g_engineTickLive{false};
+bool g_superFlashNow = false; // game thread, set per tick before MonitorFrameAdvantage
 
 struct FrameAdvantageScratchState {
     int p1LastDefenderFreeFrame = -1;
@@ -51,9 +52,6 @@ struct FrameAdvantageScratchState {
     int p2FreezeAccumSinceFree = 0;
     int p1FreezeAfterAtkActionable = 0;
     int p2FreezeAfterAtkActionable = 0;
-    // Internal frame and freeze state of the previous MonitorFrameAdvantage call.
-    int lastCallInternalFrame = -1;
-    bool lastCallFrozen = false;
     int p1HitConnectCooldown = 0;
     int p2HitConnectCooldown = 0;
     int p1LastAttackEdgeFrame = -1;
@@ -66,7 +64,6 @@ struct FrameAdvantageScratchState {
 };
 
 struct FrameAdvantageRuntimeState {
-    FrameAdvantageClockState clock;
     FrameAdvantageScratchState scratch;
     ULONGLONG displayUntilTimeMs = 0;
     int staleFrameCounter = 0;
@@ -249,8 +246,7 @@ void ResetFrameAdvantageState() {
 }
 
 void ResetFrameAdvantageTimeline() {
-    // Full reset once old measurement work has drained; ordinary resets keep
-    // the active pause clock.
+    // Full reset once old measurement work has drained.
     ResetFrameAdvantageState();
     g_faRuntime = FrameAdvantageRuntimeState{};
 }
@@ -277,68 +273,68 @@ void CancelFrameAdvantageCalculation() {
 #endif
 }
 
-int GetCurrentInternalFrame() {
-    // Pause-aware: when paused in Practice, advances only on Practice step
-    // increments (each step = 1 visual frame = 3 internal frames).
-    auto& s_initialized = g_faRuntime.clock.initialized;
-    auto& s_faInternal = g_faRuntime.clock.internalFrame;
-    auto& s_prevPaused = g_faRuntime.clock.previouslyPaused;
-    auto& s_lastStep = g_faRuntime.clock.lastStep;
-
-    int fcNow = frameCounter.load();
-    GameMode mode = GetCurrentGameMode();
-    bool inPractice = (mode == GameMode::Practice);
-    bool paused = PauseIntegration::IsPracticePaused();
-
-    if (!s_initialized) {
-        s_faInternal = fcNow;
-        s_initialized = true;
-        s_prevPaused = paused;
-        s_lastStep = 0;
-        uint32_t seed = 0; if (PauseIntegration::ReadStepCounter(seed)) s_lastStep = seed;
-        return s_faInternal;
-    }
-
-    if (!inPractice || !paused) {
-        s_faInternal = fcNow;
-        if (s_prevPaused && !paused) {
-            s_lastStep = 0; uint32_t seed = 0; if (PauseIntegration::ReadStepCounter(seed)) s_lastStep = seed;
-        }
-        s_prevPaused = paused;
-        return s_faInternal;
-    }
-
-    // Paused in Practice: advance on step increments only.
-    uint32_t cur = 0;
-    if (PauseIntegration::ReadStepCounter(cur)) {
-        if (s_lastStep == 0) {
-            s_lastStep = cur;
-        } else if (cur != s_lastStep) {
-            uint32_t delta = cur - s_lastStep; // handles wrap naturally
-            if (delta > 1000u) delta = 1u;     // sanity clamp
-            s_faInternal += static_cast<int>(delta) * 3;
-            s_lastStep = cur;
-        }
-    }
-    s_prevPaused = paused;
-    return s_faInternal;
+int GetEngineTick() {
+    return g_engineTick.load(std::memory_order_acquire);
 }
 
-double GetCurrentVisualFrame() {
-    int internalFrame = frameCounter.load();
-    
-    // 3 internal frames per visual frame: subframe 0=.00, 1=.33, 2=.66
-    int visualFrameWhole = internalFrame / 3;
-    int subframe = internalFrame % 3;
-    
-    double subframeDecimal = 0.0;
-    switch (subframe) {
-        case 0: subframeDecimal = 0.0; break;   
-        case 1: subframeDecimal = 0.33; break;  
-        case 2: subframeDecimal = 0.66; break;  
+int GetActionableEdgeTick(int player) {
+    return (player == 1 || player == 2) ? g_actionableEdgeTick[player].load(std::memory_order_acquire) : 0;
+}
+
+int GetCurrentInternalFrame() {
+    return GetEngineTick();
+}
+
+void DropEngineTickState() {
+    if (!g_engineTickLive.load(std::memory_order_acquire)) return;
+    if (!DropPrearmWorkAtPracticeBoundary()) return;
+    g_engineTickLive.store(false, std::memory_order_release);
+    g_engineTick.store(0, std::memory_order_release);
+    g_actionableEdgeTick[1].store(0, std::memory_order_release);
+    g_actionableEdgeTick[2].store(0, std::memory_order_release);
+    ResetFrameAdvantageState();
+    FrameBar::Reset();
+}
+
+void OnEngineTick() {
+    // Netplay gates run first; online, suspend, session, non-Practice and non-battle
+    // all stop here, with no game memory read while any netplay flag is up.
+    if (g_onlineModeActive.load(std::memory_order_acquire) ||
+        !g_featuresEnabled.load(std::memory_order_acquire) ||
+        !IsTrainingMenuContext()) {
+        DropEngineTickState();
+        return;
     }
-    
-    return visualFrameWhole + subframeDecimal;
+
+    static short s_prevMove1 = 0;
+    static short s_prevMove2 = 0;
+    const int tick = g_engineTick.fetch_add(1, std::memory_order_acq_rel) + 1;
+    g_engineTickLive.store(true, std::memory_order_release);
+    if (tick == 1) {
+        s_prevMove1 = 0;
+        s_prevMove2 = 0;
+    }
+
+    const uintptr_t p1 = GetPlayerPointer(1);
+    const uintptr_t p2 = GetPlayerPointer(2);
+    short move1 = 0, move2 = 0, flash1 = 0, flash2 = 0;
+    if (!p1 || !p2 ||
+        !SafeReadMemory(p1 + MOVE_ID_OFFSET, &move1, sizeof(move1)) ||
+        !SafeReadMemory(p2 + MOVE_ID_OFFSET, &move2, sizeof(move2)) ||
+        !SafeReadMemory(p1 + SUPERFLASH_FREEZE_OFFSET, &flash1, sizeof(flash1)) ||
+        !SafeReadMemory(p2 + SUPERFLASH_FREEZE_OFFSET, &flash2, sizeof(flash2))) {
+        return;
+    }
+
+    if (IsActionable(move1) && !IsActionable(s_prevMove1)) g_actionableEdgeTick[1].store(tick, std::memory_order_release);
+    if (IsActionable(move2) && !IsActionable(s_prevMove2)) g_actionableEdgeTick[2].store(tick, std::memory_order_release);
+
+    FrameBar::TickSample();
+
+    g_superFlashNow = flash1 > 0 || flash2 > 0;
+    MonitorFrameAdvantage(move1, move2, s_prevMove1, s_prevMove2);
+    s_prevMove1 = move1;
+    s_prevMove2 = move2;
 }
 
 std::string FormatFrameAdvantage(int advantageInternal) {
@@ -474,10 +470,8 @@ void MonitorFrameAdvantage(short moveID1, short moveID2, short prevMoveID1, shor
         frameAdvState.gapDisplayUntilInternalFrame = -1;
     }
     
-    const PerFrameSample &faSample = GetCurrentPerFrameSample();
-    bool p1Actionable = faSample.actionable1;
-    bool p2Actionable = faSample.actionable2;
-    
+    const struct { bool actionable1, actionable2; } faSample{IsActionable(moveID1), IsActionable(moveID2)};
+
     bool p1NewAction = (IsAttackMove(moveID1) && !IsAttackMove(prevMoveID1)) ||
                        (moveID1 == FORWARD_DASH_START_ID || moveID1 == BACKWARD_DASH_START_ID) ||
                        (moveID1 == STRAIGHT_JUMP_ID || moveID1 == FORWARD_JUMP_ID || moveID1 == BACKWARD_JUMP_ID);
@@ -529,49 +523,23 @@ void MonitorFrameAdvantage(short moveID1, short moveID2, short prevMoveID1, shor
         #endif
     }
 
-    // While waiting for the next connect, accumulate freeze frames to remove from "gap"
-    auto isFreezeFrame = [&]() -> bool {
-        // Consider global game-speed freeze and per-side special/frozen states
-        if (PauseIntegration::IsGameSpeedFrozen()) return true;
-        if (IsFrozen(moveID1) || IsFrozen(moveID2)) return true;
-        if (IsSpecialStun(moveID1) || IsSpecialStun(moveID2)) return true;
-        return false;
-    };
-    // Calls are skipped while move IDs hold and no timer runs, but the anchors are
-    // internal frames: skipped frames carry the previous call's freeze state.
-    const bool freezeNow = isFreezeFrame();
-    const int lastCall = g_faScratch.lastCallInternalFrame;
-    // Same-frame repeat calls add nothing; an unknown or rewound previous call carries no frames.
-    const bool newFrame = lastCall < 0 || currentInternalFrame != lastCall;
-    const bool carry = g_faScratch.lastCallFrozen && lastCall >= 0 && currentInternalFrame > lastCall;
-    g_faScratch.lastCallInternalFrame = currentInternalFrame;
-    g_faScratch.lastCallFrozen = freezeNow;
-    // Never count frames before the anchor that opened the window.
-    const auto frozenSince = [&](int anchor) -> int {
-        int frames = (freezeNow && newFrame) ? 1 : 0;
-        if (carry) {
-            const int from = (lastCall + 1 > anchor) ? lastCall + 1 : anchor;
-            if (currentInternalFrame > from) frames += currentInternalFrame - from;
-        }
-        return frames;
-    };
-    if (p1_last_defender_free_frame != -1) {
-        p1_freeze_accum_since_free += frozenSince(p1_last_defender_free_frame);
-    }
-    if (p2_last_defender_free_frame != -1) {
-        p2_freeze_accum_since_free += frozenSince(p2_last_defender_free_frame);
-    }
+    // Ticks with an active superflash stop the other side's scripts (efz.c:12231) and
+    // are removed from gap and FA. Fire/electric/frozen stun (81-86) stops neither
+    // side's clock, and a real game-speed freeze runs no ticks at all.
+    const int freezeTick = g_superFlashNow ? 1 : 0;
+    if (p1_last_defender_free_frame != -1) p1_freeze_accum_since_free += freezeTick;
+    if (p2_last_defender_free_frame != -1) p2_freeze_accum_since_free += freezeTick;
 
     // Also accumulate freeze that occurs after attacker recovery but before defender free.
     if (frameAdvState.p1Attacking && frameAdvState.p1ActionableInternalFrame != -1 &&
         frameAdvState.p2DefenderFreeInternalFrame == -1) {
-        p1_freeze_after_atk_actionable += frozenSince(frameAdvState.p1ActionableInternalFrame);
+        p1_freeze_after_atk_actionable += freezeTick;
     }
     if (frameAdvState.p2Attacking && frameAdvState.p2ActionableInternalFrame != -1 &&
         frameAdvState.p1DefenderFreeInternalFrame == -1) {
-        p2_freeze_after_atk_actionable += frozenSince(frameAdvState.p2ActionableInternalFrame);
+        p2_freeze_after_atk_actionable += freezeTick;
     }
-    
+
     // STEP 1: Detect if an attack connects (P1 attacking P2)
     bool p2_entering_blockstun = IsBlockstunState(moveID2) && !IsBlockstunState(prevMoveID2);
     bool p2_entering_hitstun = IsHitstun(moveID2) && !IsHitstun(prevMoveID2);
@@ -648,7 +616,7 @@ void MonitorFrameAdvantage(short moveID1, short moveID2, short prevMoveID1, shor
                 int visualGapFrames = gapFrames / 3;
                 int subframes = gapFrames % 3;
                 
-                std::string gapText = "Gap: " + std::to_string(visualGapFrames);
+                std::string gapText = I18n::TrFormat("Gap: %d", visualGapFrames);
                 if (subframes == 1) {
                     gapText += ".33";
                 } else if (subframes == 2) {
@@ -771,7 +739,7 @@ void MonitorFrameAdvantage(short moveID1, short moveID2, short prevMoveID1, shor
                 int visualGapFrames = gapFrames / 3;
                 int subframes = gapFrames % 3;
                 
-                std::string gapText = "Gap: " + std::to_string(visualGapFrames);
+                std::string gapText = I18n::TrFormat("Gap: %d", visualGapFrames);
                 if (subframes == 1) {
                     gapText += ".33";
                 } else if (subframes == 2) {
@@ -1154,18 +1122,4 @@ bool IsFrameAdvantageActive() {
 
 FrameAdvantageState GetFrameAdvantageState() {
     return frameAdvState;
-}
-
-// Returns true if any FA-related timers/overlays require ticking even without moveID changes
-bool FrameAdvantageTimersActive() {
-    if (g_faScratch.pendingAdvantageAttacker != 0) return true;
-    if (g_displayUntilTimeMs != 0) return true;
-    if (frameAdvState.gapDisplayUntilInternalFrame != -1) return true;
-    int cur = GetCurrentInternalFrame();
-    if (g_showFrameAdvantageOverlay.load() && cur < g_SkipRegularFAOverlayUntilFrame.load()) return true;
-    return false;
-}
-
-void MonitorFrameAdvantage(const PerFrameSample& sample) {
-    MonitorFrameAdvantage(sample.moveID1, sample.moveID2, sample.prevMoveID1, sample.prevMoveID2);
 }

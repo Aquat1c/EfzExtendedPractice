@@ -80,6 +80,7 @@ ipch/
 !.vscode/extensions.json
 !.vscode/*.code-snippets
 .idea/
+.serena/
 *.swp
 *~
 *.sublime-workspace

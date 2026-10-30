@@ -5,7 +5,6 @@
 #include "../include/gui/overlay.h"
 #include "../include/core/globals.h"  
 #include "../include/utils/audio_control.h"
-#include "../3rdparty/minhook/include/MinHook.h"
 #include <thread>
 #include <chrono>
 #include <atomic>
@@ -14,8 +13,6 @@ constexpr uintptr_t BGM_SLOT_OFFSET   = 0xF26;
 constexpr uintptr_t SOUND_MANAGER_PTR = 0x8;
 
 typedef int   (__thiscall* StopBGMFunc)(uintptr_t gameSystemPtr);
-typedef void  (__thiscall* PlayBGMFunc)(uintptr_t gameSystemPtr, unsigned short trackNumber);
-static PlayBGMFunc oPlayBGM = nullptr;
 
 extern uintptr_t GetEFZBase();
 
@@ -63,37 +60,6 @@ int GetBGMVolume(uintptr_t gameStatePtr) {
     int vol = 0;
     SafeReadMemory(gameStatePtr + 0xF2C, &vol, sizeof(int));
     return vol;
-}
-
-void __fastcall HookedPlayBGM(uintptr_t gameSystemPtr, void*, unsigned short trackNumber) {
-    SetLastBgmTrack(trackNumber);
-
-    if (!gameSystemPtr) {
-        LogOut("[BGM] Invalid gameSystemPtr in HookedPlayBGM, bypassing hook", true);
-        if (oPlayBGM) oPlayBGM(gameSystemPtr, trackNumber);
-        return;
-    }
-
-    if (oPlayBGM) {
-        oPlayBGM(gameSystemPtr, trackNumber);
-    } else {
-        LogOut("[BGM] Original playBackgroundMusic function pointer is null!", true);
-    }
-}
-
-bool InstallBGMHook(uintptr_t efzBase) {
-    if (!efzBase) return false;
-    void* target = (void*)(efzBase + 0x68B0); // 0x4068B0 RVA for playBackgroundMusic
-    if (MH_CreateHook(target, &HookedPlayBGM, reinterpret_cast<void**>(&oPlayBGM)) != MH_OK) {
-        LogOut("[BGM] Failed to create playBackgroundMusic hook", true);
-        return false;
-    }
-    if (MH_EnableHook(target) != MH_OK) {
-        LogOut("[BGM] Failed to enable playBackgroundMusic hook", true);
-        return false;
-    }
-    LogOut("[BGM] playBackgroundMusic hook installed", true);
-    return true;
 }
 
 // Stubs retained for ABI compatibility.

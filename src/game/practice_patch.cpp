@@ -48,12 +48,9 @@ void LogPlayerInputsInPracticeMode();
 static bool WriteP2BlockStance(uint8_t stance);
 
 bool EnablePlayer2InPracticeMode() {
-    // CRITICAL: Never modify game state during online mode
-    if (g_onlineModeActive.load()) return false;
-
     // Controller-role changes serialize with the auto-action producer under g_p2ControlMutex.
     std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
-    if (g_onlineModeActive.load(std::memory_order_acquire)) return false;
+    if (!IsPracticeContext()) return false;
     KaoriRecoilDuck::Cancel(2, "Practice enabled P2 human control");
     CancelAutoActionChargeFollowup(2, "Practice enabled P2 human control");
     CancelP2AutoActionMotionTransaction("Practice enabled P2 human control");
@@ -74,19 +71,6 @@ bool EnablePlayer2InPracticeMode() {
         return false;
     }
     LogOut("[PRACTICE_PATCH] Game state pointer: 0x" + std::to_string(gameStatePtr), true);
-
-    uint8_t gameMode = 0;
-    if (!SafeReadMemory(gameStatePtr + GAME_MODE_OFFSET, &gameMode, sizeof(uint8_t))) {
-        LogOut("[PRACTICE_PATCH] Failed to read game mode", true);
-        return false;
-    }
-    LogOut("[PRACTICE_PATCH] Current game mode value: " + std::to_string(gameMode), true);
-
-    if (gameMode != 1) { // 1 = Practice mode
-        LogOut("[PRACTICE_PATCH] Not in practice mode, not applying patch", true);
-        return false;
-    }
-    LogOut("[PRACTICE_PATCH] Practice mode detected, proceeding with patch", true);
 
     uint8_t currentControlFlag = 0;
     if (SafeReadMemory(gameStatePtr + P2_CPU_FLAG_OFFSET, &currentControlFlag, sizeof(uint8_t))) {
@@ -119,19 +103,10 @@ bool EnablePlayer2InPracticeMode() {
         uint32_t aiControlFlag = 0;
         
         if (SafeWriteMemory(p2CharPtr + AI_CONTROL_FLAG_OFFSET, &aiControlFlag, sizeof(uint32_t))) {
-            LogOut("[PRACTICE_PATCH] First attempt: Successfully patched P2 AI control flag to 0", true);
+            LogOut("[PRACTICE_PATCH] Successfully patched P2 AI control flag to 0", true);
             aiPatchSuccess = true;
         } else {
-            LogOut("[PRACTICE_PATCH] First attempt: Failed to patch Player 2 AI control flag", true);
-        }
-        
-        Sleep(10);
-        
-        if (SafeWriteMemory(p2CharPtr + AI_CONTROL_FLAG_OFFSET, &aiControlFlag, sizeof(uint32_t))) {
-            LogOut("[PRACTICE_PATCH] Second attempt: Successfully patched P2 AI control flag to 0", true);
-            aiPatchSuccess = true;
-        } else {
-            LogOut("[PRACTICE_PATCH] Second attempt: Failed to patch Player 2 AI control flag", true);
+            LogOut("[PRACTICE_PATCH] Failed to patch Player 2 AI control flag", true);
         }
     }
     else {

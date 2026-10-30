@@ -49,6 +49,7 @@ static IDirect3DDevice9* g_d3dDevice = nullptr;
 // Attach/detach run on the lifecycle watcher while the window thread reads both.
 static std::atomic<WNDPROC> g_originalWndProc{nullptr};
 static std::atomic<bool> g_wndProcAttached{false};
+static std::atomic<bool> g_wndProcProbeSeen{false};
 // Window messages arrive on the creating thread only; no TLS in the XP injected-DLL build.
 struct WndProcVisit {
     HWND hwnd = nullptr;
@@ -709,6 +710,7 @@ static bool TrainingUiInputActive() {
 }
 
 LRESULT CALLBACK ImGuiWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_NULL) g_wndProcProbeSeen.store(true, std::memory_order_release);
     // A peer re-subclass can close the WndProc chain into a ring; hand the
     // identical re-entering message to the class procedure once and stop.
     if (g_wndProcDepth > 0 && g_wndProcVisit.hwnd == hWnd && g_wndProcVisit.msg == msg
@@ -1459,7 +1461,7 @@ namespace ImGuiImpl {
     }
 
     bool AttachWndProc() {
-        if (!g_imguiInitialized || g_externalFallbackHost || g_wndProcAttached.load(std::memory_order_acquire)) {
+        if (!g_imguiInitialized || g_externalFallbackHost) {
             return false;
         }
         HWND hostWindow = g_imguiHostWindow;
@@ -1470,6 +1472,18 @@ namespace ImGuiImpl {
         if (currentWndProc == ImGuiWndProc) {
             g_wndProcAttached.store(true, std::memory_order_release);
             return true;
+        }
+        if (g_wndProcAttached.load(std::memory_order_acquire)) {
+            // A peer on top either chains to us or replaced us. Re-attaching over a live
+            // chain would close a ring, so only a message that misses us proves a wipe.
+            g_wndProcProbeSeen.store(false, std::memory_order_release);
+            DWORD_PTR ignored = 0;
+            if (!SendMessageTimeoutA(hostWindow, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 250, &ignored)
+                || g_wndProcProbeSeen.load(std::memory_order_acquire)) {
+                return false;
+            }
+            g_wndProcAttached.store(false, std::memory_order_release);
+            LogOut("[IMGUI] WndProc was replaced while attached; re-attaching", true);
         }
         // Publish the forward target before the slot: this runs off the window
         // thread, so a message can reach ImGuiWndProc right after the write.
@@ -1676,6 +1690,7 @@ namespace ImGuiImpl {
             return;
         }
         
+        bool frameStarted = false;
         try {
             const bool useCustomMenu = g_externalFallbackHost || Config::GetSettings().useCustomMenu;
 
@@ -1688,6 +1703,7 @@ namespace ImGuiImpl {
             // Feed our corrected mouse/gamepad inputs after backend NewFrame, before ImGui::NewFrame.
             PreNewFrameInputs();
             ImGui::NewFrame();
+            frameStarted = true;
             // Skip rendering if minimized to avoid style asserts (DisplaySize == 0)
             ImGuiIO& io = ImGui::GetIO();
             if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f) {
@@ -1710,6 +1726,8 @@ namespace ImGuiImpl {
                 ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
             }
         } catch (...) {
+            // EndFrame unwinds open windows and is a no-op once this frame has ended.
+            if (frameStarted) ImGui::EndFrame();
         }
     }
 

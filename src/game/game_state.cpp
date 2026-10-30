@@ -4,6 +4,8 @@
 #include "runtime/practice_battle_gates.h"
 #include "../include/game/game_state.h"
 #include "../include/game/game_thread_queue.h"
+#include "../include/game/final_memory_patch.h"
+#include "../include/game/timer_freeze_patch.h"
 #include "../include/input/framestep.h"
 #include "../include/game/mission/mission_engine.h"
 #include "../include/game/mission/mission_pause_menu.h"
@@ -145,8 +147,9 @@ namespace {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedBattleUpdate>());
     if (!hookExecution.Admitted()) return oBattleUpdate ? oBattleUpdate(battleContext) : SCREEN_BATTLE;
         if (g_onlineModeActive.load(std::memory_order_acquire)
-            || IsNetplaySuspendActive() || IsNetplaySessionActive()) {
-            // Netplay owns this battle: exactly-once original dispatch, nothing else.
+            || IsNetplaySuspendActive() || IsNetplaySessionActive()
+            || !IsPracticeContext()) {
+            // Netplay or another mode owns this battle: exactly-once original dispatch, nothing else.
             return oBattleUpdate ? oBattleUpdate(battleContext) : SCREEN_BATTLE;
         }
         CharacterHotswap::OnBattleFrontendEntry(reinterpret_cast<uintptr_t>(battleContext));
@@ -171,6 +174,10 @@ namespace {
             // Last battle frame: unwind menu/framestep pause while the Practice controller is alive.
             ImGuiImpl::ForceHide();
             Framestep::CancelActiveState("battle exit");
+            PauseIntegration::RestoreVisualSitesAtBoundary("battle exit");
+            // The frame monitor would also restore these, but only after its phase debounce.
+            ForceRestoreFinalMemoryHPBypass("battle exit");
+            TimerFreeze::ForceRestore("battle exit");
             // Queued work belongs to this battle; the next one may hold other fighters.
             GameThread::Clear();
         }
@@ -414,6 +421,13 @@ bool IsPracticeWorldLive() {
 
 void ClearBattleFrontendRouting() {
     s_exitRouting.Arm(GameFrontend::ExitRoute::None);
+}
+
+bool PracticeBattleHooksOpen() {
+    return XInputShim::IsPollingActive()
+        && !g_onlineModeActive.load(std::memory_order_acquire)
+        && !IsNetplaySuspendActive()
+        && !IsNetplaySessionActive();
 }
 
 bool EnsureFrontendControlHooksInstalled() {
@@ -693,13 +707,12 @@ GamePhase GetCurrentGamePhase() {
     }
 
     // Debounce: require 3 consecutive frames before committing
-    static GamePhase lastRaw = GamePhase::Unknown;
-    if (derived == lastRaw) {
+    static std::atomic<GamePhase> lastRaw{GamePhase::Unknown};
+    if (lastRaw.exchange(derived) == derived) {
         int s = g_phaseStableFrames.fetch_add(1) + 1;
         if (s >= 3) g_phaseCache.store(derived);
     } else {
         g_phaseStableFrames.store(0);
-        lastRaw = derived;
     }
 
     return g_phaseCache.load();

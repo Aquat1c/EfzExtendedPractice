@@ -51,6 +51,11 @@ enum class FrontendExitTarget : uint8_t {
 bool EnsureFrontendControlHooksInstalled();
 bool AreFrontendControlHooksInstalled();
 
+// Authority for hook bodies on hot paths: open only in a live Practice battle, shut
+// at battle exit and before netplay publishes. Closed means forward to the original
+// and do nothing else. Atomics only, so it is cheap enough for every call.
+bool PracticeBattleHooksOpen();
+
 using BattleUpdateCallback = void (*)(void* battleContext);
 void SetBattleUpdateCallbacks(BattleUpdateCallback beforeUpdate, BattleUpdateCallback afterUpdate);
 

@@ -1,4 +1,5 @@
 #include "../include/gui/custom_menu/screens.h"
+#include "../include/gui/custom_menu/anim.h"
 #include "../include/gui/custom_menu/layout.h"
 #include "../include/gui/custom_menu/theme.h"
 #include "../include/gui/custom_menu/scale.h"
@@ -6,6 +7,7 @@
 #include "../include/gui/custom_menu/sound.h"
 #include "../include/core/constants.h"
 #include "../include/utils/config.h"
+#include "../include/game/collision_display.h"
 #include "../include/utils/i18n.h"
 #include "../include/utils/utilities.h"     // detectedBindings
 #include "../include/utils/xinput_shim.h"
@@ -225,11 +227,6 @@ const char* DefaultActionHelpText(const char* label) {
     if (TextEquals(label, "LOAD PRACTICE SNAPSHOT")) return "Sets the input used to load the Practice snapshot.";
     if (TextEquals(label, "SAVESTATE SAVE")) return "Sets the raw key code used to save the Practice snapshot.";
     if (TextEquals(label, "SAVESTATE LOAD")) return "Sets the raw key code used to load the Practice snapshot.";
-    if (TextEquals(label, "CLEAR CURRENT STATE")) return "Clears the working savestate from memory.";
-    if (TextEquals(label, "LOAD SLOT TO CURRENT STATE")) return "Loads the chosen disk slot into the working savestate.";
-    if (TextEquals(label, "SAVE CURRENT STATE TO SLOT")) return "Writes the working savestate to the chosen disk slot.";
-    if (TextEquals(label, "HOTSWAP TO LOADED MATCH")) return "Applies the loaded match's characters and stage before restoring.";
-    if (TextEquals(label, "KEEP CURRENT MATCH")) return "Keeps the current matchup and dismisses the hotswap prompt.";
 
     if (TextEquals(label, "UI ACCEPT")) return "Sets the menu confirm input.";
     if (TextEquals(label, "UI REFRESH")) return "Sets the menu refresh input.";
@@ -315,7 +312,6 @@ const char* DefaultToggleHelpText(const char* label) {
     if (LabelEquals(label, "AUTO-FIX HP<=0")) return "Refills a fighter to 9999 HP if it is left at 0 or below while neutral.";
     if (LabelEquals(label, "FREEZE RF AFTER CR")) return "Keeps RF fixed after continuous recovery restores it.";
     if (LabelEquals(label, "FREEZE RF ONLY NEUTRAL")) return "Freezes RF only while that fighter is neutral. CR: Both Neutral Reqd makes it wait for both.";
-    if (LabelEquals(label, "RESTRICT TO PRACTICE")) return "Limits training-mode features to Practice mode.";
     if (LabelEquals(label, "CUSTOM SWAP KEY")) return "Enables a separate custom hotkey for position swapping.";
     if (LabelEquals(label, "ENABLE P2 CONTROL")) return "Enables P2 controls in Practice mode; F6/F7 stance and blocking hotkeys are unavailable while this is on.";
     if (LabelEquals(label, "RANDOM BLOCK")) return "Coin-flips the dummy's guard each frame inside the Dummy Auto-Block window, so some hits land.";
@@ -381,21 +377,12 @@ const char* DefaultNumberHelpText(const char* label) {
     if (LabelEquals(label, "CR NEUTRAL DELAY (MS)")) return "Sets how long both players must stay neutral before continuous recovery applies.";
     if (LabelEquals(label, "AUTO-BLOCK TIMEOUT (MS)")) return "Sets how long neutral must last before First Hit and After Hit reset. 0 resets as soon as neutral starts.";
     if (LabelEquals(label, "CURRENT SLOT")) return "Chooses the active macro slot.";
-    if (LabelEquals(label, "LOCAL SIDE")) return "Sets which player side is treated as local control in the saved state.";
     if (LabelEquals(label, "AIRTECH DELAY")) return "Waits this many frames after the dummy can tech before it airtechs.";
     if (LabelEquals(label, "DELAY")) return "Waits this many frames before the dummy starts the selected response.";
     if (LabelEquals(label, "RF AMOUNT")) return "Sets the RF value restored by custom F4 recovery.";
     if (LabelEquals(label, "FA DURATION (SEC)")) return "Sets how long frame advantage results stay on screen.";
     if (LabelEquals(label, "SUMMARY TIME")) return "Sets how long the final combo summary remains visible.";
 
-    if (LabelEquals(label, "HP")) return "Sets the saved health value for this player.";
-    if (LabelEquals(label, "METER")) return "Sets the saved meter value for this player.";
-    if (LabelEquals(label, "RF")) return "Sets the saved RF value for this player.";
-    if (LabelEquals(label, "X")) return "Sets the saved horizontal position for this player.";
-    if (LabelEquals(label, "Y")) return "Sets the saved vertical position for this player.";
-    if (LabelEquals(label, "X VEL")) return "Sets the saved horizontal velocity for this player.";
-    if (LabelEquals(label, "Y VEL")) return "Sets the saved vertical velocity for this player.";
-    if (LabelEquals(label, "CPU")) return "Shows if this player is CPU-controlled in the saved state. Local Side sets it; editing here does nothing.";
     if (LabelEquals(label, "BLOOD STOCK")) return "Sets Ikumi's blood stock, 0 to 8.";
     if (LabelEquals(label, "FEATHERS")) return "Sets Misuzu's feather count, 0 to 3.";
     if (LabelEquals(label, "JAM COUNT")) return "Sets Neyuki's stored jam count, 0 to 9.";
@@ -424,7 +411,7 @@ const char* DefaultChoiceHelpText(const char* label) {
     if (LabelEquals(label, "UI FONT (ADVANCED MENU)")) return "Chooses which font the advanced ImGui menu uses.";
     if (LabelEquals(label, "TRIGGER")) return "Chooses which auto-action timing you are editing on this page.";
     if (LabelEquals(label, "ELEMENT")) return "Sets Mishio's element to none, fire, or lightning, or forces her awakened state.";
-    if (LabelEquals(label, "TIME-SLOW TRIGGER")) return "Shows which Akiko time-slow is running: none, A, B, or C. Changing it here does not start one.";
+    if (LabelEquals(label, "TIME-SLOW TRIGGER")) return "Shows which Akiko time-slow is running: none, A, B, or C.";
     if (LabelEquals(label, "STANCE")) return "Chooses Mio's short or long stance.";
     if (LabelEquals(label, "STATUS")) return "Chooses Mai's ghost or awakening state.";
     if (LabelEquals(label, "DUMMY AUTO-BLOCK")) return "Chooses when the dummy blocks: never, every hit, only the first hit, or only after the first hit.";
@@ -484,10 +471,6 @@ const char* DefaultSubmenuHelpText(const char* label) {
     if (LabelEquals(label, "INPUT / RUNTIME")) return "Opens switch-player controls and RF freeze cancels.";
     if (LabelEquals(label, "BGM")) return "Opens music playback debug tools.";
     if (LabelEquals(label, "FINAL MEMORY")) return "Opens Final Memory test actions.";
-    if (LabelEquals(label, "SLOTS")) return "Opens disk slot load and save controls.";
-    if (LabelEquals(label, "EDIT P1")) return "Opens editable Player 1 savestate values.";
-    if (LabelEquals(label, "EDIT P2")) return "Opens editable Player 2 savestate values.";
-    if (LabelEquals(label, "EDIT MATCH")) return "Opens editable match-level savestate values.";
     if (LabelEquals(label, "SERIALIZED MACRO")) return "Opens macro text import, export, and editing tools.";
     if (LabelEquals(label, "SLOT STATS")) return "Opens length, timing, and input stats for the current macro slot.";
     if (LabelEquals(label, "QUICK START")) return "Opens the quick-start help page.";
@@ -839,6 +822,8 @@ struct RowRect {
     float h = 0.0f;
     bool  visible = false;
 };
+// Stack-allocated per pass; must cover the largest builder (BuildPoolDelayRows, 224).
+constexpr int kMaxListRows = 256;
 
     // Row rects; under scroll, visible rows intersect [contentTopY, contentBottomY].
 // scroll offset, visible rows are those whose rect intersects
@@ -877,9 +862,12 @@ int FindFocusable(const Row* rows, int rowCount, int from, int dir) {
 }
 
 constexpr int kMaxSubmenuDepth = 4;
-constexpr float kSubmenuAnimMs = 170.0f;
-constexpr float kSubmenuSlidePx = 78.0f;
-constexpr double kDegToRadDivisor = 57.29579143313326;
+constexpr float kSubmenuAnimMs = 130.0f;
+constexpr float kSubmenuSlidePx = 36.0f;
+constexpr float kPopupAnimMs = 100.0f;
+constexpr float kPopupSlidePx = 24.0f;
+using Anim::AnimT;
+using Anim::EfzCosEase;
 
 struct SubmenuFrame {
     const char* title = nullptr;
@@ -920,22 +908,6 @@ void ResetMouseTrackingState() {
     g_listMouseMoved = false;
 }
 
-float Clamp01(float v) {
-    if (v < 0.0f) return 0.0f;
-    if (v > 1.0f) return 1.0f;
-    return v;
-}
-
-float AnimT(DWORD startTick, float durationMs) {
-    if (startTick == 0 || durationMs <= 0.0f) return 1.0f;
-    return Clamp01(static_cast<float>(GetTickCount() - startTick) / durationMs);
-}
-
-float EfzCosEase(float t01) {
-    const double degrees = 180.0 * Clamp01(t01);
-    return static_cast<float>((1.0 - std::cos(degrees / kDegToRadDivisor)) * 0.5);
-}
-
 float CurrentSubmenuOffsetX() {
     if (g_submenus.animTick == 0) return 0.0f;
     const float ease = EfzCosEase(AnimT(g_submenus.animTick, kSubmenuAnimMs));
@@ -943,7 +915,7 @@ float CurrentSubmenuOffsetX() {
 }
 
 void StartSubmenuAnimation(int dir) {
-    g_submenus.animTick = GetTickCount();
+    g_submenus.animTick = Anim::NowTick();
     g_submenus.animDir = (dir < 0) ? -1 : 1;
 }
 
@@ -1326,22 +1298,23 @@ struct PopupState {
     const int* choiceCategoryMap = nullptr;
     const char* const* categoryChoices = nullptr;
     int categoryCount = 0;
-    bool categoryMode = false;
+    DWORD slideTick = 0;
+    DWORD openTick = 0;
+    int slideDir = 1;
     int selectedCategory = 0;
     const char* filteredChoices[128]{};
     int filteredChoiceValues[128]{};
+    // Categorized list layout: rows include the group headers.
+    const char* filteredHeaders[128]{};
+    bool filteredIndented[128]{};
+    int filteredRows[128]{};
+    int filteredRowCount = 0;
     int filteredChoiceCount = 0;
     int focusIdx = 0;
     float scrollPx = 0.0f;
     Row sourceRow{};
     void (*onChange)() = nullptr;
     PairedChoiceChange onPrimaryChoiceChange = nullptr;
-    // Live targets of sourceRow.intPtr / choiceVariantPtr while those point at the
-    // pending copies below; written back only when a choice is confirmed.
-    int* variantTarget = nullptr;
-    int* variant2Target = nullptr;
-    int pendingVariant = 0;
-    int pendingVariant2 = 0;
 };
 PopupState g_popup;
 
@@ -1360,7 +1333,7 @@ inline bool PopupIsCategorized() {
            g_popup.allChoices != nullptr &&
            g_popup.allChoiceCount > 0;
 }
-inline bool PopupShowsChecks() { return PopupIsMulti() && !(PopupIsCategorized() && g_popup.categoryMode); }
+inline bool PopupShowsChecks() { return PopupIsMulti(); }
 
 bool PopupMaskBitSet(int choiceValue) {
     if (choiceValue < 0 || choiceValue >= 128) return false;
@@ -1459,7 +1432,6 @@ bool PopupSourceMatchesRow(const Row& row) {
 
 int PopupFocusedChoiceValueForRow(const Row& row) {
     if (!g_popup.active || !PopupSourceMatchesRow(row)) return -1;
-    if (PopupIsCategorized() && g_popup.categoryMode) return -1;
     if (g_popup.focusIdx < 0 || g_popup.focusIdx >= g_popup.choiceCount) return -1;
     return PopupChoiceValueAt(g_popup.focusIdx);
 }
@@ -1556,7 +1528,7 @@ void FormatMaskSelectionPreviewText(const MaskSelectionPreview& preview, char* b
         const char* text = (preview.tokens[i].text && *preview.tokens[i].text)
                          ? preview.tokens[i].text
                          : "?";
-        strncat_s(buf, bufSize, text, _TRUNCATE);
+        strncat_s(buf, bufSize, I18n::Tr(text), _TRUNCATE);
     }
     if (preview.overflow) {
         strncat_s(buf, bufSize, ", ...", _TRUNCATE);
@@ -1598,32 +1570,16 @@ bool DrawMaskSelectionPreviewRow(ImDrawList* dl, float x, float y, float w,
 
 const char* PopupChoiceDisplayText(int index) {
     if (index < 0 || index >= g_popup.choiceCount) return "";
-    if (!(PopupIsCategorized() && g_popup.categoryMode) &&
-        g_popup.sourceRow.choiceValueFormatter) {
+    if (g_popup.sourceRow.choiceValueFormatter) {
         const char* formatted = g_popup.sourceRow.choiceValueFormatter(g_popup.sourceRow, PopupChoiceValueAt(index));
         if (formatted) return formatted;
     }
     return (g_popup.choices && g_popup.choices[index]) ? g_popup.choices[index] : "";
 }
 
-bool PopupAdjustFocusedChoice(int direction) {
-    if (direction == 0 ||
-        PopupIsMulti() ||
-        (PopupIsCategorized() && g_popup.categoryMode) ||
-        !g_popup.sourceRow.choiceValueAdjuster) {
-        return false;
-    }
-    if (g_popup.focusIdx < 0 || g_popup.focusIdx >= g_popup.choiceCount) return false;
-    const int choiceValue = PopupChoiceValueAt(g_popup.focusIdx);
-    return g_popup.sourceRow.choiceValueAdjuster(g_popup.sourceRow, choiceValue, direction);
-}
-
 const char* PopupHelpText() {
     static char s_buf[240];
     if (!g_popup.active) return nullptr;
-    if (PopupIsCategorized() && g_popup.categoryMode) {
-        return "Choose an action category, then pick the exact action inside it.";
-    }
     if (PopupIsMulti() && g_popup.sourceRow.choiceHelpFormatter &&
         g_popup.focusIdx >= 0 && g_popup.focusIdx < g_popup.choiceCount) {
         const char* text = g_popup.sourceRow.choiceHelpFormatter(g_popup.sourceRow,
@@ -1634,7 +1590,7 @@ const char* PopupHelpText() {
         g_popup.focusIdx >= 0 && g_popup.focusIdx < g_popup.choiceCount) {
         const char* choice = PopupChoiceDisplayText(g_popup.focusIdx);
         _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE,
-                    I18n::Tr("Select %s for this row; left and right change variants before confirming."),
+                    I18n::Tr("Select %s for this row."),
                     I18n::Tr((choice && *choice) ? choice : "this option"));
         return s_buf;
     }
@@ -1645,12 +1601,13 @@ const char* PopupHelpText() {
 }
 
 int PopupColumnCount() {
-    if (PopupIsCategorized() && g_popup.categoryMode) return 1;
+    if (PopupIsCategorized()) return 1;
     if (g_popup.choiceCount >= 54) return 3;
     return g_popup.choiceCount >= 12 ? 2 : 1;
 }
 
 int PopupRowCount() {
+    if (PopupIsCategorized()) return g_popup.filteredRowCount;
     const int columns = PopupColumnCount();
     return columns > 0 ? (g_popup.choiceCount + columns - 1) / columns : g_popup.choiceCount;
 }
@@ -1660,12 +1617,16 @@ float PopupColumnGap() {
 }
 
 float PopupHeaderHeight() {
+    if (PopupIsCategorized()) return Scale::Snap(Scale::Get().tabBarHeight + 6.0f);
     ImFont* bFont = Layout::BodyFont();
     const float bPx = bFont ? bFont->FontSize : 13.0f;
     return Scale::Snap(bPx + 18.0f * Scale::Get().layoutScale);
 }
 
 int PopupIndexRow(int index) {
+    if (PopupIsCategorized()) {
+        return (index >= 0 && index < g_popup.choiceCount) ? g_popup.filteredRows[index] : 0;
+    }
     const int rows = PopupRowCount();
     return rows > 0 ? index % rows : 0;
 }
@@ -1675,7 +1636,14 @@ int PopupIndexColumn(int index) {
     return rows > 0 ? index / rows : 0;
 }
 
+// A categorized header row resolves to the choice below it.
 int PopupCellToIndex(int column, int row) {
+    if (PopupIsCategorized()) {
+        for (int i = 0; i < g_popup.choiceCount; ++i) {
+            if (g_popup.filteredRows[i] >= row) return i;
+        }
+        return -1;
+    }
     const int rows = PopupRowCount();
     if (rows <= 0) return -1;
     const int index = column * rows + row;
@@ -1723,7 +1691,8 @@ int PopupIndexFromPoint(const PopupGeom& g, float x, float y) {
         return -1;
     }
 
-    return PopupCellToIndex(column, row);
+    const int index = PopupCellToIndex(column, row);
+    return (index >= 0 && PopupIndexRow(index) == row) ? index : -1;
 }
 
 void PopupMoveFocus(int rowDelta, int columnDelta) {
@@ -1762,19 +1731,69 @@ int PopupCategoryForChoice(int choiceValue) {
     return ClampPopupIndex(g_popup.choiceCategoryMap[choiceValue], g_popup.categoryCount);
 }
 
-void PopupShowCategoryRoot(int focusCategory) {
-    if (!PopupIsCategorized()) return;
-    g_popup.categoryMode = true;
-    g_popup.choices = g_popup.categoryChoices;
-    g_popup.choiceValueMap = nullptr;
-    g_popup.choiceCount = g_popup.categoryCount;
-    g_popup.focusIdx = ClampPopupIndex(focusCategory, g_popup.categoryCount);
-    g_popup.scrollPx = 0.0f;
+void PopupStartSlide(int direction) {
+    g_popup.slideTick = Anim::NowTick();
+    g_popup.slideDir = (direction < 0) ? -1 : 1;
 }
 
+bool PopupCategoryHasChoices(int category) {
+    for (int i = 0; i < g_popup.allChoiceCount; ++i) {
+        if (g_popup.choiceCategoryMap[i] == category && RowChoiceVisible(g_popup.sourceRow, i)) return true;
+    }
+    return false;
+}
+
+constexpr int kMaxPopupTabs = 12;
+constexpr float kCategorizedPopupRows = 15.0f;
+
+// Categories with nothing to pick get no tab.
+int PopupTabs(const char** labels, int* categories) {
+    int count = 0;
+    for (int c = 0; c < g_popup.categoryCount && count < kMaxPopupTabs; ++c) {
+        if (!PopupCategoryHasChoices(c)) continue;
+        labels[count] = g_popup.categoryChoices[c];
+        categories[count++] = c;
+    }
+    return count;
+}
+
+bool PopupSameGroup(const char* a, const char* b) {
+    return a && b && std::strcmp(a, b) == 0;
+}
+
+// A lone entry gets no header: it would only repeat its own name.
+void PopupLayoutGroups() {
+    const RowChoiceValueFormatter groupOf = g_popup.sourceRow.choiceGroupFormatter;
+    const int count = g_popup.filteredChoiceCount;
+    const char* previous = nullptr;
+    int row = 0;
+    for (int i = 0; i < count; ++i) {
+        const int value = g_popup.filteredChoiceValues[i];
+        const char* group = groupOf ? groupOf(g_popup.sourceRow, value) : nullptr;
+        const char* next = (groupOf && i + 1 < count)
+            ? groupOf(g_popup.sourceRow, g_popup.filteredChoiceValues[i + 1]) : nullptr;
+        const bool joinsPrevious = PopupSameGroup(group, previous);
+        const bool joinsNext = PopupSameGroup(group, next);
+        g_popup.filteredHeaders[i] = (!joinsPrevious && joinsNext) ? group : nullptr;
+        g_popup.filteredIndented[i] = joinsPrevious || joinsNext;
+        if (g_popup.filteredHeaders[i]) ++row;
+        g_popup.filteredRows[i] = row++;
+        previous = group;
+    }
+    g_popup.filteredRowCount = row;
+}
+
+// An empty category has no tab, so a request for one lands on the next non-empty one.
 void PopupOpenCategory(int category) {
     if (!PopupIsCategorized()) return;
     category = ClampPopupIndex(category, g_popup.categoryCount);
+    for (int step = 0; step < g_popup.categoryCount; ++step) {
+        const int candidate = (category + step) % g_popup.categoryCount;
+        if (PopupCategoryHasChoices(candidate)) {
+            category = candidate;
+            break;
+        }
+    }
     g_popup.selectedCategory = category;
     g_popup.filteredChoiceCount = 0;
     for (int i = 0; i < g_popup.allChoiceCount && g_popup.filteredChoiceCount < 128; ++i) {
@@ -1784,12 +1803,8 @@ void PopupOpenCategory(int category) {
         g_popup.filteredChoices[local] = g_popup.allChoices[i];
         g_popup.filteredChoiceValues[local] = i;
     }
-    if (g_popup.filteredChoiceCount <= 0) {
-        PopupShowCategoryRoot(category);
-        return;
-    }
-
-    g_popup.categoryMode = false;
+    PopupLayoutGroups();
+    PopupStartSlide(+1);
     g_popup.choices = g_popup.filteredChoices;
     g_popup.choiceValueMap = g_popup.filteredChoiceValues;
     g_popup.choiceCount = g_popup.filteredChoiceCount;
@@ -1804,6 +1819,28 @@ void PopupOpenCategory(int category) {
         }
     }
     g_popup.scrollPx = 0.0f;
+}
+
+bool PopupCycleCategory(int direction) {
+    if (!PopupIsCategorized()) return false;
+    for (int step = 1; step < g_popup.categoryCount; ++step) {
+        const int candidate = (g_popup.selectedCategory + direction * step +
+                               g_popup.categoryCount * step) % g_popup.categoryCount;
+        if (!PopupCategoryHasChoices(candidate)) continue;
+        PopupOpenCategory(candidate);
+        PopupStartSlide(direction);
+        return true;
+    }
+    return false;
+}
+
+void PopupStepHorizontal(int direction) {
+    if (PopupCycleCategory(direction)) {
+        Sound::PlayCursor();
+    } else if (PopupColumnCount() > 1) {
+        PopupMoveFocus(0, direction);
+        Sound::PlayCursor();
+    }
 }
 
 bool AdjustCategorizedRowChoice(const Row& r, int direction) {
@@ -1835,24 +1872,11 @@ void OpenDropdownPopup(const Row& r) {
     g_popup.maskHiPtr = nullptr;
     g_popup.companionIdxPtr = (r.kind == RowKind::ActionStrength) ? r.choice2IdxPtr : nullptr;
     g_popup.sourceRow = r;
-    g_popup.variantTarget = nullptr;
-    g_popup.variant2Target = nullptr;
-    if (r.choiceValueAdjuster && r.intPtr) {
-        g_popup.variantTarget = r.intPtr;
-        g_popup.pendingVariant = *r.intPtr;
-        g_popup.sourceRow.intPtr = &g_popup.pendingVariant;
-    }
-    if (r.choiceValueAdjuster && r.choiceVariantPtr) {
-        g_popup.variant2Target = r.choiceVariantPtr;
-        g_popup.pendingVariant2 = *r.choiceVariantPtr;
-        g_popup.sourceRow.choiceVariantPtr = &g_popup.pendingVariant2;
-    }
     g_popup.allChoices = nullptr;
     g_popup.allChoiceCount = 0;
     g_popup.choiceCategoryMap = nullptr;
     g_popup.categoryChoices = nullptr;
     g_popup.categoryCount = 0;
-    g_popup.categoryMode = false;
     g_popup.selectedCategory = 0;
     g_popup.filteredChoiceCount = 0;
     if (r.kind == RowKind::ActionStrength) {
@@ -1867,7 +1891,7 @@ void OpenDropdownPopup(const Row& r) {
         g_popup.categoryChoices = r.categoryChoices;
         g_popup.categoryCount = r.categoryCount;
         g_popup.selectedCategory = PopupCategoryForChoice(*r.choiceIdxPtr);
-        PopupShowCategoryRoot(g_popup.selectedCategory);
+        PopupOpenCategory(g_popup.selectedCategory);
     } else {
         g_popup.choices = r.choices;
         g_popup.choiceValueMap = nullptr;
@@ -1875,6 +1899,8 @@ void OpenDropdownPopup(const Row& r) {
         g_popup.focusIdx = *r.choiceIdxPtr;
     }
     g_popup.scrollPx = 0.0f;
+    PopupStartSlide(+1);
+    g_popup.openTick = g_popup.slideTick;
     g_popup.onChange = r.onChange;
     g_popup.onPrimaryChoiceChange = r.onPrimaryChoiceChange;
     Sound::PlayDecision();
@@ -1895,7 +1921,6 @@ void OpenMaskPopup(const Row& r) {
     g_popup.choiceCategoryMap = nullptr;
     g_popup.categoryChoices = nullptr;
     g_popup.categoryCount = 0;
-    g_popup.categoryMode = false;
     g_popup.selectedCategory = 0;
     g_popup.filteredChoiceCount = 0;
     if (RowUsesCategorizedChoices(r)) {
@@ -1913,8 +1938,7 @@ void OpenMaskPopup(const Row& r) {
                 break;
             }
         }
-        g_popup.selectedCategory = focusCategory;
-        PopupShowCategoryRoot(focusCategory);
+        PopupOpenCategory(focusCategory);
     } else {
         if (r.choiceFilter) {
             g_popup.filteredChoiceCount = 0;
@@ -1935,6 +1959,8 @@ void OpenMaskPopup(const Row& r) {
         g_popup.focusIdx = 0;
     }
     g_popup.scrollPx = 0.0f;
+    PopupStartSlide(+1);
+    g_popup.openTick = g_popup.slideTick;
     g_popup.onChange = r.onChange;
     g_popup.onPrimaryChoiceChange = nullptr;
     Sound::PlayDecision();
@@ -1956,7 +1982,6 @@ void ClosePopup() {
     g_popup.choiceCategoryMap = nullptr;
     g_popup.categoryChoices = nullptr;
     g_popup.categoryCount = 0;
-    g_popup.categoryMode = false;
     g_popup.selectedCategory = 0;
     g_popup.filteredChoiceCount = 0;
     g_popup.focusIdx = 0;
@@ -1964,8 +1989,6 @@ void ClosePopup() {
     g_popup.sourceRow = Row{};
     g_popup.onChange = nullptr;
     g_popup.onPrimaryChoiceChange = nullptr;
-    g_popup.variantTarget = nullptr;
-    g_popup.variant2Target = nullptr;
 }
 
 bool PopupActive() { return g_popup.active; }
@@ -1973,8 +1996,12 @@ bool PopupActive() { return g_popup.active; }
 void PopupEnsureFocusVisible(float viewportH) {
     const float rowH = Scale::Get().rowHeight;
     const float desiredY = static_cast<float>(PopupIndexRow(g_popup.focusIdx)) * rowH;
-    if (desiredY < g_popup.scrollPx) {
-        g_popup.scrollPx = desiredY;
+    const bool focusHasHeader = PopupIsCategorized() && g_popup.focusIdx >= 0 &&
+                                g_popup.focusIdx < g_popup.choiceCount &&
+                                g_popup.filteredHeaders[g_popup.focusIdx];
+    const float topY = focusHasHeader ? desiredY - rowH : desiredY;
+    if (topY < g_popup.scrollPx) {
+        g_popup.scrollPx = topY;
     } else if (desiredY + rowH > g_popup.scrollPx + viewportH) {
         g_popup.scrollPx = desiredY + rowH - viewportH;
     }
@@ -1995,7 +2022,7 @@ PopupGeom ComputePopupGeom(const ScreenLayout& layout) {
     const float headerHeight = PopupHeaderHeight();
     const float prefixW = Layout::MeasureTextW(bFont, bPx, PopupShowsChecks() ? "> [X] " : "> ");
     float widestChoiceW = 0.0f;
-    for (int i = 0; i < g_popup.choiceCount; ++i) {
+    for (int i = 0; i < g_popup.choiceCount && !PopupIsCategorized(); ++i) {
         const char* text = PopupChoiceDisplayText(i);
         widestChoiceW = (std::max)(widestChoiceW, Layout::MeasureTextW(bFont, bPx, text));
     }
@@ -2010,6 +2037,15 @@ PopupGeom ComputePopupGeom(const ScreenLayout& layout) {
     const float maxH = Scale::Snap((layout.contentBottomY - layout.contentTopY) - 20.0f);
     const float desiredH = Scale::Snap(static_cast<float>(PopupRowCount()) * g.rowH + headerHeight + 8.0f);
     g.popupH = (desiredH < maxH) ? desiredH : maxH;
+    // Fixed size, or the tab strip would move with each category's list.
+    if (PopupIsCategorized()) {
+        const char* tabLabels[kMaxPopupTabs];
+        int tabCategories[kMaxPopupTabs];
+        const int tabCount = PopupTabs(tabLabels, tabCategories);
+        const float tabsW = Layout::TabBarWidth(tabLabels, tabCount) + 16.0f + Scale::Snap(32.0f * metrics.layoutScale);
+        g.popupW = Scale::Snap((std::min)((std::max)(320.0f * metrics.layoutScale, tabsW), maxW));
+        g.popupH = (std::min)(maxH, Scale::Snap(kCategorizedPopupRows * g.rowH + headerHeight + 8.0f));
+    }
     g.px = Scale::Snap(layout.panelX + (kPanelW - g.popupW) * 0.5f);
     g.py = Scale::Snap(layout.contentTopY + ((layout.contentBottomY - layout.contentTopY) - g.popupH) * 0.5f);
     g.listX = Scale::Snap(g.px + 8.0f);
@@ -2018,6 +2054,18 @@ PopupGeom ComputePopupGeom(const ScreenLayout& layout) {
     g.listH = Scale::Snap(g.popupH - headerHeight - 8.0f);
     if (g.listH < g.rowH) g.listH = g.rowH;
     return g;
+}
+
+// Wheel scrolling carries focus along, or PopupEnsureFocusVisible scrolls straight back.
+void PopupMoveFocusIntoView(const PopupGeom& g) {
+    if (g.rowH <= 0.0f) return;
+    const int firstRow = static_cast<int>(std::ceil(g_popup.scrollPx / g.rowH));
+    const int lastRow = (std::max)(firstRow, static_cast<int>(std::floor((g_popup.scrollPx + g.listH) / g.rowH)) - 1);
+    const int column = PopupIndexColumn(g_popup.focusIdx);
+    const int row = (std::min)((std::max)(PopupIndexRow(g_popup.focusIdx), firstRow), lastRow);
+    int next = PopupCellToIndex(column, row);
+    if (next < 0 && column > 0) next = PopupCellToIndex(column - 1, row); // last column can be short
+    if (next >= 0) g_popup.focusIdx = next;
 }
 
     // Input-only pass: the popup must see edges BEFORE the list drains them.
@@ -2029,16 +2077,10 @@ void PopupTickInputOnly(const ScreenLayout& layout) {
 
     auto toggleAt = [&](int i) -> bool {
         if (i < 0 || i >= g_popup.choiceCount) return false;
-        if (PopupIsCategorized() && g_popup.categoryMode) {
-            PopupOpenCategory(i);
-            return false;
-        }
         if (isMulti) {
             const int choiceValue = PopupChoiceValueAt(i);
             PopupToggleMaskBit(choiceValue);
         } else {
-            if (g_popup.variantTarget) *g_popup.variantTarget = g_popup.pendingVariant;
-            if (g_popup.variant2Target) *g_popup.variant2Target = g_popup.pendingVariant2;
             *g_popup.choiceIdxPtr = PopupUsesMappedChoiceValues() ? g_popup.choiceValueMap[i] : i;
             if (g_popup.onPrimaryChoiceChange) {
                 g_popup.onPrimaryChoiceChange(g_popup.choiceIdxPtr, g_popup.companionIdxPtr);
@@ -2054,8 +2096,11 @@ void PopupTickInputOnly(const ScreenLayout& layout) {
     const bool navRight = Input::NavRight();
     const bool activate = Input::Activate();
     const bool back     = Input::Back();
+    const int categoryStep = (Input::TopTabNext() || Input::SubTabNext()) ? 1
+                           : (Input::TopTabPrev() || Input::SubTabPrev()) ? -1 : 0;
     const bool keyboardOrPadEdge = navUp || navDown || navLeft || navRight ||
-                                   activate || back || Input::SwitchPlayer();
+                                   activate || back || categoryStep != 0 ||
+                                   Input::SwitchPlayer();
 
     const unsigned int frame = ImGui::GetFrameCount();
     if (frame != g_popupMouseFrame) {
@@ -2078,24 +2123,11 @@ void PopupTickInputOnly(const ScreenLayout& layout) {
         }
     }
 
+    if (categoryStep != 0 && PopupCycleCategory(categoryStep)) Sound::PlayCursor();
     if (navUp)    { PopupMoveFocus(-1, 0); Sound::PlayCursor(); }
     if (navDown)  { PopupMoveFocus(+1, 0); Sound::PlayCursor(); }
-    if (navLeft) {
-        if (PopupAdjustFocusedChoice(-1)) {
-            Sound::PlayCursor();
-        } else if (PopupColumnCount() > 1) {
-            PopupMoveFocus(0, -1);
-            Sound::PlayCursor();
-        }
-    }
-    if (navRight) {
-        if (PopupAdjustFocusedChoice(+1)) {
-            Sound::PlayCursor();
-        } else if (PopupColumnCount() > 1) {
-            PopupMoveFocus(0, +1);
-            Sound::PlayCursor();
-        }
-    }
+    if (navLeft) PopupStepHorizontal(-1);
+    if (navRight) PopupStepHorizontal(+1);
     if (activate) {
         const bool closeAfterPick = toggleAt(g_popup.focusIdx);
         Sound::PlayDecision();
@@ -2103,21 +2135,34 @@ void PopupTickInputOnly(const ScreenLayout& layout) {
     }
     if (back) {
         Sound::PlayDecision();
-        if (PopupIsCategorized() && !g_popup.categoryMode) {
-            PopupShowCategoryRoot(g_popup.selectedCategory);
-            return;
-        }
         ClosePopup();
         return;
     }
 
-    const float wheel = ImGui::GetIO().MouseWheel;
-    if (wheel != 0.0f) g_popup.scrollPx = Scale::Snap(g_popup.scrollPx - wheel * g.rowH * 3.0f);
+    const float wheel = Input::MouseWheel();
+    if (wheel != 0.0f) {
+        const float total = static_cast<float>(PopupRowCount()) * g.rowH;
+        const float maxScroll = (total > g.listH) ? (total - g.listH) : 0.0f;
+        g_popup.scrollPx = Scale::Snap((std::min)((std::max)(g_popup.scrollPx - wheel * g.rowH * 3.0f, 0.0f), maxScroll));
+        PopupMoveFocusIntoView(g);
+    }
 
     const bool mouseLeftEdge = Input::MouseLeftEdge();
     if (!keyboardOrPadEdge && mouseLeftEdge) {
         const auto mouse = Input::GetMouse();
         if (mouse.valid) {
+            if (PopupIsCategorized() && mouse.y >= g.py && mouse.y < g.listY) {
+                const char* tabLabels[kMaxPopupTabs];
+                int tabCategories[kMaxPopupTabs];
+                const int tabCount = PopupTabs(tabLabels, tabCategories);
+                const int tab = Layout::TabBarIndexAt(g.listX, g.listW, tabLabels, tabCount, mouse.x);
+                if (tab >= 0 && tabCategories[tab] != g_popup.selectedCategory) {
+                    const int direction = tabCategories[tab] < g_popup.selectedCategory ? -1 : +1;
+                    PopupOpenCategory(tabCategories[tab]);
+                    PopupStartSlide(direction);
+                    Sound::PlayCursor();
+                }
+            }
             const int hovered = PopupIndexFromPoint(g, mouse.x, mouse.y);
             if (hovered >= 0) {
                 const bool closeAfterPick = toggleAt(hovered);
@@ -2148,6 +2193,10 @@ void PopupRender(ImDrawList* dl, const ScreenLayout& layout) {
     if (!g_popup.active || !dl) return;
     using namespace Theme;
     const PopupGeom g = ComputePopupGeom(layout);
+    const float slideT = AnimT(g_popup.slideTick, kPopupAnimMs);
+    const float slideX = Scale::Snap((1.0f - EfzCosEase(slideT)) * kPopupSlidePx *
+                                     static_cast<float>(g_popup.slideDir));
+    const int popupFirstVertex = dl->VtxBuffer.Size;
 
     ImFont* bFont = Layout::BodyFont();
     const float bPx = bFont ? bFont->FontSize : 13.0f;
@@ -2155,26 +2204,27 @@ void PopupRender(ImDrawList* dl, const ScreenLayout& layout) {
     dl->AddRectFilled(ImVec2(Scale::Snap(layout.panelX - 2.0f), Scale::Snap(layout.contentTopY - 2.0f)),
                       ImVec2(Scale::Snap(layout.panelX + kPanelW + 2.0f), Scale::Snap(layout.contentBottomY + 2.0f)),
                       IM_COL32(0, 0, 0, 160));
-    dl->AddRectFilled(ImVec2(g.px, g.py), ImVec2(g.px + g.popupW, g.py + g.popupH), kPanel);
+    dl->AddRectFilled(ImVec2(g.px, g.py), ImVec2(g.px + g.popupW, g.py + g.popupH), IM_COL32(0, 0, 0, 235));
     dl->AddRect      (ImVec2(g.px, g.py), ImVec2(g.px + g.popupW, g.py + g.popupH), kRule);
 
-    const float titleY = Scale::Snap(g.py + 4.0f);
-    const bool isMulti = PopupIsMulti();
     const bool showChecks = PopupShowsChecks();
-    const char* popupTitle = "SELECT";
-    if (PopupIsCategorized()) {
-        if (g_popup.categoryMode) {
-            popupTitle = "SELECT CATEGORY";
-        } else if (g_popup.selectedCategory >= 0 && g_popup.selectedCategory < g_popup.categoryCount) {
-            popupTitle = g_popup.categoryChoices[g_popup.selectedCategory];
+    const char* tabLabels[kMaxPopupTabs];
+    int tabCategories[kMaxPopupTabs];
+    const int tabCount = PopupTabs(tabLabels, tabCategories);
+    if (tabCount > 0) {
+        int activeTab = -1;
+        for (int i = 0; i < tabCount; ++i) {
+            if (tabCategories[i] == g_popup.selectedCategory) activeTab = i;
         }
-    } else if (isMulti) {
-        popupTitle = "MULTI-SELECT (ESC TO CLOSE)";
+        Layout::DrawTabBar(dl, g.listX, Scale::Snap(g.py + 2.0f), g.listW, tabLabels, tabCount, activeTab, activeTab);
+    } else {
+        Layout::DrawString(dl, bFont, bPx, g.px + 10.0f, Scale::Snap(g.py + 4.0f), kTextHeader,
+                           PopupIsMulti() ? "MULTI-SELECT (ESC TO CLOSE)" : "SELECT");
     }
-    Layout::DrawString(dl, bFont, bPx, g.px + 10.0f, titleY, kTextHeader, popupTitle);
     dl->AddLine(ImVec2(Scale::Snap(g.px + 8.0f), Scale::Snap(g.listY - 4.0f)),
                 ImVec2(Scale::Snap(g.px + g.popupW - 8.0f), Scale::Snap(g.listY - 4.0f)), kRule, 1.0f);
 
+    const int listFirstVertex = dl->VtxBuffer.Size;
     dl->PushClipRect(ImVec2(g.listX, g.listY),
                      ImVec2(g.listX + g.listW, g.listY + g.listH),
                      true);
@@ -2183,7 +2233,19 @@ void PopupRender(ImDrawList* dl, const ScreenLayout& layout) {
         float y0 = 0.0f;
         float x1 = 0.0f;
         float y1 = 0.0f;
-        if (!PopupItemRect(g, i, x0, y0, x1, y1)) continue;
+        const bool visible = PopupItemRect(g, i, x0, y0, x1, y1);
+        x0 += slideX;
+        x1 += slideX;
+        const bool categorized = PopupIsCategorized();
+        if (categorized && g_popup.filteredHeaders[i]) {
+            Layout::DrawString(dl, bFont, bPx,
+                               Scale::Snap(x0 + 4.0f),
+                               Scale::Snap(y0 - g.rowH + (g.rowH - bPx) * 0.5f),
+                               kTextHeader, g_popup.filteredHeaders[i]);
+        }
+        if (!visible) continue;
+        const float indent = (categorized && g_popup.filteredIndented[i])
+            ? Scale::Snap(12.0f * Scale::Get().layoutScale) : 0.0f;
         const bool focused = (i == g_popup.focusIdx);
         if (focused) {
             dl->AddRectFilled(ImVec2(x0, y0),
@@ -2191,22 +2253,28 @@ void PopupRender(ImDrawList* dl, const ScreenLayout& layout) {
                               kSelectedFill);
         }
         char line[256];
+        // Translate before composing: the marker prefix would make the whole line miss the table.
+        const char* choiceText = I18n::Tr(PopupChoiceDisplayText(i));
         if (showChecks) {
             const int choiceValue = PopupChoiceValueAt(i);
             const bool checked = PopupMaskBitSet(choiceValue);
             const char* mark = focused ? ">" : " ";
             _snprintf_s(line, sizeof(line), _TRUNCATE, "%s [%c] %s",
-                        mark, checked ? 'X' : ' ', PopupChoiceDisplayText(i));
+                        mark, checked ? 'X' : ' ', choiceText);
         } else {
             const char* mark = focused ? ">" : " ";
-            _snprintf_s(line, sizeof(line), _TRUNCATE, "%s %s", mark, PopupChoiceDisplayText(i));
+            _snprintf_s(line, sizeof(line), _TRUNCATE, "%s %s", mark, choiceText);
         }
+        // popupW clamps to the panel, so a long entry can exceed its column; never into the next one.
+        dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
         Layout::DrawString(dl, bFont, bPx,
-                           Scale::Snap(x0 + 4.0f),
+                           Scale::Snap(x0 + 4.0f + indent),
                            Scale::Snap(y0 + (g.rowH - bPx) * 0.5f),
                            focused ? kTextActive : kTextInactive, line);
+        dl->PopClipRect();
     }
     dl->PopClipRect();
+    Anim::ScaleVertexAlpha(dl, listFirstVertex, slideT);
 
     const float total = static_cast<float>(PopupRowCount()) * g.rowH;
     if (total > g.listH) {
@@ -2218,6 +2286,7 @@ void PopupRender(ImDrawList* dl, const ScreenLayout& layout) {
                           ImVec2(barX + 2.0f, barY + barH),
                           kRule);
     }
+    Anim::ScaleVertexAlpha(dl, popupFirstVertex, AnimT(g_popup.openTick, kPopupAnimMs));
 }
 
 void ClampFocus(const Row* rows, int rowCount, int& focus) {
@@ -2232,8 +2301,9 @@ void EnsureFocusVisible(const ScreenLayout& layout,
                         const Row* rows, int rowCount,
                         int focus, ScrollState& scroll) {
     if (focus < 0 || focus >= rowCount) return;
-    RowRect rects[128];
-    if (rowCount > 128) rowCount = 128;
+    RowRect rects[kMaxListRows];
+    if (rowCount > kMaxListRows) rowCount = kMaxListRows;
+    if (focus >= rowCount) return;
     ComputeRects(layout, rows, rowCount, scroll.scrollPx, rects);
 
     const float viewTop = layout.contentTopY;
@@ -2285,8 +2355,8 @@ void RenderList(ImDrawList* dl, const ScreenLayout& layout,
         (void)submenuTitle;
     }
 
-    RowRect rects[128];
-    if (drawCount > 128) drawCount = 128;
+    RowRect rects[kMaxListRows];
+    if (drawCount > kMaxListRows) drawCount = kMaxListRows;
     ComputeRects(drawLayout, drawRows, drawCount, drawScroll->scrollPx, rects);
     SetCurrentHelpFromRow(drawRows, drawCount, drawFocus);
 
@@ -2464,6 +2534,26 @@ void RenderList(ImDrawList* dl, const ScreenLayout& layout,
     }
 }
 
+// Wheel scrolling carries focus along, or EnsureFocusVisible scrolls straight back.
+void MoveFocusIntoView(const ScreenLayout& layout, const Row* rows, int rowCount,
+                       const RowRect* rects, int& focus) {
+    const auto inView = [&](int i) {
+        return rects[i].visible && RowIsFocusable(rows[i]) &&
+               rects[i].y >= layout.contentTopY &&
+               rects[i].y + rects[i].h <= layout.contentBottomY;
+    };
+    if (focus < 0 || focus >= rowCount || inView(focus)) return;
+    if (rects[focus].y < layout.contentTopY) {
+        for (int i = focus + 1; i < rowCount; ++i) {
+            if (inView(i)) { focus = i; return; }
+        }
+    } else {
+        for (int i = focus - 1; i >= 0; --i) {
+            if (inView(i)) { focus = i; return; }
+        }
+    }
+}
+
 bool HandleRowsInput(const ScreenLayout& layout,
                      const Row* rows, int rowCount,
                      int& focus,
@@ -2485,17 +2575,19 @@ bool HandleRowsInput(const ScreenLayout& layout,
         return false;
     }
 
-    RowRect rects[128];
-    if (rowCount > 128) rowCount = 128;
+    RowRect rects[kMaxListRows];
+    if (rowCount > kMaxListRows) rowCount = kMaxListRows;
     ComputeRects(layout, rows, rowCount, scroll.scrollPx, rects);
 
     ClampFocus(rows, rowCount, focus);
 
-    const float wheel = ImGui::GetIO().MouseWheel;
+    const float wheel = Input::MouseWheel();
     if (wheel != 0.0f) {
         scroll.scrollPx = Scale::Snap(scroll.scrollPx - wheel * Scale::Get().rowHeight * 3.0f);
         if (scroll.scrollPx < 0.0f) scroll.scrollPx = 0.0f;
         if (scroll.scrollPx > scroll.maxScrollPx) scroll.scrollPx = scroll.maxScrollPx;
+        ComputeRects(layout, rows, rowCount, scroll.scrollPx, rects);
+        MoveFocusIntoView(layout, rows, rowCount, rects, focus);
     }
 
     const bool navUp    = Input::NavUp();
@@ -2756,6 +2848,23 @@ const char* CurrentPopupHelpText() {
     return PopupHelpText();
 }
 
+const char* CurrentPopupHint() {
+    if (PopupIsCategorized()) {
+        return PopupIsMulti() ? "U/D MOVE   L/R TAB   ENTER TOGGLE   ESC CLOSE"
+                              : "U/D MOVE   L/R TAB   ENTER SELECT   ESC CANCEL";
+    }
+    return PopupIsMulti() ? "UP/DOWN MOVE   ENTER TOGGLE   ESC CLOSE"
+                          : "UP/DOWN MOVE   ENTER SELECT   ESC CANCEL";
+}
+
+void PlayContentSlide(int direction) {
+    StartSubmenuAnimation(direction);
+}
+
+float CurrentSubmenuAlpha() {
+    return AnimT(g_submenus.animTick, kSubmenuAnimMs);
+}
+
 int CurrentPopupFocusedChoiceValue(const Row* sourceRow) {
     return sourceRow ? PopupFocusedChoiceValueForRow(*sourceRow) : -1;
 }
@@ -2995,29 +3104,29 @@ bool VkCountsTowardsPriming(int vk) {
 
 // The menu key must not collide with key.ini game binds (menu nav) or any other hotkey.
 bool MenuKeyCaptureAllowed(int vk) {
-    if (!Config::IsMenuKeyAllowed(vk)) return false;
+    if (!Config::IsMenuKeyAllowed(vk) || Config::IsVkBoundByEfz(vk)) return false;
     const KeyBindings& kb = detectedBindings;
     if (kb.directionsDetected &&
         (vk == kb.upKey || vk == kb.downKey || vk == kb.leftKey || vk == kb.rightKey)) return false;
     if (kb.attacksDetected &&
         (vk == kb.aButton || vk == kb.bButton || vk == kb.cButton || vk == kb.dButton)) return false;
     const Config::Settings& s = Config::GetSettings();
-    // Effective keys as MonitorKeys resolves them, plus its hardwired '4'/'5'/'6'/F9.
-    const auto eff = [](int vk, int fallback) { return vk > 0 ? vk : fallback; };
+    // Effective keys as MonitorKeys resolves them, plus its hardwired '5'/'6'/F9.
+    const auto eff = [](int vk, int fallback) { return Config::ResolveHotkey(vk, fallback); };
     const int others[] = {
         eff(s.teleportKey, '1'), eff(s.recordKey, '2'), s.toggleTitleKey, s.resetFrameCounterKey,
         eff(s.savestateSaveKey, 'U'), eff(s.savestateLoadKey, 'J'), eff(s.switchPlayersKey, 'L'),
         eff(s.macroRecordKey, 'I'), eff(s.macroPlayKey, 'O'), eff(s.macroSlotKey, 'K'),
         s.uiAcceptKey, s.uiRefreshKey, s.uiExitKey,
-        s.framestepPauseKey, eff(s.framestepStepKey, 'P'), s.swapCustomKey,
-        '4', '5', '6', VK_F9,
+        eff(s.framestepPauseKey, VK_SPACE), eff(s.framestepStepKey, 'P'), s.swapCustomKey,
+        '5', '6', VK_F9,
     };
     for (int other : others) if (vk == other) return false;
     return true;
 }
 
 bool VkAllowedForCurrentCapture(int vk) {
-    if (!VkIsBindable(vk)) return false;
+    if (!VkIsBindable(vk) || CollisionDisplay::IsGameHotkeyVk(vk)) return false;
     if (g_keybind.settingsField == &Config::GetSettings().configMenuKey) {
         return MenuKeyCaptureAllowed(vk);
     }
@@ -3031,7 +3140,7 @@ bool VkAllowedForCurrentCapture(int vk) {
 namespace KeybindAPI {
     void TickInput() {
         if (!g_keybind.active) return;
-        if (!Input::IsGameWindowActive()) {
+        if (!Input::IsGameWindowActive() || Input::IsSuspended()) {
             memset(g_keybind.prevPressed, 0, sizeof(g_keybind.prevPressed));
             g_keybind.prevGamepadMask = 0;
             g_keybind.primed = false;

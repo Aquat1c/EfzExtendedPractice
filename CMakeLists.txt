@@ -234,6 +234,8 @@ if(MSVC)
         "$<$<CONFIG:Release>:/DEBUG:FULL>"
         "$<$<CONFIG:Release>:/OPT:REF>"
         "$<$<CONFIG:Release>:/OPT:ICF>"
+        # Debug directory holds the PDB's file name, not the build machine's path.
+        "$<$<CONFIG:Release>:/PDBALTPATH:efz_training_mode.pdb>"
     )
 
     if(EFZ_XP_COMPAT)
@@ -521,6 +523,24 @@ if(BUILD_TESTING)
     add_test(NAME macro_playback_start_policy_tests
              COMMAND macro_playback_start_policy_tests)
 
+    add_executable(collision_box_policy_tests
+        tests/collision_box_policy_tests.cpp)
+    target_include_directories(collision_box_policy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_property(TARGET collision_box_policy_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME collision_box_policy_tests
+             COMMAND collision_box_policy_tests)
+
+    add_executable(move_timing_policy_tests
+        tests/move_timing_policy_tests.cpp)
+    target_include_directories(move_timing_policy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_property(TARGET move_timing_policy_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME move_timing_policy_tests
+             COMMAND move_timing_policy_tests)
+
     add_executable(menu_key_policy_tests
         tests/menu_key_policy_tests.cpp)
     target_include_directories(menu_key_policy_tests PRIVATE
@@ -529,6 +549,35 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME menu_key_policy_tests
              COMMAND menu_key_policy_tests)
+
+    add_executable(visual_freeze_policy_tests
+        tests/visual_freeze_policy_tests.cpp)
+    target_include_directories(visual_freeze_policy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_property(TARGET visual_freeze_policy_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME visual_freeze_policy_tests
+             COMMAND visual_freeze_policy_tests)
+
+    add_executable(config_policy_tests
+        tests/config_policy_tests.cpp)
+    target_include_directories(config_policy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_property(TARGET config_policy_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME config_policy_tests
+             COMMAND config_policy_tests)
+
+    add_executable(i18n_tests
+        tests/i18n_tests.cpp
+        src/utils/i18n.cpp)
+    target_include_directories(i18n_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_property(TARGET i18n_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME i18n_tests
+             COMMAND i18n_tests)
+
 
     add_executable(mission_contact_attribution_policy_tests
         tests/mission_contact_attribution_policy_tests.cpp)
@@ -794,7 +843,8 @@ if(BUILD_TESTING)
                      "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata/nanase2.json")
 
     find_program(EFZ_PYTHON_EXECUTABLE NAMES python python3)
-    if(EFZ_PYTHON_EXECUTABLE)
+    # tools/ is local-only except the build wrapper.
+    if(EFZ_PYTHON_EXECUTABLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/pat_movedata/entity_census.py")
         add_test(NAME mission_entity_manifest_check
                  COMMAND "${EFZ_PYTHON_EXECUTABLE}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/tools/pat_movedata/entity_census.py"

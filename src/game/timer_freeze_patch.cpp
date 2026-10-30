@@ -182,14 +182,17 @@ bool IsInstalled(Timer timer) {
 }
 
 int SyncForCurrentMode(const char* reason) {
+    // Gates under the mutex: a sync that loses it to ForceRestore must see the published boundary.
+    std::lock_guard<std::mutex> lock(g_mutex);
     const bool featuresActive = g_featuresEnabled.load(std::memory_order_acquire);
     const bool practiceContext = IsPracticeContext();
     const GameMode currentMode = GetCurrentGameMode();
     const GamePhase currentPhase = GetCurrentGamePhase();
-    const bool gatesOpen = featuresActive && practiceContext && (currentPhase == GamePhase::Match);
+    // Raw screen too: the debounced phase still reads Match just after a battle exit.
+    const bool gatesOpen = featuresActive && practiceContext
+        && (currentPhase == GamePhase::Match) && IsInGameplayState();
 
     int changes = 0;
-    std::lock_guard<std::mutex> lock(g_mutex);
     for (int i = 0; i < kTimerCount; ++i) {
         const Timer timer = static_cast<Timer>(i);
         const bool requested = AnyRequested(timer);

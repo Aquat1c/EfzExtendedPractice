@@ -154,7 +154,7 @@ bool WithOwnedFreezeMemory(uint64_t generation, Fn&& fn) {
     std::lock_guard<std::recursive_mutex> lock(g_bufferFreezeControlMutex);
     if (!OwnsFreezeGeneration(generation) ||
         !g_bufferFreezingActive.load(std::memory_order_acquire) ||
-        g_onlineModeActive.load(std::memory_order_acquire)) {
+        !IsPracticeContext()) {
         return false;
     }
     fn();
@@ -499,7 +499,7 @@ static void FreezeBufferValuesThread(BufferFreezeSnapshot state) {
     for (int i = 0; i < aggressivePhaseFrames &&
                     g_bufferFreezingActive.load(std::memory_order_acquire) &&
                     OwnsFreezeGeneration(generation) && (!state.scoped || work.IsCurrent()); i++) {
-        if (g_onlineModeActive.load()) break;
+        if (!IsPracticeContext()) break;
         uintptr_t playerPtr = FreezePlayerPointer(playerNum);
         if (!playerPtr || playerPtr != initialPlayerPtr) {
             LogOut("[INPUT_BUFFER] Player pointer changed during aggressive phase, aborting", true);
@@ -585,7 +585,7 @@ static void FreezeBufferValuesThread(BufferFreezeSnapshot state) {
     while (g_bufferFreezingActive.load(std::memory_order_acquire) &&
            OwnsFreezeGeneration(generation) && (!state.scoped || work.IsCurrent()) &&
            freezeCount < freezeLimit && !g_isShuttingDown.load()) {
-        if (g_onlineModeActive.load()) { LogOut("[INPUT_BUFFER] Online mode active, stopping buffer freeze", true); break; }
+        if (!IsPracticeContext()) { LogOut("[INPUT_BUFFER] Left Practice, stopping buffer freeze", true); break; }
         GamePhase currentPhase = state.scoped?GamePhase::Match:GetCurrentGamePhase();
         if (currentPhase != GamePhase::Match) {
             LogOut("[INPUT_BUFFER] Game phase changed, stopping buffer freeze", true);
@@ -698,8 +698,8 @@ static void FreezeBufferValuesThread(BufferFreezeSnapshot state) {
         if (!OwnsFreezeGeneration(generation)) return;
 
         g_freezeInitializedGeneration.store(0, std::memory_order_release);
-        if (g_onlineModeActive.load(std::memory_order_acquire)) {
-            // Netplay owns live input state; never issue offline cleanup writes into the online world.
+        if (!IsPracticeContext()) {
+            // Outside Practice the fighters are not ours (netplay may own them); never issue cleanup writes.
             g_bufferFreezingActive.store(false, std::memory_order_release);
             g_indexFreezingActive.store(false, std::memory_order_release);
             int expectedPlayer = playerNum;
@@ -751,7 +751,20 @@ static void FreezeBufferValuesThread(BufferFreezeSnapshot state) {
 namespace {
 DWORD WINAPI BufferThreadMain(void* payload) {
     std::unique_ptr<BufferFreezeSnapshot> state(static_cast<BufferFreezeSnapshot*>(payload));
-    try {FreezeBufferValuesThread(std::move(*state));}catch(...) {bufferWorkerFault.store(true,std::memory_order_release);}
+    const uint64_t generation=state->generation;
+    const int player=state->playerNum;
+    try {FreezeBufferValuesThread(std::move(*state));}catch(...) {
+        bufferWorkerFault.store(true,std::memory_order_release);
+        // A dead worker must not keep the input lane.
+        std::lock_guard<std::recursive_mutex> lock(g_bufferFreezeControlMutex);
+        if(OwnsFreezeGeneration(generation)) {
+            g_bufferFreezingActive.store(false,std::memory_order_release);
+            g_indexFreezingActive.store(false,std::memory_order_release);
+            g_freezeInitializedGeneration.store(0,std::memory_order_release);
+            int expected=player;
+            (void)g_activeFreezePlayer.compare_exchange_strong(expected,0);
+        }
+    }
     state.reset();
     Practice::NotifyRetirementProgress();
     return 0;
@@ -759,13 +772,13 @@ DWORD WINAPI BufferThreadMain(void* payload) {
 }
 uint64_t StartBufferFreezeWorker(int playerNum) {
     std::lock_guard<std::recursive_mutex> lock(g_bufferFreezeControlMutex);
-    if (g_onlineModeActive.load(std::memory_order_acquire) || bufferWorkClosed.load(std::memory_order_acquire)) return 0;
+    if (!IsPracticeContext() || bufferWorkClosed.load(std::memory_order_acquire)) return 0;
     auto admission=bufferWorldBound?Practice::TryEnterMonitorWork():Practice::WorkLease{};
     if(bufferWorldBound && (!admission || !SameBufferWorld(admission.Context(),bufferWorld)))return 0;
     (void)ReapBufferThreads();
     if(bufferWorkerFault.load())return 0;
     if(!bufferWake)bufferWake=CreateEventA(nullptr,TRUE,FALSE,nullptr);
-    if(!bufferWake){bufferWorkerFault.store(true);return 0;}
+    if(!bufferWake)return 0;
     ResetEvent(bufferWake);
     BufferFreezeSnapshot state;
     state.scoped=bufferWorldBound;state.world=bufferWorld;
@@ -781,21 +794,23 @@ uint64_t StartBufferFreezeWorker(int playerNum) {
     state.buttonMask = g_frozenButtonMask;
     state.facingRight = g_lastKnownFacing;
 
-    g_freezeInitializedGeneration.store(0, std::memory_order_release);
-    g_activeFreezePlayer.store(playerNum, std::memory_order_release);
-    g_bufferFreezingActive.store(true, std::memory_order_release);
-
     auto payload=std::make_unique<BufferFreezeSnapshot>(std::move(state));
     bufferThreads.emplace_back(); // Allocate durable ownership before launch.
     auto& record=bufferThreads.back();
+    // A failed start owned nothing and wrote nothing, so it stays retryable and is not a fault.
     if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,reinterpret_cast<LPCSTR>(&BufferThreadMain),&record.module)) {
-        bufferThreads.pop_back();bufferWorkerFault.store(true);return 0;
+        bufferThreads.pop_back();return 0;
     }
-    record.thread=CreateThread(nullptr,0,BufferThreadMain,payload.get(),0,nullptr);
+    record.thread=CreateThread(nullptr,0,BufferThreadMain,payload.get(),CREATE_SUSPENDED,nullptr);
     if(!record.thread) {
-        FreeLibrary(record.module);bufferThreads.pop_back();bufferWorkerFault.store(true);return 0;
+        FreeLibrary(record.module);bufferThreads.pop_back();return 0;
     }
     payload.release();
+    // Publish ownership only once the worker exists; it checks ownership as soon as it runs.
+    g_freezeInitializedGeneration.store(0, std::memory_order_release);
+    g_activeFreezePlayer.store(playerNum, std::memory_order_release);
+    g_bufferFreezingActive.store(true, std::memory_order_release);
+    ResumeThread(record.thread);
     return g_bufferFreezeGeneration.load(std::memory_order_acquire);
 }
 
@@ -940,8 +955,8 @@ void StopBufferFreezingIgnoringTutorialLease() {
             LogOut("[INPUT_BUFFER] StopBufferFreezing() called (no active owner)", true);
         }
         
-        if (g_onlineModeActive.load(std::memory_order_acquire)) {
-            LogOut("[INPUT_BUFFER] Freeze bookkeeping retired without online memory writes", true);
+        if (!IsPracticeContext()) {
+            LogOut("[INPUT_BUFFER] Freeze bookkeeping retired without memory writes outside Practice", true);
             return;
         }
 

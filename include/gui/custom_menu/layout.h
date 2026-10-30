@@ -41,6 +41,9 @@ void DrawSectionRule(ImDrawList* dl, float panelX, float y, float panelW, ImU32 
 void DrawTabBar(ImDrawList* dl, float x, float y, float w,
                 const char* const* labels, int count, int activeIdx,
                 int focusedIdx /* -1 = none */);
+float TabBarWidth(const char* const* labels, int count);
+// Tab under pointX for a strip DrawTabBar laid out in the same x and w, or -1.
+int TabBarIndexAt(float x, float w, const char* const* labels, int count, float pointX);
 
 // Rows
 // Each row primitive takes its own rect and a `focused` flag. They draw both

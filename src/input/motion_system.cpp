@@ -7,6 +7,7 @@
 #include "../include/game/auto_action_helpers.h"
 #include "../include/game/per_frame_sample.h" // unified per-frame sample accessor
 #include "../include/game/auto_action.h"
+#include "../include/game/game_state.h"
 #include "../include/game/macro_controller.h"
 #include "../include/input/auto_action_motion_transaction.h"
 #include "../include/input/immediate_input.h"
@@ -41,7 +42,7 @@ std::recursive_mutex g_motionQueueMutex;
 
 // Admission must fail rather than cache delayed input behind another producer.
 bool MotionQueueInputLaneBusy(int playerNum) {
-    if (playerNum < 1 || playerNum > 2) return true;
+    if (playerNum < 1 || playerNum > 2 || !IsPracticeContext()) return true;
     const bool queueActive = playerNum == 1 ? p1QueueActive : p2QueueActive;
     return queueActive ||
            IsScopedInputReserved(playerNum) ||
@@ -425,10 +426,10 @@ static bool QueueMotionInputImpl(int playerNum, int motionType, int buttonMask) 
             break;
             
         case MOTION_421A: case MOTION_421B: case MOTION_421C:
-            // Down, Down-Back, Back + Button
+            // 421: Back, Down, Down-Back + Button; same shape as MotionPattern::Build.
+            addInput(GAME_INPUT_LEFT, 0, DIR_FRAMES);
             addInput(GAME_INPUT_DOWN, 0, DIR_FRAMES);
-            addInput(GAME_INPUT_DOWN | GAME_INPUT_LEFT, 0, DIR_FRAMES);
-            addInput(GAME_INPUT_LEFT, buttonMask, BTN_FRAMES);
+            addInput(GAME_INPUT_DOWN | GAME_INPUT_LEFT, buttonMask, BTN_FRAMES);
             break;
             
         case MOTION_FORWARD_DASH: {

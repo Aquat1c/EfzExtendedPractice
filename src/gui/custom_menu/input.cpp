@@ -83,8 +83,11 @@ bool VkDown(int vk) {
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
+bool g_suspended = false;
+bool g_topTabNumberPrev[9] = {};
+
 bool InputAllowed() {
-    return IsGameWindowActive();
+    return !g_suspended && IsGameWindowActive();
 }
 
 bool PadBindingDown(const XINPUT_STATE& state, int mask) {
@@ -408,6 +411,7 @@ void ResetEdges() {
     const CurState raw = SampleCurrent();
     g_blockUntilRelease = raw;
     g_prev = ApplyBlockUntilRelease(raw);
+    for (int i = 0; i < 9; ++i) g_topTabNumberPrev[i] = InputAllowed() && VkDown('1' + i);
     g_cachedEdges = Edges{};
     g_cachedFrame = ImGui::GetFrameCount();
     g_holdUp = HoldState{};
@@ -476,9 +480,8 @@ bool SubTabNext() { return SampleEdges().subTabNext; }
 
 // Own GetAsyncKeyState edges for '1'..'9': ImGui may swallow them during text entry.
 int TopTabNumberEdge() {
-    static bool s_prev[9] = {false,false,false,false,false,false,false,false,false};
     if (!InputAllowed()) {
-        for (int i = 0; i < 9; ++i) s_prev[i] = false;
+        for (int i = 0; i < 9; ++i) g_topTabNumberPrev[i] = false;
         return 0;
     }
 
@@ -486,8 +489,8 @@ int TopTabNumberEdge() {
     for (int i = 0; i < 9; ++i) {
         const int vk = '1' + i;
         const bool now = (GetAsyncKeyState(vk) & 0x8000) != 0;
-        const bool edge = now && !s_prev[i];
-        s_prev[i] = now;
+        const bool edge = now && !g_topTabNumberPrev[i];
+        g_topTabNumberPrev[i] = now;
         if (edge && hitIdx == 0) hitIdx = i + 1;
     }
     if (hitIdx > 0) {
@@ -498,8 +501,13 @@ int TopTabNumberEdge() {
 
 // Mouse position comes from imgui_impl's PreNewFrameInputs, already in 640x480 canvas space.
 
+float MouseWheel() {
+    return g_suspended ? 0.0f : ImGui::GetIO().MouseWheel;
+}
+
 MousePos GetMouse() {
     MousePos m{0.0f, 0.0f, false};
+    if (g_suspended) return m;
     ImGuiIO& io = ImGui::GetIO();
     if (io.MousePos.x <= -1.0e6f || io.MousePos.y <= -1.0e6f) return m;
     m.x = io.MousePos.x;
@@ -514,8 +522,16 @@ bool MouseHovering(float x, float y, float w, float h) {
     return m.x >= x && m.x <= x + w && m.y >= y && m.y <= y + h;
 }
 
+void SetSuspended(bool suspended) {
+    g_suspended = suspended;
+}
+
+bool IsSuspended() {
+    return g_suspended;
+}
+
 bool MouseClickedIn(float x, float y, float w, float h) {
-    return MouseHovering(x, y, w, h) && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false);
+    return !g_suspended && MouseHovering(x, y, w, h) && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false);
 }
 
 bool MouseRightClickedIn(float x, float y, float w, float h) {
@@ -523,7 +539,7 @@ bool MouseRightClickedIn(float x, float y, float w, float h) {
 }
 
 bool MouseLeftEdge() {
-    return ImGui::IsMouseClicked(ImGuiMouseButton_Left, false);
+    return !g_suspended && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false);
 }
 
 } // namespace CustomMenu::Input

@@ -29,6 +29,10 @@ namespace Framestep {
     // not merely observed from Revival's native pause flag.
     bool OwnsPauseState();
 
+    // Vanilla/Revival-engine backends only: the pause is gamespeed 0 plus the
+    // shared visual NOPs, with Practice +0xB4 clear.
+    bool HoldsEnginePause();
+
     // Final restore-side cleanup. The bool must be captured before the restore
     // write, because restoring game memory can reintroduce stale pause metadata.
     void FinishSavestateRestore(bool restoreStartedFromOwnedPause);

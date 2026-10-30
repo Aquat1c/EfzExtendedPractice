@@ -4,10 +4,13 @@
 #include "../include/utils/i18n.h"
 #include "../include/core/constants.h"
 #include "../include/core/memory.h"
+#include "../include/game/character_settings.h"
+#include "../include/game/collision_box_policy.h"
+#include "../include/game/collision_hook.h"
 #include "../include/game/frame_advantage.h"
+#include "../include/game/mission/move_notation_tables.h"
+#include "../include/game/move_timing_policy.h"
 #include "../include/game/frame_monitor.h"
-#include "../include/input/framestep.h"
-#include "../include/utils/pause_integration.h"
 #include "../3rdparty/imgui/imgui.h"
 
 #include <windows.h>
@@ -15,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <string>
 
 namespace FrameBar {
 
@@ -85,7 +89,7 @@ struct Cell {
     char  projectiles = 0;       // active projectile slot count for this side
     bool  activeHitbox = false;  // character attack passes EFZ collision-active gate
     bool  projectileHitbox = false;
-    bool  inHitstop   = false;   // shared hit-hitstop, not superflash
+    bool  inHitstop   = false;   // this side's scripts held by own +0x14A, not superflash
     bool  attackData  = false;   // current frame has EFZ attack-data, independent of moveID
     bool  engineBusy  = false;   // engine timers/flags say this side is not fully neutral
     bool  canBlockNow = false;   // decomp-style block check against opponent's current attack
@@ -104,6 +108,9 @@ struct Side {
     bool  dashSequenceStartedAirborne = false;
     int   activeRunFrames = 0;       // frames since attack started
     bool  haveSeenActiveBox = false; // attack box was real this attack run
+    bool  contacted = false;         // resolver committed for this side this attack run
+    short prevHitstop = 0;           // own +0x14A at the previous sample
+    short prevOppFlash = 0;          // opponent +0x14C at the previous sample
     int   activeCounter = 0;         // MBAACC-style active duration counter
     int   firstActiveCounter = 0;    // frames from action start to first active frame
     int   firstActive = -1;
@@ -111,6 +118,10 @@ struct Side {
     int   totalBusyMemory = 0;
     bool  firstActiveCaptured = false;
     bool  firstActiveEdge = false;
+    MoveTiming::Tracker timing;
+    short noteMoveId = -1;
+    const char* moveNote = nullptr;
+    bool moveIsCommand = false;
 };
 
 Side g_p1;
@@ -119,12 +130,7 @@ Side g_p2;
 int g_writeIdx = 0;        // next slot to write (mod kBarMemory)
 int g_filledFrames = 0;    // total frames written (capped at large int)
 std::mutex g_lock;
-
-struct PausedStepState {
-    bool wasPaused = false;
-    unsigned int lastStep = 0;
-};
-PausedStepState g_pausedStep{};
+std::atomic<uint32_t> g_contactCursor{0};
 
 // MBAACC's BarHandling has three states:
 //   - Active   : at least one player inactionable / has projectile / can't
@@ -137,13 +143,6 @@ PausedStepState g_pausedStep{};
 constexpr int kIdleTailSubframes = 180;     // roughly one second at subframe cadence
 int  g_idleTailFrames = kIdleTailSubframes; // start at tail-max so first activity triggers a reset
 bool g_latched = true;                            // bar held in place; clear on next active edge
-
-// Shared-hitstop detector. EFZ's per-player +0x14A counter is set on both
-// attacker and defender from attack_data +194/+196 the moment a hit lands.
-// While both are >0 the engine effectively pauses gameplay (no move advance).
-// MBAACC tracks the same condition as `nSharedHitstop` and skips bar advance
-// while it persists for more than one frame.
-int g_sharedHitstopRun = 0;
 
 enum : int {
     kTimingSubframes = 0,
@@ -175,13 +174,12 @@ int IdleTailMaxFrames() {
 }
 
 // Decompilation ground truth from efz.c:
-//   handlePlayerToPlayerCollision checks frame_data+0xE9 == 0 and
-//   *(short*)(frame_data+0xEA) > 0 before character attack boxes may collide.
+//   handlePlayerToPlayerCollision checks the low byte of player+0x168 == 0 and
+//   *(short*)(player+0x16C) > 0 before character attack boxes may collide. Its
+//   frame argument is a stack composite carrying those two at +233/+234.
 //   processProjectileCollision walks 64 projectile entries at player+0x4D0,
 //   resolves each projectile's current frame data through player+0x164, and
 //   only accepts entries that are not destroyed and still have life.
-constexpr uintptr_t kFrameCollisionDisabledOffset = 0xE9;
-constexpr uintptr_t kFrameActiveRemainingOffset   = 0xEA;
 constexpr uintptr_t kAnimVisualTableOffset        = 0x10;
 constexpr uintptr_t kVisualFrameStride            = 12;
 constexpr uintptr_t kVisualFrameOriginOffset      = 4;    // two shorts: x-origin, y-origin
@@ -267,8 +265,6 @@ struct Sample {
     unsigned short atkFlags = 0;
     unsigned short hitFlags = 0;
     unsigned short guardFlags = 0;
-    unsigned char frameCollisionDisabled = 0; // frame_data +0xE9
-    short activeFramesRemaining = 0;          // frame_data +0xEA
     short baseDamage = 0;
     short chipDamage = 0;
     short attackerFreeze = 0;
@@ -281,21 +277,12 @@ struct Sample {
     int projectileThreatFlagCount = 0;
     bool activeHitbox = false;
     bool projectileHitbox = false;
+    bool contact = false;        // direct-player resolver committed last tick
     bool attackData = false;
     bool engineBusy = false;
     bool canBlockOpponent = false;
     bool canRGOpponent = false;
 };
-
-// Both timers >0 for at least 2 consecutive frames; one-frame transients don't count.
-bool IsSharedHitstop(short timer1, short timer2) {
-    if (timer1 > 0 && timer2 > 0) {
-        if (g_sharedHitstopRun < 1000) g_sharedHitstopRun++;
-    } else {
-        g_sharedHitstopRun = 0;
-    }
-    return g_sharedHitstopRun > 1;
-}
 
 enum class MoveDir : uint8_t {
     Neutral,
@@ -409,9 +396,7 @@ Cat ClassifySample(Side& side, const Sample& s) {
     if (m == FORWARD_AIRTECH) return Cat::AirtechFwd;
     if (m == BACKWARD_AIRTECH) return Cat::AirtechBack;
     if (IsGroundtech(m))     return Cat::Groundtech;
-    // Raw 6 is retained as a legacy visual hint, but counter paths can write it
-    // too; unlike IsThrown(m), it is not an authoritative throw classification.
-    if (s.hitState == 6 || IsThrown(m)) return Cat::Thrown;
+    if (MoveTiming::ReadsAsThrown(s.hitState, IsThrown(m), s.attackData || IsAttackMove(m))) return Cat::Thrown;
     if (m == STAND_GUARD_ID || m == CROUCH_GUARD_ID || m == AIR_GUARD_ID
         || m == CROUCH_GUARD_STUN1 || m == CROUCH_GUARD_STUN2)
         return Cat::Blockstun;
@@ -628,13 +613,6 @@ unsigned char ReadFrameByte(uintptr_t frameData, uintptr_t off) {
     return v;
 }
 
-bool FrameCollisionActive(uintptr_t frameData, int attackBoxes) {
-    if (!frameData || attackBoxes <= 0) return false;
-    const unsigned char disabled = ReadFrameByte(frameData, kFrameCollisionDisabledOffset);
-    const short activeRemaining = ReadFrameShort(frameData, kFrameActiveRemainingOffset);
-    return disabled == 0 && activeRemaining > 0;
-}
-
 bool ReadRawBox(uintptr_t frameData, uintptr_t off, RawBox& out) {
     if (!frameData) return false;
     return SafeReadMemory(frameData + off, &out, sizeof(out));
@@ -754,8 +732,6 @@ bool BuildProjectileRect(uintptr_t entryBase,
 //   bytes  0..79  : 5 hurtboxes (16 bytes each: int l, t, r, b)
 //   bytes 80..143 : 4 attack boxes (16 bytes each: int l, t, r, b)
 //   word  170     : attack-property flags
-//   byte  233     : collision-disabled/recovery gate used by EFZ collision
-//   short 234     : active-frames-remaining gate used by EFZ collision
 // Returns the byte offset of the frame data block, or 0 if unreachable.
 uintptr_t LookupFrameDataPtr(uintptr_t base) {
     if (!base) return 0;
@@ -1098,7 +1074,6 @@ bool IsEngineBusy(const Sample& s) {
            s.superFreeze > 0 ||
            s.superflash > 0 ||
            s.hitState != 0 ||
-            s.attackTimer > 0 ||
             s.frameLockout > 0 ||
             s.rgCooldown > 0 ||
            s.stateLockout > 0 ||
@@ -1115,9 +1090,10 @@ Sample ReadSample(uintptr_t base) {
     s.frameIdx = ReadFrameIdx(base);
     s.frameData = LookupFrameDataPtr(base);
     s.attackBoxes = CountAttackBoxes(s.frameData);
-    s.frameCollisionDisabled = ReadFrameByte(s.frameData, kFrameCollisionDisabledOffset);
-    s.activeFramesRemaining = ReadFrameShort(s.frameData, kFrameActiveRemainingOffset);
-    s.activeHitbox = FrameCollisionActive(s.frameData, s.attackBoxes);
+    s.activeHitbox = CollisionBoxPolicy::CharacterHitCanConnect(
+        s.attackBoxes,
+        ReadByte(base, PLAYER_HIT_STATE_OFFSET),
+        ReadShort(base, PLAYER_ATTACK_TIMER_OFFSET));
     const ProjectileActivity projectiles = ReadProjectileActivity(base);
     s.projectiles = projectiles.slots;
     s.projectileBoxes = projectiles.boxes;
@@ -1174,8 +1150,8 @@ bool ConsiderActive(const Sample& p1, const Sample& p2) {
 }
 
 // Refine an attacker's frame category using EFZ's real collision gate.
-//   - Active when frame_data has non-empty boxes AND the collision code's
-//     frame_data+0xE9/+0xEA gates allow those boxes to collide.
+//   - Active when the gate allows the boxes to collide or the resolver committed
+//     (sample.activeHitbox, merged in UpdateSideCounters).
 //   - Projectile active is treated like MBAACC's sub-active/projectile track:
 //     it can produce first-active/active counts even when the character's own
 //     frame block is not active.
@@ -1191,8 +1167,7 @@ Cat RefineAttackerCat(Side& self, Cat selfCat, const Sample& sample) {
         self.haveSeenActiveBox = true;
         return Cat::AttackActive;
     }
-    if (self.haveSeenActiveBox || sample.attackTimer > 0) return Cat::AttackRecovery;
-    return Cat::AttackStartup;
+    return self.haveSeenActiveBox ? Cat::AttackRecovery : Cat::AttackStartup;
 }
 
 void ResetSideTracking(Side& s) {
@@ -1202,6 +1177,9 @@ void ResetSideTracking(Side& s) {
     s.dashSequenceStartedAirborne = false;
     s.activeRunFrames = 0;
     s.haveSeenActiveBox = false;
+    s.contacted = false;
+    s.prevHitstop = 0;
+    s.prevOppFlash = 0;
     s.activeCounter = 0;
     s.firstActiveCounter = 0;
     s.firstActive = -1;
@@ -1216,6 +1194,8 @@ void ClearBarsNoLock(bool latched) {
     const bool p1PrevAirborne = g_p1.prevAirborne;
     const short p2PrevMoveID = g_p2.prevMoveID;
     const bool p2PrevAirborne = g_p2.prevAirborne;
+    const short p1PrevHitstop = g_p1.prevHitstop, p1PrevOppFlash = g_p1.prevOppFlash;
+    const short p2PrevHitstop = g_p2.prevHitstop, p2PrevOppFlash = g_p2.prevOppFlash;
     for (int i = 0; i < kBarMemory; ++i) {
         g_p1.cells[i] = Cell{};
         g_p2.cells[i] = Cell{};
@@ -1227,15 +1207,18 @@ void ClearBarsNoLock(bool latched) {
         g_p1.prevAirborne = p1PrevAirborne;
         g_p2.prevMoveID = p2PrevMoveID;
         g_p2.prevAirborne = p2PrevAirborne;
+        g_p1.prevHitstop = p1PrevHitstop;
+        g_p1.prevOppFlash = p1PrevOppFlash;
+        g_p2.prevHitstop = p2PrevHitstop;
+        g_p2.prevOppFlash = p2PrevOppFlash;
     }
     g_writeIdx = 0;
     g_filledFrames = 0;
     g_idleTailFrames = latched ? IdleTailMaxFrames() : 0;
     g_latched = latched;
-    g_sharedHitstopRun = 0;
 }
 
-void UpdateSideCounters(Side& s, const Sample& sample, Cat rawCat, bool anyFreeze) {
+void UpdateSideCounters(Side& s, Sample& sample, Cat rawCat, bool frozen) {
     s.firstActiveEdge = false;
     const bool isAttackState =
         rawCat == Cat::AttackStartup ||
@@ -1243,9 +1226,29 @@ void UpdateSideCounters(Side& s, const Sample& sample, Cat rawCat, bool anyFreez
         rawCat == Cat::AttackRecovery;
     const bool newMove = sample.moveID != s.prevMoveID;
 
-    if (newMove) {
+    if (s.noteMoveId != sample.moveID) {
+        s.noteMoveId = sample.moveID;
+        s.moveNote = nullptr;
+        s.moveIsCommand = false;
+        char charName[16] = {};
+        if (SafeReadMemory(sample.base + CHARACTER_NAME_OFFSET, charName, sizeof(charName) - 1)) {
+            namespace Names = Mission::MoveNames;
+            const std::string internalName = CharacterSettings::GetCharacterInternalName(
+                CharacterSettings::GetCharacterID(charName));
+            const auto* note = Names::Find(internalName.c_str(), sample.moveID);
+            if (note) s.moveNote = note->note;
+            s.moveIsCommand = MoveTiming::StartsNewRecord(
+                note != nullptr,
+                note && Names::HasRole(note->role, Names::MoveRole::DirectInput | Names::MoveRole::InputFollowup),
+                IsAttackMove(sample.moveID));
+        }
+    }
+
+    // A phase id change stays in the same attack run.
+    if (newMove && (!isAttackState || s.moveIsCommand)) {
         s.activeRunFrames = 0;
         s.haveSeenActiveBox = false;
+        s.contacted = false;
         if (isAttackState || sample.engineBusy) {
             s.activeCounter = 0;
             s.firstActiveCounter = 0;
@@ -1254,15 +1257,37 @@ void UpdateSideCounters(Side& s, const Sample& sample, Cat rawCat, bool anyFreez
         }
     }
 
+    const bool gateOpen = sample.activeHitbox;
+    sample.activeHitbox = MoveTiming::ActiveThisTick(gateOpen, sample.contact, s.contacted, sample.attackBoxes > 0);
+    if (sample.contact) s.contacted = true;
+
+    const bool ticked = !frozen || sample.contact;
+    if (ticked) {
+        const bool stunned = rawCat == Cat::Hitstun || rawCat == Cat::Blockstun ||
+                             rawCat == Cat::Launched || rawCat == Cat::SpecialStun ||
+                             rawCat == Cat::Thrown || rawCat == Cat::RG;
+        MoveTiming::Tick tick;
+        tick.inAttack = isAttackState;
+        tick.interrupted = stunned;
+        tick.moveId = sample.moveID;
+        tick.label = s.moveNote;
+        tick.isCommand = s.moveIsCommand;
+        tick.hitActive = gateOpen;
+        tick.boxesPresent = sample.attackBoxes > 0;
+        tick.contact = sample.contact;
+        s.timing.Feed(tick);
+    }
+
     if (!isAttackState && !sample.engineBusy) {
         s.activeRunFrames = 0;
         s.haveSeenActiveBox = false;
+        s.contacted = false;
         s.activeCounter = 0;
         s.firstActiveCounter = 0;
         s.firstActiveCaptured = false;
         s.firstActive = -1;
         s.totalBusyCounter = 0;
-    } else if (!anyFreeze) {
+    } else if (ticked) {
         if (sample.engineBusy) {
             ++s.totalBusyCounter;
             s.totalBusyMemory = s.totalBusyCounter;
@@ -1275,7 +1300,7 @@ void UpdateSideCounters(Side& s, const Sample& sample, Cat rawCat, bool anyFreez
     }
 
     const bool activeNow = sample.activeHitbox || sample.projectileHitbox;
-    if (!anyFreeze && activeNow) {
+    if (ticked && activeNow) {
         ++s.activeCounter;
         if (!s.firstActiveCaptured) {
             s.firstActive = s.firstActiveCounter;
@@ -1385,24 +1410,54 @@ void MergeVisualCell(Cell& out, const Cell& in) {
     if (in.counterHit != 0) out.counterHit = in.counterHit;
 }
 
+std::string FormatMoveData(int player, const MoveTiming::Record& r, int stride) {
+    char line[96] = {};
+    if (!r.valid) {
+        _snprintf_s(line, sizeof(line), _TRUNCATE, "P%d -", player);
+        return line;
+    }
+    char idText[16] = {};
+    const char* moveName = r.label;
+    if (!moveName) {
+        _snprintf_s(idText, sizeof(idText), _TRUNCATE, "ID %d", (int)r.moveId);
+        moveName = idText;
+    }
+    const auto frames = [stride](int ticks) { return (ticks + stride - 1) / stride; };
+    if (!r.hasActive) {
+        _snprintf_s(line, sizeof(line), _TRUNCATE, "P%d %s  T:%d", player, moveName, frames(r.recovery));
+    } else if (r.interrupted) {
+        _snprintf_s(line, sizeof(line), _TRUNCATE, "P%d %s  S:%d A:%d R:-", player, moveName,
+                    frames(r.startup), frames(r.active));
+    } else {
+        _snprintf_s(line, sizeof(line), _TRUNCATE, "P%d %s  S:%d A:%d R:%d", player, moveName,
+                    frames(r.startup), frames(r.active), frames(r.recovery));
+    }
+    return line;
+}
+
 } // namespace
 
 void Reset() {
     std::lock_guard<std::mutex> lock(g_lock);
     ClearBarsNoLock(true);
+    g_p1.timing.Reset();
+    g_p2.timing.Reset();
+    g_p1.noteMoveId = -1;
+    g_p2.noteMoveId = -1;
+    g_contactCursor.store(GetContactEventWatermark(), std::memory_order_release);
 }
 
 void ResetTimeline() {
     std::lock_guard<std::mutex> lock(g_lock);
     ClearBarsNoLock(true);
-    g_pausedStep = PausedStepState{};
+    g_contactCursor.store(GetContactEventWatermark(), std::memory_order_release);
 }
 
+// Game thread, start of an engine tick: state is the previous tick's post-collision
+// state and the journal holds exactly that tick's contacts. Reads only.
 void TickSample() {
-    if (!g_enabled.load()) return;
-
-    if (!AreCharactersInitialized()) {
-        Reset();
+    if (!g_enabled.load()) {
+        g_contactCursor.store(GetContactEventWatermark(), std::memory_order_relaxed);
         return;
     }
 
@@ -1413,25 +1468,6 @@ void TickSample() {
         return;
     }
 
-    auto& s_wasPaused = g_pausedStep.wasPaused;
-    auto& s_lastPausedStep = g_pausedStep.lastStep;
-    const bool paused = Framestep::IsPaused() || PauseIntegration::IsPausedOrFrozen();
-    if (paused) {
-        const unsigned int step = Framestep::GetStepCounter();
-        if (!s_wasPaused) {
-            s_wasPaused = true;
-            s_lastPausedStep = step;
-            return;
-        }
-        if (step == s_lastPausedStep) {
-            return;
-        }
-        s_lastPausedStep = step;
-    } else {
-        s_wasPaused = false;
-        s_lastPausedStep = Framestep::GetStepCounter();
-    }
-
     Sample p1 = ReadSample(b1);
     Sample p2 = ReadSample(b2);
     p1.canBlockOpponent = CanBlockLikeEFZ(p1, p2);
@@ -1439,13 +1475,32 @@ void TickSample() {
     p1.canRGOpponent = CanRecoilGuardLikeEFZ(p1, p2);
     p2.canRGOpponent = CanRecoilGuardLikeEFZ(p2, p1);
 
-    const bool sharedHitstop = IsSharedHitstop(p1.stateTimer, p2.stateTimer);
-    const bool screenFreeze = (p1.superFreeze > 0) || (p2.superFreeze > 0);
-    const bool anyFreeze = screenFreeze || sharedHitstop;
+    // Single writer and same thread, so no half-published batch can be seen.
+    Mission::Contact::Event events[16];
+    const auto read = ReadCommittedContactEvents(
+        g_contactCursor.load(std::memory_order_relaxed), GetContactEventEpoch(), 0xFFFFFFFFu,
+        events, sizeof(events) / sizeof(events[0]));
+    g_contactCursor.store(read.consumedThrough, std::memory_order_relaxed);
+    for (size_t i = 0; i < read.count; ++i) {
+        Sample* attacker = events[i].attacker == 1 ? &p1 : (events[i].attacker == 2 ? &p2 : nullptr);
+        if (!attacker) continue;
+        if (events[i].source == Mission::Contact::Source::DirectPlayer) attacker->contact = true;
+        else if (events[i].source == Mission::Contact::Source::Entity) attacker->projectileHitbox = true;
+    }
 
     const bool active = ConsiderActive(p1, p2);
 
     std::lock_guard<std::mutex> lock(g_lock);
+
+    const bool hitstop1 = g_p1.prevHitstop > 0;
+    const bool hitstop2 = g_p2.prevHitstop > 0;
+    const bool frozen1 = MoveTiming::SideFrozen(g_p1.prevHitstop, g_p1.prevOppFlash);
+    const bool frozen2 = MoveTiming::SideFrozen(g_p2.prevHitstop, g_p2.prevOppFlash);
+    const bool screenFreeze = (p1.superFreeze > 0) || (p2.superFreeze > 0);
+    g_p1.prevHitstop = p1.stateTimer;
+    g_p1.prevOppFlash = p2.superFreeze;
+    g_p2.prevHitstop = p2.stateTimer;
+    g_p2.prevOppFlash = p1.superFreeze;
 
     // MBAACC-style activity gating with deferred reset:
     //
@@ -1475,29 +1530,29 @@ void TickSample() {
     Cat raw1 = ClassifySample(g_p1, p1);
     Cat raw2 = ClassifySample(g_p2, p2);
 
-    UpdateSideCounters(g_p1, p1, raw1, anyFreeze);
-    UpdateSideCounters(g_p2, p2, raw2, anyFreeze);
+    UpdateSideCounters(g_p1, p1, raw1, frozen1);
+    UpdateSideCounters(g_p2, p2, raw2, frozen2);
 
     Cat cat1 = RefineAttackerCat(g_p1, raw1, p1);
     Cat cat2 = RefineAttackerCat(g_p2, raw2, p2);
 
     // EFZ superflash is not hit-hitstop; keep the two visually separate.
-    auto applyFreeze = [](Cat& cat, bool isSharedHitstop, bool isScreenFreeze) {
+    auto applyFreeze = [](Cat& cat, bool isHitstop, bool isScreenFreeze) {
         if (cat == Cat::AttackActive) return;       // keep red so "frozen on active" is obvious
         if (isScreenFreeze) {
             cat = Cat::SuperFlash;
             return;
         }
-        if (isSharedHitstop) {
+        if (isHitstop) {
             cat = Cat::HitstopShared;
         }
     };
-    applyFreeze(cat1, sharedHitstop, screenFreeze);
-    applyFreeze(cat2, sharedHitstop, screenFreeze);
+    applyFreeze(cat1, hitstop1, screenFreeze);
+    applyFreeze(cat2, hitstop2, screenFreeze);
 
     Cell& c1 = g_p1.cells[g_writeIdx];
     Cell& c2 = g_p2.cells[g_writeIdx];
-    auto fillCell = [&](Cell& c, const Sample& s, const Side& side, Cat cat) {
+    auto fillCell = [&](Cell& c, const Sample& s, const Side& side, Cat cat, bool hitstop) {
         c.cat = cat;
         c.moveID = s.moveID;
         c.frameIdx = s.frameIdx;
@@ -1532,7 +1587,7 @@ void TickSample() {
         c.defenderFreeze = s.defenderFreeze;
         c.airMobility1 = s.airMobility1;
         c.airMobility2 = s.airMobility2;
-        c.inHitstop   = sharedHitstop;
+        c.inHitstop   = hitstop;
         c.attackData  = s.attackData;
         c.engineBusy  = s.engineBusy;
         c.canBlockNow = s.canBlockOpponent;
@@ -1542,8 +1597,8 @@ void TickSample() {
         c.totalBusyFrames = side.totalBusyMemory;
         c.firstActiveMarker = side.firstActiveEdge;
     };
-    fillCell(c1, p1, g_p1, cat1);
-    fillCell(c2, p2, g_p2, cat2);
+    fillCell(c1, p1, g_p1, cat1, hitstop1);
+    fillCell(c2, p2, g_p2, cat2, hitstop2);
 
     g_p1.prevMoveID = p1.moveID;
     g_p1.prevAirborne = IsAirborneForMovement(p1);
@@ -1568,6 +1623,8 @@ void Render(const DrawCtx& ctx) {
     const bool showCoreMarkers = detailMode != kDetailBarsOnly;
     const bool showAdvancedMarkers = detailMode == kDetailFull;
     const int statusLineCount = showStatus ? (compactStatus ? 2 : 4) : 0;
+    const bool showMoveData = Config::GetSettings().frameBarMoveData;
+    const int moveDataLines = showMoveData ? 1 : 0;
 
     // Layout in 640x480 virtual space, transformed via ctx into RT space.
     constexpr int   kVisible    = 80;
@@ -1577,7 +1634,8 @@ void Render(const DrawCtx& ctx) {
     constexpr float baseX       = (640.0f - baseW) * 0.5f;
     constexpr float lineHBase   = 11.0f;
     constexpr float kStatusY    = 360.0f;                       // text top
-    const float kBarY = kStatusY + (float)statusLineCount * lineHBase + (showStatus ? 6.0f : 0.0f);
+    const float kBarY = kStatusY + (float)(statusLineCount + moveDataLines) * lineHBase +
+                        ((showStatus || showMoveData) ? 6.0f : 0.0f);
     const float baseY = kBarY;
 
     auto tx = [&](float x) { return ctx.ox + x * ctx.scale; };
@@ -1653,7 +1711,7 @@ void Render(const DrawCtx& ctx) {
                     ImVec2(tx(cx + 3.0f),  ty(y + baseRowH)),
                     IM_COL32(180, 90, 255, 190));
             }
-            // Hitstop stripe - shared hit-hitstop only. Super/IC flash uses
+            // Hitstop stripe - this side's hit-hitstop only. Super/IC flash uses
             // its own magenta category so it does not read as hitstop.
             if (showAdvancedMarkers && cell.inHitstop) {
                 dl->AddRectFilled(
@@ -1662,7 +1720,7 @@ void Render(const DrawCtx& ctx) {
                     IM_COL32(60, 80, 128, 180));
             }
             // Collision-active character box indicator. Raw attack boxes that
-            // fail EFZ's frame_data+0xE9/+0xEA gate are shown separately below.
+            // fail EFZ's player+0x168/+0x16C gate are shown separately below.
             if (showCoreMarkers && cell.activeHitbox && cell.cat != Cat::AttackActive) {
                 dl->AddRectFilled(
                     ImVec2(tx(cx),                ty(y + baseRowH - 1.5f)),
@@ -1784,7 +1842,7 @@ void Render(const DrawCtx& ctx) {
     //   B/R = decomp-style can-block/can-RG result vs opponent current attack.
     //   HitS= raw +0x168 producer latch (diagnostic, not a typed result).
     //   CH  = +0x144 counter-hit flag this frame.
-    //   HST = shared hit-hitstop. SF still reports the local superflash freeze.
+    //   HST = this side's hit-hitstop. SF still reports the local superflash freeze.
     char buf[160] = {}, buf2[160] = {}, buf3[160] = {}, buf4[160] = {};
     if (showStatus && compactStatus) {
         _snprintf_s(buf, sizeof(buf), _TRUNCATE,
@@ -1835,15 +1893,24 @@ void Render(const DrawCtx& ctx) {
     const float lineH = lineHBase * ctx.scale;
     const float textPad = 4.0f;
 
-    const float blockTop    = ty((showStatus ? kStatusY : kBarY) - 4.0f);
+    const float blockTop    = ty(((showStatus || showMoveData) ? kStatusY : kBarY) - 4.0f);
     const float blockBottom = ty(kBarY + (baseRowH + rowGap) * 2.0f + 4.0f);
     dl->AddRectFilled(
         ImVec2(tx(baseX - 4.0f), blockTop),
         ImVec2(tx(baseX + baseW + 4.0f), blockBottom),
         IM_COL32(0, 0, 0, 200));
 
+    if (showMoveData) {
+        const int stride = visualFrameCells ? static_cast<int>(SUBFRAMES_PER_VISUAL_FRAME) : 1;
+        const float textY = ty(kStatusY + textPad);
+        dl->AddText(ImVec2(tx(baseX), textY), IM_COL32(220, 220, 255, 240),
+                    FormatMoveData(1, g_p1.timing.Latest(), stride).c_str());
+        dl->AddText(ImVec2(tx(baseX + baseW * 0.5f), textY), IM_COL32(255, 220, 220, 240),
+                    FormatMoveData(2, g_p2.timing.Latest(), stride).c_str());
+    }
+
     if (showStatus) {
-        const float textY0 = ty(kStatusY + textPad);
+        const float textY0 = ty(kStatusY + textPad) + (float)moveDataLines * lineH;
         dl->AddText(ImVec2(tx(baseX), textY0 + 0.0f * lineH),
                     IM_COL32(220, 220, 255, 230), buf);
         if (compactStatus) {

@@ -9,6 +9,8 @@
 #include "../include/utils/network.h" // GetEfzRevivalVersion, EfzRevivalVersion
 #include "../include/utils/minhook_utils.h"
 #include "../include/runtime/native_game_profile.h"
+#include "../../include/input/framestep.h"
+#include "../../include/utils/visual_freeze_policy.h"
 #include "../3rdparty/minhook/include/MinHook.h"
 #include <windows.h>
 #include <atomic>
@@ -49,6 +51,8 @@ namespace {
     std::atomic<bool> s_weUsedOfficialToggle{false};
     std::atomic<bool> s_weForcedFlagPause{false};
     std::atomic<bool> s_weAppliedPatchFreeze{false};
+    bool BeginRevivalPatchToggle();
+    void EndRevivalPatchToggle(bool retake);
 
     std::atomic<void*> s_battleContext{nullptr};
     std::atomic<bool> s_weFrozeGamespeed{false};
@@ -283,7 +287,7 @@ namespace {
     static tPracticeTick oPracticeTick = nullptr;
     static int __fastcall HookedPracticeTick(void* thisPtr, void* /*edx*/) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedPracticeTick>());
-        if (!hookExecution.Admitted() || g_onlineModeActive.load(std::memory_order_relaxed)) {
+        if (!hookExecution.Admitted() || !PracticeBattleHooksOpen()) {
             return oPracticeTick ? oPracticeTick(thisPtr) : 0;
         }
         PauseIntegration::NotePracticeControllerCandidate(thisPtr, "PracticeTick");
@@ -317,14 +321,17 @@ namespace {
     static std::atomic<bool> s_internalPauseBypass{false};
     static int __fastcall HookedTogglePause(void* thisPtr, void* /*edx*/) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedTogglePause>());
-        if (!hookExecution.Admitted() || g_onlineModeActive.load(std::memory_order_relaxed)) {
+        if (!hookExecution.Admitted() || !PracticeBattleHooksOpen()) {
             return oTogglePause ? oTogglePause(thisPtr) : 0;
         }
         PauseIntegration::NotePracticeControllerCandidate(thisPtr, "TogglePause");
         if (s_menuVisible.load(std::memory_order_relaxed) && !s_internalPauseBypass.load(std::memory_order_relaxed)) {
             return 0;
         }
-        return oTogglePause ? oTogglePause(thisPtr) : 0;
+        const bool retake = BeginRevivalPatchToggle();
+        const int result = oTogglePause ? oTogglePause(thisPtr) : 0;
+        EndRevivalPatchToggle(retake);
+        return result;
     }
 
     static inline void UpdateCsCycleState() {
@@ -461,7 +468,7 @@ namespace {
     static tRenderBattleScreen oRenderBattleScreen = nullptr;
     static BOOL __fastcall HookedRenderBattleScreen(void* battleContext, void* /*edx*/) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedRenderBattleScreen>());
-        if (!hookExecution.Admitted() || g_onlineModeActive.load(std::memory_order_relaxed)) {
+        if (!hookExecution.Admitted() || !PracticeBattleHooksOpen()) {
             return oRenderBattleScreen ? oRenderBattleScreen(battleContext) : FALSE;
         }
         if (battleContext) {
@@ -598,6 +605,8 @@ namespace {
         return EFZ_RVA_TO_VA(hRev, rva);
     }
     bool ApplyPatchFreeze(bool freeze) {
+        // Writes gamespeed and code bytes; never past the Practice boundary.
+        if (!IsPracticeContext()) return false;
         void* ctx = GetPatchCtxPtr(); if (!ctx) return false;
         int enableParam = freeze ? 0 : EFZ_PatchToggleUnfreezeParam();
         {
@@ -606,7 +615,10 @@ namespace {
             LogOut(oss.str(), true);
         }
         auto fn = GetPatchToggleFn(); if (!fn) return false;
-        return SehCall_PatchToggleThis(ctx, fn, static_cast<uint8_t>(enableParam));
+        const bool retake = BeginRevivalPatchToggle();
+        const bool ok = SehCall_PatchToggleThis(ctx, fn, static_cast<uint8_t>(enableParam));
+        EndRevivalPatchToggle(retake);
+        return ok;
     }
 
     // Mirrors Revival's sub_1006B2A0 pause. Originals from the qualified
@@ -632,8 +644,7 @@ namespace {
     const uint8_t kVisualNops[5] = {0x90, 0x90, 0x90, 0x90, 0x90};
 
     std::mutex s_visualFreezeMutex;
-    uint8_t s_visualFreezeUsers = 0;     // guarded by s_visualFreezeMutex
-    bool s_visualFreezeWritten = false;  // guarded by s_visualFreezeMutex
+    VisualFreezeOwner s_visualFreeze;  // guarded by s_visualFreezeMutex
 
     bool VisualSiteHolds(uintptr_t base, const VisualSite& site, const uint8_t* bytes) {
         uint8_t live[5] = {};
@@ -660,6 +671,47 @@ namespace {
         return ok;
     }
 
+    struct LiveVisualSites {
+        uintptr_t base;
+        bool AllOriginal() const {
+            for (const auto& site : kVisualSites) {
+                if (!VisualSiteHolds(base, site, site.original)) return false;
+            }
+            return true;
+        }
+        bool MoveTo(bool nop) { return WriteVisualSites(base, nop); }
+    };
+
+    uintptr_t VisualSitesBase() {
+        return reinterpret_cast<uintptr_t>(GetModuleHandleA("efz.exe"));
+    }
+
+    // Revival's own pause holds the NOPs legitimately; unknown state counts as held.
+    bool RevivalMayHoldVisualSites() {
+        bool paused = true;
+        return !ReadPracticePauseFlag(paused) || paused
+            || s_weAppliedPatchFreeze.load(std::memory_order_acquire);
+    }
+
+    bool BeginRevivalPatchToggle() {
+        std::lock_guard<std::mutex> lock(s_visualFreezeMutex);
+        LiveVisualSites sites{VisualSitesBase()};
+        return sites.base && s_visualFreeze.BeginRevivalToggle(sites, RevivalMayHoldVisualSites());
+    }
+
+    void EndRevivalPatchToggle(bool retake) {
+        if (!retake) return;
+        std::lock_guard<std::mutex> lock(s_visualFreezeMutex);
+        LiveVisualSites sites{VisualSitesBase()};
+        if (sites.base) s_visualFreeze.EndRevivalToggle(sites, retake, IsPracticeContext());
+    }
+
+    void RepairOrphanedVisualSites() {
+        std::lock_guard<std::mutex> lock(s_visualFreezeMutex);
+        LiveVisualSites sites{VisualSitesBase()};
+        if (sites.base) (void)s_visualFreeze.RepairOrphan(sites, RevivalMayHoldVisualSites());
+    }
+
     bool ApplyVisualEffectPatches(bool freeze) {
         return PauseIntegration::SetVisualFreeze(PauseIntegration::VisualFreezeUser::Menu, freeze);
     }
@@ -675,8 +727,10 @@ namespace {
 
         auto fn = GetOfficialToggleFn(); if (!fn) return false;
         s_internalPauseBypass.store(true, std::memory_order_relaxed);
+        const bool retake = BeginRevivalPatchToggle();
         bool ok = false;
         ok = SehCall_OfficialToggle(p, fn);
+        EndRevivalPatchToggle(retake);
         LogOut(std::string("[PAUSE] InvokeOfficialToggle -> ") + (ok?"OK":"EXCEPTION"), true);
         s_internalPauseBypass.store(false, std::memory_order_relaxed);
         return ok;
@@ -743,8 +797,13 @@ namespace PauseIntegration {
         return v == 0;
     }
     bool IsPausedOrFrozen() { return IsPracticePaused() || IsGameSpeedFrozen(); }
+    bool IsPracticePausedByMenu() {
+        return s_weUsedOfficialToggle.load(std::memory_order_acquire)
+            || s_weForcedFlagPause.load(std::memory_order_acquire);
+    }
 
     bool SetPracticePausedForFramestep(bool paused) {
+        if (!IsPracticeContext()) return false;
         if (!ResolvePracticeForFramestep(paused ? "framestep pause" : "framestep unpause")) {
             LogOut("[PAUSE][FRAMESTEP] Practice pointer unavailable", true);
             return false;
@@ -785,6 +844,7 @@ namespace PauseIntegration {
 
     void MaintainFreezeWhileMenuVisible() {
         if (!s_menuVisible.load()) return;
+        if (!IsPracticeContext()) return;
         // A surface-refresh lease owns the physical thaw; do not undo it here.
         if (s_menuSurfaceRefreshActive.load(std::memory_order_acquire)) return;
 
@@ -826,12 +886,20 @@ namespace PauseIntegration {
             s_weAppliedPatchFreeze.store(false);
             s_weFrozeGamespeed.store(false);
 
+            // Gamespeed 0 and the shared NOPs already freeze the world; the
+            // official toggle would only set gamespeed 3 again on close.
+            if (revivalLoaded && inPractice && Framestep::HoldsEnginePause()) {
+                LogOut("[PAUSE] Framestep already holds the pause; official toggle skipped", true);
+                return;
+            }
+
             if (revivalLoaded && inPractice && s_practicePtr.load()) {
                 bool alreadyPaused=false; ReadPracticePauseFlag(alreadyPaused);
                 if (!alreadyPaused) {
+                    // Published first: framestep's snapshot on the monitor thread reads this after the flag.
+                    s_weUsedOfficialToggle.store(true);
                     if (InvokeOfficialToggle()) {
                         bool nowPaused=false; if (ReadPracticePauseFlag(nowPaused) && nowPaused) {
-                            s_weUsedOfficialToggle.store(true);
                             LogOut("[PAUSE] Official toggle succeeded", true);
                             return;
                         }
@@ -839,6 +907,7 @@ namespace PauseIntegration {
                     } else {
                         LogOut("[PAUSE] Official toggle call failed; attempting fallback", true);
                     }
+                    s_weUsedOfficialToggle.store(false);
                 } else {
                     LogOut("[PAUSE] Already paused before menu; will not auto-unpause", true);
                     return; // respect external pause
@@ -884,7 +953,11 @@ namespace PauseIntegration {
                 if (ApplyPatchFreeze(true)) { s_weAppliedPatchFreeze.store(true); appliedAny=true; LogOut("[PAUSE] Fallback: patch freeze applied", true); }
                 if (s_practicePtr.load()) {
                     bool p=false; ReadPracticePauseFlag(p);
-                    if (!p && WritePracticePauseFlag(true)) { s_weForcedFlagPause.store(true); appliedAny=true; LogOut("[PAUSE] Fallback: pause flag set", true); }
+                    if (!p) {
+                        s_weForcedFlagPause.store(true);
+                        if (WritePracticePauseFlag(true)) { appliedAny=true; LogOut("[PAUSE] Fallback: pause flag set", true); }
+                        else s_weForcedFlagPause.store(false);
+                    }
                     ResetPracticeStepCounterToZero();
                 }
             }
@@ -928,6 +1001,10 @@ namespace PauseIntegration {
             if (s_weAppliedVisualPatches.load()) {
                 ApplyVisualEffectPatches(false);
                 s_weAppliedVisualPatches.store(false);
+            }
+            // A toggler map saved before this build's guards still restores NOPs on every close.
+            if (nativeWritesAllowed && revivalLoaded) {
+                RepairOrphanedVisualSites();
             }
         }
     }
@@ -1095,44 +1172,54 @@ namespace PauseIntegration {
     bool SetVisualFreeze(VisualFreezeUser user, bool freeze) {
         const uint8_t bit = static_cast<uint8_t>(user);
         std::lock_guard<std::mutex> lock(s_visualFreezeMutex);
-        const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA("efz.exe"));
+        LiveVisualSites sites{VisualSitesBase()};
         if (!freeze) {
-            s_visualFreezeUsers = static_cast<uint8_t>(s_visualFreezeUsers & ~bit);
-            if (s_visualFreezeUsers != 0 || !s_visualFreezeWritten) return true;
-            if (!base || !WriteVisualSites(base, false)) {
+            const bool wasWritten = s_visualFreeze.written;
+            if (!sites.base || !s_visualFreeze.Release(sites, bit)) {
                 LogOut("[PAUSE][VISUAL] Restore incomplete; retained for the next release", true);
                 return false;
             }
-            s_visualFreezeWritten = false;
-            LogOut("[PAUSE][VISUAL] Visual update sites restored", true);
+            if (wasWritten && !s_visualFreeze.written) LogOut("[PAUSE][VISUAL] Visual update sites restored", true);
             return true;
         }
-        if (!base) return false;
-        if (!s_visualFreezeWritten) {
-            for (const auto& site : kVisualSites) {
-                if (!VisualSiteHolds(base, site, site.original)) {
-                    LogOut("[PAUSE][VISUAL] Visual update sites are not the known originals; freeze refused", true);
-                    return false;
-                }
-            }
-        }
-        if (WriteVisualSites(base, true)) {
-            if (!s_visualFreezeWritten) LogOut("[PAUSE][VISUAL] Visual update sites NOPed", true);
-        } else if (s_visualFreezeUsers == 0 && WriteVisualSites(base, false)) {
-            s_visualFreezeWritten = false;
+        if (!sites.base) return false;
+        // Under the mutex: a boundary restore that won it must not be undone.
+        if (!IsPracticeContext()) return false;
+        const bool wasWritten = s_visualFreeze.written;
+        switch (s_visualFreeze.Acquire(sites, bit, RevivalMayHoldVisualSites())) {
+        case VisualFreezeOwner::Acquired::Refused:
+            LogOut("[PAUSE][VISUAL] Visual update sites are not the known originals; freeze refused", true);
+            return false;
+        case VisualFreezeOwner::Acquired::RolledBack:
             LogOut("[PAUSE][VISUAL] Visual freeze failed; sites rolled back", true);
             return false;
-        } else if (!s_visualFreezeWritten) {
-            // Partial NOPs stay owned so the last release restores them.
-            LogOut("[PAUSE][VISUAL] Visual freeze incomplete; held for restore", true);
+        case VisualFreezeOwner::Acquired::Held:
+            break;
         }
-        s_visualFreezeWritten = true;
-        s_visualFreezeUsers = static_cast<uint8_t>(s_visualFreezeUsers | bit);
+        if (!wasWritten) LogOut("[PAUSE][VISUAL] Visual update sites NOPed", true);
         return true;
+    }
+
+    void RestoreVisualSitesAtBoundary(const char* reason) {
+        s_weAppliedVisualPatches.store(false);
+        std::lock_guard<std::mutex> lock(s_visualFreezeMutex);
+        LiveVisualSites sites{VisualSitesBase()};
+        if (!sites.base) return;
+        const bool held = s_visualFreeze.written;
+        const bool ok = s_visualFreeze.Boundary(sites);
+        if (held || !ok) {
+            std::ostringstream oss;
+            oss << "[PAUSE][VISUAL] Boundary restore reason=" << (reason ? reason : "unspecified")
+                << " held=" << (held ? 1 : 0) << (ok ? " OK" : " foreign bytes left alone");
+            LogOut(oss.str(), true);
+        }
     }
 
     void SetRuntimeHooksActive(bool active) {
         if (!active) {
+            // Netplay entry: online mode is already published, so this only releases code bytes and bookkeeping.
+            Framestep::CancelActiveState("netplay entry");
+            RestoreVisualSitesAtBoundary("netplay entry");
             bool changed = false;
             if (s_practiceHooksInstalled.load(std::memory_order_relaxed)) {
                 if (s_practiceTickHookCreated.load(std::memory_order_relaxed) && s_practiceTickTarget) {

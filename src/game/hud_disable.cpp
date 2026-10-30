@@ -1,4 +1,5 @@
 #include "../include/game/hud_disable.h"
+#include "../include/game/game_state.h"
 #include "../include/core/logger.h"
 #include "../include/core/memory.h"
 #include "../include/core/globals.h"
@@ -107,7 +108,7 @@ int __fastcall Hooked_renderBattleScreen(void* battleContext, void* /*edx*/) {
     auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&Hooked_renderBattleScreen>());
     if (!execution.Admitted()) return oRenderBattleScreen(battleContext);
     if (!s_hidden.load(std::memory_order_relaxed) ||
-        g_onlineModeActive.load(std::memory_order_relaxed) || !battleContext) {
+        !PracticeBattleHooksOpen() || !battleContext) {
         return oRenderBattleScreen(battleContext);
     }
     uintptr_t resMgr = 0;
@@ -131,7 +132,7 @@ int __fastcall Hooked_renderBattleScreen(void* battleContext, void* /*edx*/) {
 unsigned __fastcall Hooked_renderGameHUD(void* gs, void* /*edx*/) {
     auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&Hooked_renderGameHUD>());
     if (!execution.Admitted()) return oRenderGameHUD(gs);
-    if (g_onlineModeActive.load(std::memory_order_relaxed)) return oRenderGameHUD(gs);
+    if (!PracticeBattleHooksOpen()) return oRenderGameHUD(gs);
     const int prev = GetCurrentSeam(); SetCurrentSeam(SEAM_TOP);
     const unsigned r = oRenderGameHUD(gs);
     SetCurrentSeam(prev);
@@ -140,7 +141,7 @@ unsigned __fastcall Hooked_renderGameHUD(void* gs, void* /*edx*/) {
 void __fastcall Hooked_renderMeters(void* gs, void* /*edx*/) {
     auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&Hooked_renderMeters>());
     if (!execution.Admitted()) { oRenderMeters(gs); return; }
-    if (g_onlineModeActive.load(std::memory_order_relaxed)) { oRenderMeters(gs); return; }
+    if (!PracticeBattleHooksOpen()) { oRenderMeters(gs); return; }
     const int prev = GetCurrentSeam(); SetCurrentSeam(SEAM_BOTTOM);
     oRenderMeters(gs);
     SetCurrentSeam(prev);
@@ -150,7 +151,7 @@ void __fastcall Hooked_renderMeters(void* gs, void* /*edx*/) {
 int __fastcall Hooked_renderPlayerStats(void* gameSystem, void* /*edx*/, void* playerData) {
     auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&Hooked_renderPlayerStats>());
     if (!execution.Admitted()) return oRenderPlayerStats(gameSystem, playerData);
-    if (!g_onlineModeActive.load(std::memory_order_relaxed)) {
+    if (PracticeBattleHooksOpen()) {
         if (s_hidden.load(std::memory_order_relaxed) ||
             (s_elementMask.load(std::memory_order_relaxed) & HudDisable::ElemComboPanel)) {
             return 0;
@@ -166,7 +167,7 @@ int __fastcall Hooked_blitTransparency(void* gfx, void* /*edx*/, int dX, int dY,
     if (!execution.Admitted()) return oBlitTransparency(gfx,dX,dY,dR,dB,surf,sX,sY,sR,sB,key,flip);
     const int seam = GetCurrentSeam();
     if (seam != SEAM_NONE && !s_hidden.load(std::memory_order_relaxed) &&
-        !g_onlineModeActive.load(std::memory_order_relaxed)) {
+        PracticeBattleHooksOpen()) {
         const uint32_t mask = s_elementMask.load(std::memory_order_relaxed);
         if (mask && ShouldSkipElement(seam, dY, mask)) return 1;
     }
@@ -178,7 +179,7 @@ int __fastcall Hooked_blitPalette(void* gfx, void* /*edx*/, int dX, int dY, int 
     if (!execution.Admitted()) return oBlitPalette(gfx,dX,dY,dR,dB,surf,sX,sY,sR,sB,key,flip,pal);
     const int seam = GetCurrentSeam();
     if (seam != SEAM_NONE && !s_hidden.load(std::memory_order_relaxed) &&
-        !g_onlineModeActive.load(std::memory_order_relaxed)) {
+        PracticeBattleHooksOpen()) {
         const uint32_t mask = s_elementMask.load(std::memory_order_relaxed);
         if (mask && ShouldSkipElement(seam, dY, mask)) return 1;
     }
@@ -266,7 +267,10 @@ void Install() {
                          sizeof(SIG_BLIT_TRANSPARENCY), "blitTransparency") &&
         SignatureMatches(base + BLIT_PALETTE_OFFSET, SIG_BLIT_PALETTE,
                          sizeof(SIG_BLIT_PALETTE), "blitPalette");
-    if (!signaturesOk) return;
+    if (!signaturesOk) {
+        LogOut("[HUD_DISABLE] HUD hiding unavailable on this game build; HUD options have no effect", true);
+        return;
+    }
 
     if (s_seamTls == TLS_OUT_OF_INDEXES) {
         s_seamTls = TlsAlloc();

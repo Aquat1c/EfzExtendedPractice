@@ -484,7 +484,6 @@ static std::atomic<bool> g_FallbackFromWatchdog{ false };
 // GetTickCount of the last detour entry, admitted or not.
 static std::atomic<DWORD> g_EndSceneLastEntryTick{ 0 };
 static std::atomic<bool> g_endSceneImguiInit{ false };
-static std::atomic<bool> g_endSceneRelatchInProgress{ false };
 
 namespace {
 
@@ -647,11 +646,7 @@ bool AttachEndSceneHookForCandidate(const EndSceneHookCandidate& candidate, cons
         << " module=" << candidate.modulePath;
     LogOut(oss.str(), true);
 
-    if (g_EndSceneTarget && g_EndSceneTarget != candidate.target &&
-        MinHookUtils::HasOwnedTarget(g_EndSceneTarget)) {
-        LogOut("[OVERLAY][D3D9] Previous target retirement pending; retaining its callable original", true);
-        return false;
-    }
+    // CreateHook refuses a second target while the first keeps the detour's original slot.
     if (!MinHookUtils::CreateHook(candidate.target, reinterpret_cast<void*>(&HookedEndScene),
             reinterpret_cast<void**>(&oEndScene), "[OVERLAY][D3D9]", "EndScene", nullptr, &MinHookUtils::TicketFor<&HookedEndScene>())) return false;
     // Capture immediately, including failed enables and netplay racing attach.
@@ -679,77 +674,6 @@ void RemoveEndSceneHookTarget(void* target) {
     }
     MinHookUtils::DisableHook(target, "[OVERLAY][D3D9]", "EndScene");
     MinHookUtils::RemoveHook(target, "[OVERLAY][D3D9]", "EndScene");
-}
-
-bool TryRelatchEndSceneToLiveTarget(const char* trigger) {
-    bool expected = false;
-    if (!g_endSceneRelatchInProgress.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        return false;
-    }
-
-    EndSceneHookCandidate liveCandidate{};
-    const bool haveLiveCandidate = TryResolveLiveEndSceneCandidate(liveCandidate);
-    if (haveLiveCandidate) {
-        LogEndSceneCandidate(liveCandidate, "[OVERLAY][D3D9] Resolved live EndScene candidate");
-    }
-
-    if (!haveLiveCandidate || !liveCandidate.target) {
-        LogOut(std::string("[OVERLAY][D3D9] Live EndScene relatch skipped trigger=")
-               + (trigger ? trigger : "unknown")
-               + " reason=no-live-candidate",
-               true);
-        g_endSceneRelatchInProgress.store(false, std::memory_order_release);
-        return false;
-    }
-
-    if (liveCandidate.target == g_EndSceneTarget) {
-        LogOut(std::string("[OVERLAY][D3D9] Live EndScene candidate already matches current hook target source=")
-               + g_EndSceneTargetSource,
-               true);
-        g_endSceneRelatchInProgress.store(false, std::memory_order_release);
-        return false;
-    }
-
-    void* previousTarget = g_EndSceneTarget;
-    const char* previousSource = g_EndSceneTargetSource;
-    RemoveEndSceneHookTarget(previousTarget);
-    if (MinHookUtils::HasOwnedTarget(previousTarget)) {
-        // Relatch is optional: keep the previously admitted overlay while its
-        // replacement awaits a qualified retirement continuation.
-        if (!g_onlineModeActive.load(std::memory_order_relaxed)) {
-            (void)PracticeHooks::RestoreRetainedTargetAdmission(
-                MinHookUtils::OwnedHooks(), previousTarget, g_EndSceneHookEnabled);
-        }
-        g_endSceneRelatchInProgress.store(false, std::memory_order_release);
-        return false;
-    }
-    g_EndSceneTarget = nullptr;
-    DirectDrawHook::isHooked = false;
-    g_EndSceneHookEnabled.store(false, std::memory_order_release);
-
-    if (AttachEndSceneHookForCandidate(liveCandidate, trigger)) {
-        LogOut(std::string("[OVERLAY][D3D9] Live EndScene relatch succeeded previousSource=")
-               + (previousSource ? previousSource : "unknown")
-               + " newSource=" + (liveCandidate.source ? liveCandidate.source : "unknown"),
-               true);
-        g_endSceneRelatchInProgress.store(false, std::memory_order_release);
-        return true;
-    }
-
-    if (previousTarget && previousTarget != liveCandidate.target) {
-        EndSceneHookCandidate previousCandidate{};
-        previousCandidate.target = previousTarget;
-        previousCandidate.source = previousSource ? previousSource : "previous";
-        previousCandidate.modulePath = DescribeModuleForAddress(previousTarget);
-        if (AttachEndSceneHookForCandidate(previousCandidate, "restore-after-relatch-failure")) {
-            LogOut("[OVERLAY][D3D9] Restored previous EndScene hook after live relatch failure", true);
-        } else {
-            LogOut("[OVERLAY][D3D9] Failed to restore previous EndScene hook after live relatch failure", true);
-        }
-    }
-
-    g_endSceneRelatchInProgress.store(false, std::memory_order_release);
-    return false;
 }
 
 } // namespace
@@ -905,6 +829,7 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
         // Validate device identity every frame; a replaced device must never render
         // through the backend retained for the previous device or host.
     if (!ImGuiImpl::IsBoundToDevice(pDevice)) {
+        GifPlayer::ReleaseDeviceResources();
         if (!ImGuiImpl::Initialize(pDevice)) return forward();
         g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
     }
@@ -1255,7 +1180,23 @@ void DirectDrawHook::RenderD3D9Overlays(LPDIRECT3DDEVICE9 pDevice, UINT rtW, UIN
                 const ImVec2 p0(ox + box.x * scale, oy + box.y * scale);
                 const ImVec2 p1(ox + (box.x + box.w) * scale, oy + (box.y + box.h) * scale);
                 bgList->AddRectFilled(p0, p1, ImColorFromArgb(box.fillArgb));
-                bgList->AddRect(p0, p1, ImColorFromArgb(box.outlineArgb), 0.0f, 0, 1.0f);
+                if (box.dottedOutline) {
+                    // Matches Revival's 0xF0F0F0F0 stipple: 4 virtual pixels on, 4 off.
+                    const ImU32 outline = ImColorFromArgb(box.outlineArgb);
+                    const float on = (std::max)(1.0f, 4.0f * scale);
+                    for (float x = p0.x; x < p1.x; x += 2.0f * on) {
+                        const float end = (std::min)(x + on, p1.x);
+                        bgList->AddRectFilled(ImVec2(x, p0.y), ImVec2(end, p0.y + 1.0f), outline);
+                        bgList->AddRectFilled(ImVec2(x, p1.y - 1.0f), ImVec2(end, p1.y), outline);
+                    }
+                    for (float y = p0.y; y < p1.y; y += 2.0f * on) {
+                        const float end = (std::min)(y + on, p1.y);
+                        bgList->AddRectFilled(ImVec2(p0.x, y), ImVec2(p0.x + 1.0f, end), outline);
+                        bgList->AddRectFilled(ImVec2(p1.x - 1.0f, y), ImVec2(p1.x, end), outline);
+                    }
+                } else {
+                    bgList->AddRect(p0, p1, ImColorFromArgb(box.outlineArgb), 0.0f, 0, 1.0f);
+                }
             }
         }
     }
@@ -1895,6 +1836,10 @@ bool DirectDrawHook::InitializeD3D9() {
         LogOut(std::string("[OVERLAY] Failed to create temp D3D9 device: ") + hrbuf, true);
         g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
         d3d9->Release();
+        if (dummyWnd) {
+            DestroyWindow(dummyWnd);
+            UnregisterClassA("EFZ_TM_D3D9_DUMMY", GetModuleHandleA(nullptr));
+        }
         s_d3d9InitInProgress.store(false);
         return false;
     }
@@ -1981,11 +1926,6 @@ bool DirectDrawHook::InitializeD3D9() {
     std::thread([]{
         Sleep(6000);
         if (!g_EndSceneObserved.load()) {
-            if (TryRelatchEndSceneToLiveTarget("watchdog")) {
-                Sleep(4000);
-            }
-        }
-        if (!g_EndSceneObserved.load()) {
             // Flag before marker: EndScene clears the flag only after taking the marker.
             g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
             g_FallbackFromWatchdog.store(true, std::memory_order_release);
@@ -2053,20 +1993,12 @@ bool DirectDrawHook::SetD3D9Active(bool active) {
 
     const bool currentlyEnabled = g_EndSceneHookEnabled.load(std::memory_order_acquire);
     if (currentlyEnabled == active) {
-        if (active
-            && !g_EndSceneObserved.load(std::memory_order_acquire)
-            && g_ExternalMenuFallbackNeeded.load(std::memory_order_acquire)) {
-            (void)TryRelatchEndSceneToLiveTarget("reactivate");
-        }
         return active ? EndSceneEntryReachable() : !MinHookUtils::HasOwnedTarget(g_EndSceneTarget);
     }
 
     g_EndSceneHookEnabled.store(active, std::memory_order_release);
     if (!active) {
         g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
-    } else if (!g_EndSceneObserved.load(std::memory_order_acquire)
-               && g_ExternalMenuFallbackNeeded.load(std::memory_order_acquire)) {
-        (void)TryRelatchEndSceneToLiveTarget("enable");
     }
     LogOut(std::string("[OVERLAY] D3D9 EndScene hook ") + (active ? "enabled" : "disabled")
            + " source=" + g_EndSceneTargetSource,

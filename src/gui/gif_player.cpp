@@ -186,6 +186,14 @@ bool Initialize(LPDIRECT3DDEVICE9 dev) {
     return true;
 }
 
+void ReleaseDeviceResources() {
+    s_frames.clear();
+    s_index = 0;
+    s_accum = 0.0;
+    s_inited = false;
+    s_lastFailedLoadTick = 0;
+}
+
 void Shutdown() {
     s_frames.clear();
     if (s_gdiplusToken) {

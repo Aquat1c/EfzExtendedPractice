@@ -9,13 +9,27 @@ function Get-ProjectRoot {
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 }
 
+function Test-VsMajorInstalled {
+    param([int]$Major)
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    # Without vswhere nothing can be ruled out; CMake reports a missing generator itself.
+    if (-not (Test-Path $vswhere)) {
+        return $true
+    }
+
+    $range = "[$Major.0,$($Major + 1).0)"
+    return [bool](& $vswhere -products * -prerelease -version $range -property installationPath)
+}
+
 function Get-BuildConfig {
     param(
         [string]$BuildTarget,
         [string]$CMakeHelpText
     )
 
-    if ($CMakeHelpText -match "Visual Studio 18 2026") {
+    # CMake lists every generator it knows, installed or not.
+    if ($CMakeHelpText -match "Visual Studio 18 2026" -and (Test-VsMajorInstalled -Major 18)) {
         if ($BuildTarget -eq "xp") {
             return @{
                 ConfigurePreset = "vs18-xp-win32"
@@ -35,7 +49,7 @@ function Get-BuildConfig {
         }
     }
 
-    if ($CMakeHelpText -match "Visual Studio 17 2022") {
+    if ($CMakeHelpText -match "Visual Studio 17 2022" -and (Test-VsMajorInstalled -Major 17)) {
         if ($BuildTarget -eq "xp") {
             return @{
                 ConfigurePreset = "vs17-xp-win32"

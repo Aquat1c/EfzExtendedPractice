@@ -1,7 +1,7 @@
 #pragma once
 // FrameBar - per-player strip showing each sampled state
 // (idle/walk/jump/attack/blockstun/hitstun/etc.) color-coded.
-// Sampling cadence: subframes by default, optionally once per visual frame.
+// Sampling cadence: once per engine tick; cells fold to visual frames when displayed.
 // Render cadence: once per EndScene from DirectDrawHook::RenderD3D9Overlays
 // when toggled on (config flag), independent of menu visibility.
 
@@ -44,7 +44,7 @@ enum class Cat : uint8_t {
     Thrown,
     RG,             // recoil-guard windows
     SuperFlash,     // IC/super screen freeze
-    HitstopShared,  // both players in hit-hitstop
+    HitstopShared,  // this side held by its own hit-hitstop
     COUNT_
 };
 
@@ -53,8 +53,8 @@ constexpr int kBarMemory = 240;     // ring buffer length (subframe samples by d
 // Master enable. Persisted via Config::SetSetting("General", "showFrameBar").
 extern std::atomic<bool> g_enabled;
 
-// Called from FrameDataMonitor. Reads move-IDs and
-// edge-detects state to populate the next ring-buffer cell.
+// Called from OnEngineTick on the game thread, inside a Practice battle only.
+// Populates the next ring-buffer cell; never writes game memory.
 void TickSample();
 
 // Called from RenderD3D9Overlays. Draws the bar near the bottom-center

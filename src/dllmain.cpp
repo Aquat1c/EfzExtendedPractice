@@ -120,8 +120,6 @@ void DelayedInitialization(HMODULE hModule) {
         WriteStartupLog(XPCompat::GetRuntimeSummary());
         LogOut(XPCompat::GetRuntimeSummary(), true);
 
-        CrashHandler::WarmupSymbolMaps();
-
         // Initialize configuration system first so we can gate file logging
         InitializeConfig();
 
@@ -240,8 +238,7 @@ void DelayedInitialization(HMODULE hModule) {
             LogOut("[HOTKEY] Exception while installing practice hotkey gate", true);
         }
 
-        // Initialize both the mod-owned custom savestate backend and the
-        // Revival hook fallback/tracking path.
+        // Revival savestate tracking; the custom savestate backend is not reached from here.
         try {
             const bool revivalReady = SavestateHook::Install();
             LogOut(std::string("[SAVESTATE] Revival hooks=") + (revivalReady ? "ready" : "not-ready"), true);
@@ -425,6 +422,7 @@ void InitializeConfig() {
     }
     else {
         LogOut("[SYSTEM] Failed to initialize configuration, using defaults", true);
+        ExtendedConfigBridge::InitializeAudioControl();
     }
 }
 
@@ -454,11 +452,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // workers, flushing streams, or asking MinHook/DirectX to unload here
         // can deadlock the exit path.
         g_isShuttingDown = true;
-        Practice::RequestMonitorStop();
         g_featuresEnabled = false;
+        // At termination other threads are gone and may have died holding a mutex.
         if (lpReserved != nullptr) {
             break;
         }
+        Practice::RequestMonitorStop();
 
         // Explicit FreeLibrary remains a legacy best-effort path. A future
         // injector-facing shutdown API must quiesce and join every worker before

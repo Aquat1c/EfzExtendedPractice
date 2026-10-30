@@ -12,7 +12,9 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <atomic>
 #include <map>
+#include <mutex>
 #include <xinput.h>
 
 namespace Config {
@@ -43,22 +45,29 @@ namespace Config {
 
     static std::string configFilePath;
 
-    static std::unordered_map<std::string, std::unordered_map<std::string, std::string>> iniData;
-#include "../include/utils/audio_config_publication.inl"
+    using IniMap = std::unordered_map<std::string, std::unordered_map<std::string, std::string>>;
+    // Read and written from the menu, render and hotkey threads. No file I/O under the lock.
+    static IniMap s_ini;
+    static std::mutex s_iniMutex;
+    static std::atomic<bool> s_efzBoundVks[256];
 
     void SetIniValue(const std::string& section, const std::string& key, const std::string& value);
+#include "../include/utils/audio_config_publication.inl"
+
     bool GetValueBool(const std::string& section, const std::string& key, bool defaultValue);
     int GetValueInt(const std::string& section, const std::string& key, int defaultValue);
     bool LoadIniFromFile();
     static std::string ToLower(std::string s) { std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); }); return s; }
 
     void SetIniValue(const std::string& section, const std::string& key, const std::string& value) {
-        iniData[ToLower(section)][ToLower(key)] = value;
+        std::lock_guard<std::mutex> lock(s_iniMutex);
+        s_ini[ToLower(section)][ToLower(key)] = value;
     }
     
     bool GetValueBool(const std::string& section, const std::string& key, bool defaultValue) {
-        auto sectionIt = iniData.find(ToLower(section));
-        if (sectionIt != iniData.end()) {
+        std::lock_guard<std::mutex> lock(s_iniMutex);
+        auto sectionIt = s_ini.find(ToLower(section));
+        if (sectionIt != s_ini.end()) {
             auto keyIt = sectionIt->second.find(ToLower(key));
             if (keyIt != sectionIt->second.end()) {
                 return keyIt->second == "1" || keyIt->second == "true" || keyIt->second == "yes";
@@ -68,8 +77,9 @@ namespace Config {
     }
     
     int GetValueInt(const std::string& section, const std::string& key, int defaultValue) {
-        auto sectionIt = iniData.find(ToLower(section));
-        if (sectionIt != iniData.end()) {
+        std::lock_guard<std::mutex> lock(s_iniMutex);
+        auto sectionIt = s_ini.find(ToLower(section));
+        if (sectionIt != s_ini.end()) {
             auto keyIt = sectionIt->second.find(ToLower(key));
             if (keyIt != sectionIt->second.end()) {
                 return ParseKeyValue(keyIt->second);
@@ -278,6 +288,8 @@ namespace Config {
             file << "enableFpsDiagnostics = 0\n\n";
             file << "; Show per-player FrameBar overlay (1 = yes, 0 = no)\n";
             file << "showFrameBar = 0\n\n";
+            file << "frameBarMoveData = 1\n\n";
+            file << "menuAnimations = 1\n\n";
             file << "; Audio volume levels as percent of the current default mix (0-100)\n";
             file << "bgmVolumePercent = 100\n";
             file << "seVolumePercent = 100\n\n";
@@ -494,6 +506,10 @@ namespace Config {
         LoadIniFromFile();
         
         try {
+            const IniMap iniData = [] {
+                std::lock_guard<std::mutex> lock(s_iniMutex);
+                return s_ini;
+            }();
             settings.useImGui = GetValueBool("General", "useImGui", true);
             settings.useCustomMenu = GetValueBool("General", "useCustomMenu", true);
             settings.detailedLogging = GetValueBool("General", "detailedLogging", false);
@@ -504,6 +520,8 @@ namespace Config {
             settings.suppressRevivalFramestep = GetValueBool("General", "suppressRevivalFramestep", true);
             settings.enableFpsDiagnostics = GetValueBool("General", "enableFpsDiagnostics", false);
             settings.showFrameBar = GetValueBool("General", "showFrameBar", false);
+            settings.frameBarMoveData = GetValueBool("General", "frameBarMoveData", true);
+            settings.menuAnimations = GetValueBool("General", "menuAnimations", true);
             settings.checkForUpdates = GetValueBool("General", "checkForUpdates", true);
             settings.bgmVolumePercent = GetValueInt("General", "bgmVolumePercent", 100);
             if (settings.bgmVolumePercent < 0) settings.bgmVolumePercent = 0;
@@ -650,11 +668,11 @@ namespace Config {
             settings.autoFixHPOnNeutral = GetValueBool("General", "autoFixHPOnNeutral", false);
             {
                 auto sectionIt = iniData.find("general");
-                float duration = 8.0f;
+                float duration = 1.9f;
                 if (sectionIt != iniData.end()) {
                     auto keyIt = sectionIt->second.find("frameadvantagedisplayduration");
                     if (keyIt != sectionIt->second.end()) {
-                        try { duration = std::stof(keyIt->second); } catch (...) { duration = 8.0f; }
+                        try { duration = std::stof(keyIt->second); } catch (...) { duration = 1.9f; }
                     }
                 }
                 if (duration < 0.5f) duration = 0.5f;
@@ -835,6 +853,8 @@ namespace Config {
             file << "enableFpsDiagnostics = " << (settings.enableFpsDiagnostics ? "1" : "0") << "\n\n";
             file << "; Show per-player FrameBar overlay (1 = yes, 0 = no)\n";
             file << "showFrameBar = " << (settings.showFrameBar ? "1" : "0") << "\n\n";
+            file << "frameBarMoveData = " << (settings.frameBarMoveData ? "1" : "0") << "\n\n";
+            file << "menuAnimations = " << (settings.menuAnimations ? "1" : "0") << "\n\n";
             file << "; Audio volume levels as percent of the current default mix (0-100)\n";
             file << "bgmVolumePercent = " << settings.bgmVolumePercent << "\n";
             file << "seVolumePercent = " << settings.seVolumePercent << "\n\n";
@@ -1006,6 +1026,8 @@ namespace Config {
             if (k == "enabledebugfilelog") settings.enableDebugFileLog = (value == "1");
             if (k == "enableconsole") settings.enableConsole = (value == "1");
             if (k == "showframebar") settings.showFrameBar = (value == "1");
+            if (k == "framebarmovedata") settings.frameBarMoveData = (value == "1");
+            if (k == "menuanimations") settings.menuAnimations = (value == "1");
             if (k == "framebartimingmode") {
                 try { settings.frameBarTimingMode = std::stoi(value); } catch (...) { settings.frameBarTimingMode = 0; }
                 if (settings.frameBarTimingMode < 0 || settings.frameBarTimingMode > 1) settings.frameBarTimingMode = 0;
@@ -1140,7 +1162,7 @@ namespace Config {
 
     int ParseKeyValue(const std::string& value) {
         try {
-            if (value.substr(0, 2) == "0x") {
+            if (value.size() >= 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X')) {
                 // Older saves wrote disabled (-1) as 0xFFFFFFFF.
                 return static_cast<int>(std::stoul(value.substr(2), nullptr, 16));
             }
@@ -1158,7 +1180,7 @@ namespace Config {
     }
 
     bool IsMenuKeyAllowed(int vk) {
-        if (vk <= 0 || vk > 0xFE) return false;
+        if (!ConfigPolicy::IsPhysicalKeyVk(vk)) return false;
         if (vk == VK_ESCAPE) return true;
         if (vk >= 0x01 && vk <= 0x06) return false;
         switch (vk) {
@@ -1170,6 +1192,14 @@ namespace Config {
             return false;
         }
         return true;
+    }
+
+    void SetEfzBoundVks(const std::array<bool, 256>& vks) {
+        for (std::size_t i = 0; i < vks.size(); ++i) s_efzBoundVks[i].store(vks[i], std::memory_order_relaxed);
+    }
+
+    bool IsVkBoundByEfz(int vk) {
+        return vk > 0 && vk < 256 && s_efzBoundVks[vk].load(std::memory_order_relaxed);
     }
 
     int ParseGamepadButton(const std::string& value) {
@@ -1232,15 +1262,22 @@ namespace Config {
     }
 
     bool LoadIniFromFile() {
-        iniData.clear();
+        IniMap parsed;
         std::ifstream file(configFilePath);
         if (!file.is_open()) {
             LogOut("[CONFIG] LoadIniFromFile: failed to open ini file", true);
+            std::lock_guard<std::mutex> lock(s_iniMutex);
+            s_ini.clear();
             return false;
         }
         std::string line;
         std::string currentSection;
+        bool firstLine = true;
         while (std::getline(file, line)) {
+            if (firstLine) {
+                ConfigPolicy::StripUtf8Bom(line);
+                firstLine = false;
+            }
             auto trim = [](std::string &s){
                 size_t start = s.find_first_not_of(" \t\r\n");
                 size_t end = s.find_last_not_of(" \t\r\n");
@@ -1250,8 +1287,9 @@ namespace Config {
             trim(line);
             if (line.empty()) continue;
             if (line[0] == ';' || line[0] == '#') continue;
-            if (line.front() == '[' && line.back() == ']') {
-                currentSection = ToLower(line.substr(1, line.size()-2));
+            std::string sectionName;
+            if (ConfigPolicy::ParseSectionHeader(line, sectionName)) {
+                currentSection = ToLower(sectionName);
                 continue;
             }
             size_t hashPos = line.find('#');
@@ -1271,9 +1309,11 @@ namespace Config {
             std::string value = kv.substr(eq + 1);
             trim(key); trim(value);
             if (!currentSection.empty() && !key.empty()) {
-                SetIniValue(currentSection, key, value);
+                parsed[currentSection][ToLower(key)] = value;
             }
         }
+        std::lock_guard<std::mutex> lock(s_iniMutex);
+        s_ini.swap(parsed);
         return true;
     }
 }

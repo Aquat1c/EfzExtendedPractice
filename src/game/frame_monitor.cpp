@@ -1024,7 +1024,7 @@ struct RGAnalysis {
     int attacker = 0;          // 1 or 2
     short attackerMoveAtEvent = -1;
     bool cRGOpen = false;
-    int openedAtFrame = 0;     // internal frameCounter when opened
+    int openedAtFrame = 0;     // engine tick when opened
     // Actionability timestamps (internal frames @192Hz)
     int atkActionableAt = -1;
     int defActionableAt = -1;
@@ -1288,6 +1288,10 @@ void FrameDataMonitor() {
                 highResActive = false;
             }
             g_lastSample.online = true;
+            DropEngineTickState();
+            // Assist state only: the netplay world is never written.
+            monitorWorld.s_crgAssistActive = false;
+            monitorWorld.s_crgSavedAutoBlockValid = false;
             matchLogAnchorInternal = -1;
             SetCurrentLogMatchInternalFrame(-1);
             (void)Practice::WaitForMonitorSignal(250000000);
@@ -1308,6 +1312,7 @@ void FrameDataMonitor() {
         }
         monitorWorld.lastPhase = currentPhase;
         s_lastPhaseMode = currentMode;
+        DropEngineTickState();
         matchLogAnchorInternal = -1;
         SetCurrentLogMatchInternalFrame(-1);
         (void)Practice::WaitForMonitorSignal(50000000);
@@ -1887,6 +1892,16 @@ void FrameDataMonitor() {
             // Outside actual gameplay -> only do lightweight logic
             if (currentPhase != GamePhase::Match) {
                 lightweightTick();
+                // The battle loop has stopped, so no gated tick can see this boundary.
+                DropEngineTickState();
+                // The stop test below never runs off Match: restore the forced autoblock here.
+                if (monitorWorld.s_crgAssistActive) {
+                    if (monitorWorld.s_crgSavedAutoBlockValid && !monitorWorld.s_crgSavedAutoBlock && IsPracticeContext()) {
+                        SetPracticeAutoBlockEnabled(false);
+                    }
+                    monitorWorld.s_crgAssistActive = false;
+                    monitorWorld.s_crgSavedAutoBlockValid = false;
+                }
                 // Experimental engine ticks in EVERY phase; no-op in default builds.
                 TickMissionEngineGuarded();
                 prevMoveID1 = 0;
@@ -2049,7 +2064,7 @@ void FrameDataMonitor() {
                     short atkMoveNow = (rg.attacker == 1) ? rgSample.moveID1 : rgSample.moveID2;
                     bool atkActionable = (rg.attacker == 1) ? rgSample.actionable1 : rgSample.actionable2;
                     if (atkActionable) {
-                        rg.atkActionableAt = frameCounter.load();
+                        rg.atkActionableAt = (std::max)(GetActionableEdgeTick(rg.attacker), rg.openedAtFrame);
                         {
                             std::ostringstream os; os.setf(std::ios::fixed); os << std::setprecision(2);
                             os << "RG: Attacker actionable (P" << rg.attacker << ")";
@@ -2066,7 +2081,7 @@ void FrameDataMonitor() {
                     short defMoveNow = (rg.defender == 1) ? rgSample.moveID1 : rgSample.moveID2;
                     bool defActionable = (rg.defender == 1) ? rgSample.actionable1 : rgSample.actionable2;
                     if (defActionable) {
-                        rg.defActionableAt = frameCounter.load();
+                        rg.defActionableAt = (std::max)(GetActionableEdgeTick(rg.defender), rg.openedAtFrame);
                         {
                             std::ostringstream os; os.setf(std::ios::fixed); os << std::setprecision(2);
                             os << "RG: Defender actionable (P" << rg.defender << ")";
@@ -2176,7 +2191,7 @@ void FrameDataMonitor() {
                 slot.attacker = (defender == 1) ? 2 : 1;
                 slot.attackerMoveAtEvent = (slot.attacker == 1) ? moveID1 : moveID2;
                 slot.cRGOpen = true;
-                slot.openedAtFrame = frameCounter.load();
+                slot.openedAtFrame = GetCurrentInternalFrame();
                 emitRGMessage(slot);
 
                 // If the human just RG'd and Counter RG is enabled, prepare the dummy to counter-RG
@@ -2357,22 +2372,11 @@ void FrameDataMonitor() {
             bool moveIDsChanged = (moveID1 != prevMoveID1) || (moveID2 != prevMoveID2);
             bool criticalFeaturesActive = autoJumpEnabled.load() || HasAnyAutoActionTriggerEnabled() || autoAirtechEnabled.load();
 
-            // Process frame advantage only when move IDs change or timers/overlays require ticking
-            {
-                bool faNeedsTick = FrameAdvantageTimersActive();
-                if (moveIDsChanged || faNeedsTick) {
-                    MonitorFrameAdvantage(GetCurrentPerFrameSample());
-                }
-            }
-            
             // Recorder/playback own the world; suppress persistent Practice helpers meanwhile.
             if (!Mission::Engine::IsPracticeAutomationSuppressed()) {
                 // Run dummy auto-block using unified sample (still every frame for precision)
                 MonitorDummyAutoBlock(GetCurrentPerFrameSample());
             }
-
-            // FrameBar: per-subframe sampler (cheap when toggle is off).
-            FrameBar::TickSample();
 
             // Experimental mission engine snapshot; compile-time no-op in default builds.
             TickMissionEngineGuarded();
@@ -3419,8 +3423,6 @@ void UpdateStatsDisplay() {
                 }
             }
         }
-        if (g_statsBlockstunId != -1) { DirectDrawHook::RemovePermanentMessage(g_statsBlockstunId); g_statsBlockstunId = -1; }
-        if (g_statsUntechId != -1) { DirectDrawHook::RemovePermanentMessage(g_statsUntechId); g_statsUntechId = -1; }
     }
     const std::string moveIds = p1ReqStr.empty()
         ? I18n::TrFormat("MoveID:  P1: %d  P2: %d", (int)p1MoveId, (int)p2MoveId)
@@ -3526,17 +3528,17 @@ void UpdateStatsDisplay() {
                 }
             };
             std::stringstream mishioLine;
-            mishioLine << "Mishio: ";
+            mishioLine << I18n::Tr("Mishio: ");
             if (displayData.p1CharID == CHAR_ID_MISHIO) {
-                mishioLine << "P1 " << elemName(displayData.p1MishioElement) << "  Aw: " << displayData.p1MishioAwakenedTimer;
-                if (displayData.infiniteMishioElement || displayData.infiniteMishioAwakened) mishioLine << " (Inf)";
+                mishioLine << I18n::TrFormat("P%d %s  Aw: %d", 1, I18n::Tr(elemName(displayData.p1MishioElement)), (int)displayData.p1MishioAwakenedTimer);
+                if (displayData.infiniteMishioElement || displayData.infiniteMishioAwakened) mishioLine << I18n::Tr(" (Inf)");
             } else {
                 mishioLine << "P1 -";
             }
             mishioLine << "  ";
             if (displayData.p2CharID == CHAR_ID_MISHIO) {
-                mishioLine << "P2 " << elemName(displayData.p2MishioElement) << "  Aw: " << displayData.p2MishioAwakenedTimer;
-                if (displayData.infiniteMishioElement || displayData.infiniteMishioAwakened) mishioLine << " (Inf)";
+                mishioLine << I18n::TrFormat("P%d %s  Aw: %d", 2, I18n::Tr(elemName(displayData.p2MishioElement)), (int)displayData.p2MishioAwakenedTimer);
+                if (displayData.infiniteMishioElement || displayData.infiniteMishioAwakened) mishioLine << I18n::Tr(" (Inf)");
             } else {
                 mishioLine << "P2 -";
             }
@@ -3549,21 +3551,23 @@ void UpdateStatsDisplay() {
         bool showRumi = (displayData.p1CharID == CHAR_ID_NANASE) || (displayData.p2CharID == CHAR_ID_NANASE);
         if (showRumi) {
             std::stringstream rumiLine;
-            rumiLine << "Rumi: ";
+            rumiLine << I18n::Tr("Rumi: ");
             if (displayData.p1CharID == CHAR_ID_NANASE) {
-                rumiLine << "P1 " << (displayData.p1RumiBarehanded ? "Bare" : "Shinai");
-                rumiLine << "  Kimchi: " << (displayData.p1RumiKimchiActive ? "On" : "Off")
-                         << " (" << displayData.p1RumiKimchiTimer << ")";
-                if (displayData.p1RumiInfiniteKimchi || displayData.p1RumiInfiniteShinai) rumiLine << " (Inf)";
+                rumiLine << I18n::TrFormat("P%d %s  Kimchi: %s (%d)", 1,
+                                           I18n::Tr(displayData.p1RumiBarehanded ? "Bare" : "Shinai"),
+                                           I18n::Tr(displayData.p1RumiKimchiActive ? "On" : "Off"),
+                                           (int)displayData.p1RumiKimchiTimer);
+                if (displayData.p1RumiInfiniteKimchi || displayData.p1RumiInfiniteShinai) rumiLine << I18n::Tr(" (Inf)");
             } else {
                 rumiLine << "P1 -";
             }
             rumiLine << "  ";
             if (displayData.p2CharID == CHAR_ID_NANASE) {
-                rumiLine << "P2 " << (displayData.p2RumiBarehanded ? "Bare" : "Shinai");
-                rumiLine << "  Kimchi: " << (displayData.p2RumiKimchiActive ? "On" : "Off")
-                         << " (" << displayData.p2RumiKimchiTimer << ")";
-                if (displayData.p2RumiInfiniteKimchi || displayData.p2RumiInfiniteShinai) rumiLine << " (Inf)";
+                rumiLine << I18n::TrFormat("P%d %s  Kimchi: %s (%d)", 2,
+                                           I18n::Tr(displayData.p2RumiBarehanded ? "Bare" : "Shinai"),
+                                           I18n::Tr(displayData.p2RumiKimchiActive ? "On" : "Off"),
+                                           (int)displayData.p2RumiKimchiTimer);
+                if (displayData.p2RumiInfiniteKimchi || displayData.p2RumiInfiniteShinai) rumiLine << I18n::Tr(" (Inf)");
             } else {
                 rumiLine << "P2 -";
             }
@@ -3576,21 +3580,23 @@ void UpdateStatsDisplay() {
         bool showIkumi = (displayData.p1CharID == CHAR_ID_IKUMI) || (displayData.p2CharID == CHAR_ID_IKUMI);
         if (showIkumi) {
             std::stringstream ikumiLine;
-            ikumiLine << "Ikumi: ";
+            ikumiLine << I18n::Tr("Ikumi: ");
             if (displayData.p1CharID == CHAR_ID_IKUMI) {
-                ikumiLine << "P1 Blood Value " << displayData.p1IkumiLevelGauge
-                          << "  Lvl " << displayData.p1IkumiBlood
-                          << "  Genocide Timer " << displayData.p1IkumiGenocide;
-                if (displayData.infiniteBloodMode) ikumiLine << " (Inf)";
+                ikumiLine << I18n::TrFormat("P%d Blood Value %d  Lvl %d  Genocide Timer %d", 1,
+                                            (int)displayData.p1IkumiLevelGauge,
+                                            (int)displayData.p1IkumiBlood,
+                                            (int)displayData.p1IkumiGenocide);
+                if (displayData.infiniteBloodMode) ikumiLine << I18n::Tr(" (Inf)");
             } else {
                 ikumiLine << "P1 -";
             }
             ikumiLine << "  ";
             if (displayData.p2CharID == CHAR_ID_IKUMI) {
-                ikumiLine << "P2 Blood Value " << displayData.p2IkumiLevelGauge
-                          << "  Lvl " << displayData.p2IkumiBlood
-                          << "  Genocide Timer " << displayData.p2IkumiGenocide;
-                if (displayData.infiniteBloodMode) ikumiLine << " (Inf)";
+                ikumiLine << I18n::TrFormat("P%d Blood Value %d  Lvl %d  Genocide Timer %d", 2,
+                                            (int)displayData.p2IkumiLevelGauge,
+                                            (int)displayData.p2IkumiBlood,
+                                            (int)displayData.p2IkumiGenocide);
+                if (displayData.infiniteBloodMode) ikumiLine << I18n::Tr(" (Inf)");
             } else {
                 ikumiLine << "P2 -";
             }
@@ -3612,19 +3618,19 @@ void UpdateStatsDisplay() {
                 }
             };
             std::stringstream maiLine;
-            maiLine << "Mai: ";
+            maiLine << I18n::Tr("Mai: ");
             if (displayData.p1CharID == CHAR_ID_MAI) {
-                maiLine << "P1 " << statusName(displayData.p1MaiStatus) << " ";
+                maiLine << "P1 " << I18n::Tr(statusName(displayData.p1MaiStatus)) << " ";
                 if (displayData.p1MaiStatus == 1) {
                     maiLine << displayData.p1MaiGhostTime;
-                    if (displayData.p1MaiInfiniteGhost) maiLine << " (Inf)";
+                    if (displayData.p1MaiInfiniteGhost) maiLine << I18n::Tr(" (Inf)");
                 } else if (displayData.p1MaiStatus == 3) {
                     maiLine << displayData.p1MaiGhostCharge;
-                    if (displayData.p1MaiInfiniteCharge) maiLine << " (Inf)";
-                    if (displayData.p1MaiNoChargeCD) maiLine << " [NoCD]";
+                    if (displayData.p1MaiInfiniteCharge) maiLine << I18n::Tr(" (Inf)");
+                    if (displayData.p1MaiNoChargeCD) maiLine << I18n::Tr(" [NoCD]");
                 } else if (displayData.p1MaiStatus == 4) {
                     maiLine << displayData.p1MaiAwakeningTime;
-                    if (displayData.p1MaiInfiniteAwakening) maiLine << " (Inf)";
+                    if (displayData.p1MaiInfiniteAwakening) maiLine << I18n::Tr(" (Inf)");
                 } else {
                     maiLine << "-";
                 }
@@ -3633,17 +3639,17 @@ void UpdateStatsDisplay() {
             }
             maiLine << "  ";
             if (displayData.p2CharID == CHAR_ID_MAI) {
-                maiLine << "P2 " << statusName(displayData.p2MaiStatus) << " ";
+                maiLine << "P2 " << I18n::Tr(statusName(displayData.p2MaiStatus)) << " ";
                 if (displayData.p2MaiStatus == 1) {
                     maiLine << displayData.p2MaiGhostTime;
-                    if (displayData.p2MaiInfiniteGhost) maiLine << " (Inf)";
+                    if (displayData.p2MaiInfiniteGhost) maiLine << I18n::Tr(" (Inf)");
                 } else if (displayData.p2MaiStatus == 3) {
                     maiLine << displayData.p2MaiGhostCharge;
-                    if (displayData.p2MaiInfiniteCharge) maiLine << " (Inf)";
-                    if (displayData.p2MaiNoChargeCD) maiLine << " [NoCD]";
+                    if (displayData.p2MaiInfiniteCharge) maiLine << I18n::Tr(" (Inf)");
+                    if (displayData.p2MaiNoChargeCD) maiLine << I18n::Tr(" [NoCD]");
                 } else if (displayData.p2MaiStatus == 4) {
                     maiLine << displayData.p2MaiAwakeningTime;
-                    if (displayData.p2MaiInfiniteAwakening) maiLine << " (Inf)";
+                    if (displayData.p2MaiInfiniteAwakening) maiLine << I18n::Tr(" (Inf)");
                 } else {
                     maiLine << "-";
                 }
@@ -3696,11 +3702,11 @@ void UpdateStatsDisplay() {
             } else { displayData.p2MichiruCurrentId = -1; }
 
             std::stringstream minagiLine; minagiLine.setf(std::ios::fixed); minagiLine << std::setprecision(2);
-            minagiLine << "Michiru: ";
+            minagiLine << I18n::Tr("Michiru: ");
             auto fmtState = [](int fr, int sub){
                 if (fr < 0) return std::string("");
-                if (fr <= 1) return std::string(" [Ready]");
-                std::stringstream s; s << " [Anim " << fr << ":" << sub << "]"; return s.str();
+                if (fr <= 1) return std::string(I18n::Tr(" [Ready]"));
+                return I18n::TrFormat(" [Anim %d:%d]", fr, sub);
             };
             // Indicate when conversion gating is active for debugging visibility
             auto convActive = [&](short mv){ return displayData.minagiConvertNewProjectiles && mv >= 400 && mv <= 469; };
@@ -3708,7 +3714,7 @@ void UpdateStatsDisplay() {
                 minagiLine << "P1 [" << displayData.p1MichiruLastX << ", " << displayData.p1MichiruLastY << "]";
                 if (displayData.p1MichiruCurrentId > 0) minagiLine << " (ID " << displayData.p1MichiruCurrentId << ")";
                 minagiLine << fmtState(displayData.p1MichiruFrame, displayData.p1MichiruSubframe);
-                if (convActive(p1MoveId)) minagiLine << " {Conv}";
+                if (convActive(p1MoveId)) minagiLine << I18n::Tr(" {Conv}");
             } else {
                 minagiLine << "P1 -";
             }
@@ -3717,7 +3723,7 @@ void UpdateStatsDisplay() {
                 minagiLine << "P2 [" << displayData.p2MichiruLastX << ", " << displayData.p2MichiruLastY << "]";
                 if (displayData.p2MichiruCurrentId > 0) minagiLine << " (ID " << displayData.p2MichiruCurrentId << ")";
                 minagiLine << fmtState(displayData.p2MichiruFrame, displayData.p2MichiruSubframe);
-                if (convActive(p2MoveId)) minagiLine << " {Conv}";
+                if (convActive(p2MoveId)) minagiLine << I18n::Tr(" {Conv}");
             } else {
                 minagiLine << "P2 -";
             }

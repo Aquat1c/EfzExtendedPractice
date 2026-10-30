@@ -39,7 +39,6 @@ struct Row;
 using RowValueFormatter = const char* (*)(const Row& row);
 using RowAdjuster = bool (*)(const Row& row, int direction);
 using RowChoiceValueFormatter = const char* (*)(const Row& row, int choiceValue);
-using RowChoiceValueAdjuster = bool (*)(const Row& row, int choiceValue, int direction);
 using RowChoiceHelpFormatter = const char* (*)(const Row& row, int choiceValue);
 using RowChoiceFilter = bool (*)(const Row& row, int choiceValue);
 using PairedChoiceChange = void (*)(int* primary, int* secondary);
@@ -105,10 +104,8 @@ struct Row {
     RowValueFormatter valueFormatter;
     RowAdjuster inlineAdjuster;
     RowChoiceValueFormatter choiceValueFormatter;
-    RowChoiceValueAdjuster choiceValueAdjuster;
-    // Second variant target for choiceValueAdjuster beside intPtr. Popups redirect both
-    // to popup-local copies and write them back only on confirm.
-    int* choiceVariantPtr;
+    // Header above a run of neighbouring choices sharing the same text; categorized popups only.
+    RowChoiceValueFormatter choiceGroupFormatter;
     RowChoiceHelpFormatter choiceHelpFormatter;
     // Optional display filter. choiceValue remains the original stable value;
     // hidden mask choices keep their stored bits and per-entry data intact.
@@ -306,8 +303,14 @@ bool TickPopupIfOpen(ImDrawList* dl, const ScreenLayout& layout);
 // Discards any pending popup choice/variant without writing it back.
 void ClosePopup();
 bool IsSubmenuActive();
+const char* ActiveSubmenuTitle();
 const char* CurrentHelpText();
 const char* CurrentPopupHelpText();
+const char* CurrentPopupHint();
+
+// Slides the current list in from the given side, as a sub-page change does.
+void PlayContentSlide(int direction);
+float CurrentSubmenuAlpha();
 int CurrentPopupFocusedChoiceValue(const Row* sourceRow);
 const char* FormatMaskSelectionSummary(const Row& row, int maxVisibleChoices = 3);
 void ResetSubmenus();

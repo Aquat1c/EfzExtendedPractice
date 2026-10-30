@@ -184,6 +184,8 @@ std::atomic<DirectBootstrapState> s_directBootstrapState{DirectBootstrapState::I
 std::atomic<bool> s_directAbortAfterHandoff{false};
 // Selector reloads reuse the Loading hook; their handoff receipt stays separate from the direct bootstrap's.
 std::atomic<bool> s_nativeFrontendInstalled{false};
+std::atomic<int> s_bgmRetryTrack{-1};
+std::atomic<DWORD> s_bgmRetryDeadline{0};
 std::atomic<bool> s_awaitNativeCompletion{false};
 std::atomic<bool> s_selectorLoadingHandoffComplete{false};
 std::atomic<bool> s_completedReceiptAvailable{false};
@@ -1531,8 +1533,9 @@ void CompleteReload(GamePhase currentPhase, bool publishReceipt = true, uintptr_
         LogOut("[HOTSWAP][DIRECT] skipped mission BGM override for canceled handoff", true);
     } else if (gameStatePtr && requestedBgmTrack >= 0) {
         if (!GameThread::Post(&PlayBgmOverrideOnGameThread, static_cast<uintptr_t>(requestedBgmTrack))) {
-            LogOut("[HOTSWAP] BGM override track=" + std::to_string(requestedBgmTrack)
-                   + " refused: game-thread queue unavailable", true);
+            // Admission opens at this battle's first update, which can trail the debounced Match.
+            s_bgmRetryDeadline.store(GetTickCount() + 2000, std::memory_order_relaxed);
+            s_bgmRetryTrack.store(requestedBgmTrack, std::memory_order_release);
         }
     } else if (!gameStatePtr) {
         LogOut("[HOTSWAP] skipped BGM override because game state pointer was unavailable", true);
@@ -2007,6 +2010,19 @@ void OnBattleFrontendEntry(uintptr_t battleContext) {
 }
 
 void Tick(GamePhase currentPhase, GameMode /*currentMode*/) {
+    const int bgmRetryTrack = s_bgmRetryTrack.load(std::memory_order_acquire);
+    if (bgmRetryTrack >= 0) {
+        const bool expired = currentPhase != GamePhase::Match
+            || static_cast<LONG>(GetTickCount() - s_bgmRetryDeadline.load(std::memory_order_relaxed)) >= 0;
+        if (expired) {
+            LogOut("[HOTSWAP] BGM override track=" + std::to_string(bgmRetryTrack)
+                   + " refused: game-thread queue unavailable", true);
+        }
+        if (expired || GameThread::Post(&PlayBgmOverrideOnGameThread, static_cast<uintptr_t>(bgmRetryTrack))) {
+            s_bgmRetryTrack.store(-1, std::memory_order_release);
+        }
+    }
+
     const RequestState state = s_state.load(std::memory_order_acquire);
     if(s_awaitNativeCompletion.load(std::memory_order_acquire) || state==RequestState::Completing)return;
     if (state == RequestState::Failed &&

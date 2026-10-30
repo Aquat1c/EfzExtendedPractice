@@ -2,8 +2,11 @@
 #include <windows.h>
 #include <string>
 #include <unordered_map>
+#include <array>
+#include "config_policy.h"
 
 namespace Config {
+    using ConfigPolicy::ResolveHotkey;
     // Caller serializes the accepted audio control transaction; never republishes.
     void SetAudioSettingsMirror(int bgm, int se);
     struct Settings {
@@ -18,6 +21,8 @@ namespace Config {
     bool enableFpsDiagnostics;
     bool checkForUpdates;
     bool showFrameBar;
+    bool frameBarMoveData;       // startup/active/recovery line above the frame bar
+    bool menuAnimations;         // custom menu slides; off = instant
     int  bgmVolumePercent;       // 0..100, 100 = current/default BGM level
     int  seVolumePercent;        // 0..100, 100 = current/default SE level
     int  frameBarTimingMode;     // 0 = subframes, 1 = visual frames
@@ -151,6 +156,9 @@ namespace Config {
     int ParseKeyValue(const std::string& value);
     std::string GetKeyName(int keyCode);
     bool IsMenuKeyAllowed(int vk);
+    // VKs bound in key.ini for either player, as last read by ReadKeyMappingsFromIni.
+    void SetEfzBoundVks(const std::array<bool, 256>& vks);
+    bool IsVkBoundByEfz(int vk);
     int ParseGamepadButton(const std::string& value);
     std::string GetGamepadButtonName(int mask);
 

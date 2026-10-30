@@ -23,6 +23,9 @@ extern bool CaptureAndFreezeBuffer(int playerNum, uint16_t startIndex, uint16_t 
 extern bool FreezeBufferIndex(int playerNum, uint16_t indexValue);
 extern void StopBufferFreezing(void);
 extern void StopBufferFreezingIgnoringTutorialLease(void);
+extern int g_frozenMotionType;
+extern int g_frozenButtonMask;
+extern bool g_lastKnownFacing;
 
 namespace {
 std::atomic<uint64_t> g_tutorialFreezeToken{0};
@@ -35,8 +38,9 @@ struct FreezeSessionState {
 };
 FreezeSessionState g_freezeSession[3]; // 1,2 (ignore 0)
 
+// Every freeze entry point gates here before it writes the pattern.
 bool BufferFreezeInputLaneBusy(int playerNum) {
-    if (playerNum < 1 || playerNum > 2) return true;
+    if (playerNum < 1 || playerNum > 2 || !IsPracticeContext()) return true;
     return IsScopedInputReserved(playerNum) ||
            IsAutoActionMotionTransactionActive(playerNum) ||
            IsAutoActionNormalPulseActive(playerNum) ||
@@ -49,6 +53,20 @@ bool BufferFreezeInputLaneBusy(int playerNum) {
            GetMotionQueueSnapshot(playerNum).active ||
            (MacroController::IsExclusivePlayback() &&
             MacroController::GetPlaybackPlayer() == playerNum);
+}
+
+// A refused worker must not leave the written pattern or the index lock behind.
+bool StartFreezeOrRollback(int playerNum, uintptr_t playerPtr, uint16_t writtenLength) {
+    if (StartBufferFreezeWorker(playerNum) != 0) return true;
+    g_indexFreezingActive = false;
+    g_frozenBufferLength = 0;
+    g_frozenBufferValues.clear();
+    if (IsPracticeContext()) {
+        std::vector<uint8_t> zeros(writtenLength, 0x00);
+        SafeWriteMemory(playerPtr + INPUT_BUFFER_OFFSET, zeros.data(), writtenLength);
+    }
+    LogOut("[BUFFER_FREEZE] Freeze worker refused; pattern rolled back P" + std::to_string(playerNum), true);
+    return false;
 }
 }
 bool FreezePerfectDragonPunch(int playerNum) {
@@ -487,9 +505,6 @@ static bool FreezeBufferForMotionImpl(int playerNum, int motionType, int buttonM
     g_frozenBufferStartIndex = startIndex;
     g_frozenBufferLength = static_cast<uint16_t>(pattern.size());
     
-    extern int g_frozenMotionType;
-    extern int g_frozenButtonMask;
-    extern bool g_lastKnownFacing;
     g_frozenMotionType = motionType;
     g_frozenButtonMask = buttonMask;
     g_lastKnownFacing = facingRight;
@@ -497,9 +512,9 @@ static bool FreezeBufferForMotionImpl(int playerNum, int motionType, int buttonM
     // Point the index at pattern end - 1 so the final button press is read.
     g_frozenIndexValue = (startIndex + g_frozenBufferLength - 1) % INPUT_BUFFER_SIZE;
     g_indexFreezingActive = true;
-    
-    StartBufferFreezeWorker(playerNum);
-    
+
+    if (!StartFreezeOrRollback(playerNum, playerPtr, clearLength)) return false;
+
     if (detailedLogging.load()) {
         LogOut("[BUFFER_FREEZE] Buffer freeze for " + motionLabel + " activated at index " + 
                std::to_string(g_frozenIndexValue), true);
@@ -718,7 +733,10 @@ bool FreezeBufferWithPattern(int playerNum, const std::vector<uint8_t>& patternI
     g_frozenBufferLength = static_cast<uint16_t>(pattern.size());
     g_frozenIndexValue = (startIndex + g_frozenBufferLength - 1) % INPUT_BUFFER_SIZE;
     g_indexFreezingActive = true;
-    StartBufferFreezeWorker(playerNum);
+    // A raw pattern has no motion to regenerate on a facing change.
+    g_frozenMotionType = -1;
+    g_frozenButtonMask = 0;
+    if (!StartFreezeOrRollback(playerNum, playerPtr, clearLength)) return false;
     LogOut("[BUFFER_FREEZE] Generic pattern freeze active (len=" + std::to_string(pattern.size()) + ") P" + std::to_string(playerNum), true);
     return true;
 }
@@ -753,7 +771,9 @@ bool FreezeBufferWithPattern(int playerNum, const std::vector<uint8_t>& patternI
     g_frozenBufferLength = static_cast<uint16_t>(pattern.size());
     g_frozenIndexValue = (startIndex + g_frozenBufferLength + extraNeutralFrames - 1) % INPUT_BUFFER_SIZE;
     g_indexFreezingActive = true;
-    StartBufferFreezeWorker(playerNum);
+    g_frozenMotionType = -1;
+    g_frozenButtonMask = 0;
+    if (!StartFreezeOrRollback(playerNum, playerPtr, clearLength)) return false;
     LogOut("[BUFFER_FREEZE] Pattern freeze+advance (len=" + std::to_string(pattern.size()) + "+" + std::to_string(extraNeutralFrames) + ") idx=" + std::to_string(g_frozenIndexValue) + " P" + std::to_string(playerNum), true);
     return true;
 }

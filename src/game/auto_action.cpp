@@ -3,9 +3,10 @@
 #include "../include/utils/utilities.h"
 #include "../include/utils/network.h"
 #include "../include/game/game_state.h"
+#include "../include/game/frame_advantage.h"
 #include "../include/core/memory.h"
 #include "../include/core/logger.h"
-#include "../include/input/input_core.h"        
+#include "../include/input/input_core.h"
 #include "../include/input/input_hook.h"
 #include "../include/input/auto_action_motion_transaction.h"
 #include "../include/input/motion_system.h"     
@@ -3073,7 +3074,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                     if (preOk) {
                         s_p1RGPrearmed = true;
                         s_p1RGPrearmActionType = at;
-                        s_p1RGPrearmExpiry = frameCounter.load() + (baseDelayF * 3) + 90; // small guard window after actionable
+                        s_p1RGPrearmExpiry = GetEngineTick() + (baseDelayF * 3) + 90; // small guard window after actionable
                         LogOut("[AUTO-ACTION][RG] P1 pre-armed at RG entry: action=" + std::to_string(at) +
                                " motion=" + std::to_string(motion) + " btnMask=" + std::to_string(buttonMask) +
                                " (scoped transaction)", true);
@@ -3196,7 +3197,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                                 ActionSupportsChargeFollowup(actionType)
                             ? CLAMP(chargeFollowup, 0, 2)
                             : 0;
-                    s_p1WakePrearmExpiry = frameCounter.load() + 120;
+                    s_p1WakePrearmExpiry = GetEngineTick() + 120;
                     s_p1WakeMoveID96FrameCount = 0;
                     s_p1WakeBufferFrozen = false;
                     s_p1WakeMotionGeneration = 0;
@@ -3822,7 +3823,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 if (preOk) {
                     s_p2RGPrearmed = true;
                     s_p2RGPrearmActionType = at;
-                    s_p2RGPrearmExpiry = frameCounter.load() + (baseDelayF * 3) + 90;
+                    s_p2RGPrearmExpiry = GetEngineTick() + (baseDelayF * 3) + 90;
                     LogOut("[AUTO-ACTION][RG] P2 pre-armed at RG entry: action=" + std::to_string(at) +
                            " motion=" + std::to_string(motion) + " btnMask=" + std::to_string(buttonMask) +
                            " (scoped transaction)", true);
@@ -4021,7 +4022,8 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
 
         // Force Neutral while waiting for macro to prevent AI inputs (e.g. holding Down)
         // from causing accidental transitions (e.g. Crouch) before the macro starts.
-        if (!s_p2WakeMacroQueued && s_p2WakeMacroSlot > 0) {
+        if (!s_p2WakeMacroQueued && s_p2WakeMacroSlot > 0 && macroHasData &&
+            s_p2WakeMacroTargetFrame >= 0) {
              bool macroPlaying = (MacroController::GetState() == MacroController::State::Replaying);
              if (!macroPlaying && s_wakeForcedNeutralToken[2] == 0) {
                  (void)TryPublishWakeForcedNeutral(2);
@@ -4140,7 +4142,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                         isSpecial && ActionSupportsChargeFollowup(actionType)
                             ? CLAMP(chargeFollowup, 0, 2)
                             : 0;
-                    s_p2WakePrearmExpiry = frameCounter.load() + 120;
+                    s_p2WakePrearmExpiry = GetEngineTick() + 120;
                     s_p2WakeMoveID96FrameCount = 0;
                     s_p2WakeBufferFrozen = false;
                     s_p2WakeMotionGeneration = 0;
@@ -4774,8 +4776,9 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
         }
     }
 
-    // Clear pre-arm flags when window passes to avoid sticking
-    int now = frameCounter.load();
+    // Clear pre-arm flags when window passes to avoid sticking. Engine ticks: pause,
+    // framestep or a hitch during state 96 must not cancel a wake reversal.
+    int now = GetEngineTick();
     if (s_p1WakePrearmed && now > s_p1WakePrearmExpiry) {
         int delta = now - s_p1WakePrearmExpiry;
         LogOut("[AUTO-ACTION] P1 wake pre-arm expired (no execution, delta=" + std::to_string(delta) +
@@ -4925,6 +4928,23 @@ void MonitorAutoActions(short moveID1, short moveID2, short prevMoveID1, short p
     short pm1 = (sample.prevMoveID1 == prevMoveID1 ? sample.prevMoveID1 : prevMoveID1);
     short pm2 = (sample.prevMoveID2 == prevMoveID2 ? sample.prevMoveID2 : prevMoveID2);
     MonitorAutoActionsImpl(m1, m2, pm1, pm2);
+}
+
+bool DropPrearmWorkAtPracticeBoundary() {
+    // try_lock: the input hook holds g_p2ControlMutex here, and other paths nest the other way.
+    std::unique_lock<std::recursive_mutex> stateLock(g_autoActionStateMutex, std::try_to_lock);
+    if (!stateLock.owns_lock()) return false;
+    s_p1WakePrearmed = false; s_p1WakePrearmExpiry = 0; s_p1WakePrearmActionType = -1;
+    s_p1WakePrearmStrength = -1; s_p1WakePrearmIsSpecial = false; s_p1WakePrearmIsMacro = false;
+    s_p1WakePrearmCharge = 0; s_p1WakeHoldPrimed = false; s_p1WakeHoldIssued = false;
+    s_p2WakePrearmed = false; s_p2WakePrearmExpiry = 0; s_p2WakePrearmActionType = -1;
+    s_p2WakePrearmStrength = -1; s_p2WakePrearmIsSpecial = false; s_p2WakePrearmIsMacro = false;
+    s_p2WakePrearmCharge = 0; s_p2WakeHoldPrimed = false; s_p2WakeHoldIssued = false;
+    s_p1RGPrearmed = false; s_p1RGPrearmIsSpecial = false; s_p1RGPrearmActionType = -1;
+    s_p1RGPrearmExpiry = 0; s_p1RGPrearmGeneration = 0;
+    s_p2RGPrearmed = false; s_p2RGPrearmIsSpecial = false; s_p2RGPrearmActionType = -1;
+    s_p2RGPrearmExpiry = 0; s_p2RGPrearmGeneration = 0;
+    return true;
 }
 
 void ResetActionFlags() {
@@ -5362,6 +5382,20 @@ AutoActionApplyResult ApplyAutoAction(int playerNum, uintptr_t moveIDAddr,
                                      ? AutoActionApplyResult::Invalid
                                      : AutoActionApplyResult::Busy);
     // No control override needed for jumps
+    }
+
+    // Block holds back through the immediate writer, as the wake path does; it has no motion.
+    if (actionType == ACTION_BLOCK) {
+        const uint8_t mask = GetPlayerFacingDirection(playerNum) ? GAME_INPUT_LEFT : GAME_INPUT_RIGHT;
+        success = ImmediateInput::PressFor(playerNum, mask, 3);
+        if (success) {
+            if (playerNum == 2) { p2TriggerActive = false; p2TriggerCooldown = 0; }
+            else { p1TriggerActive = false; p1TriggerCooldown = 0; }
+        }
+        applyResult = success ? AutoActionApplyResult::Accepted
+                              : (g_onlineModeActive.load(std::memory_order_acquire)
+                                     ? AutoActionApplyResult::Invalid
+                                     : AutoActionApplyResult::Busy);
     }
 
     // Special handling: Dashes should be executed by writing to the buffer via the queue

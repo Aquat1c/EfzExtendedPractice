@@ -18,8 +18,6 @@
 #include <atomic>
 #include <sstream>
 
-// External frame counter (incremented at 192fps in frame_monitor.cpp)
-extern std::atomic<int> frameCounter;
 // External window active state (from utilities.cpp)
 extern std::atomic<bool> g_efzWindowActive;
 
@@ -33,8 +31,6 @@ namespace {
     std::atomic<bool> s_wePaused{false};
     std::atomic<uintptr_t> s_lastBattleContext{0};
     
-    std::atomic<int> s_targetFrame{0};
-    std::atomic<int> s_stepStartFrame{0};
     std::atomic<Framestep::StepMode> s_stepMode{Framestep::StepMode::FullFrame};
     std::atomic<int> s_pendingVanillaSubsteps{0};
     std::atomic<bool> s_vanillaHookStepActive{false};
@@ -275,6 +271,8 @@ namespace {
 
     void ClearActiveFramestepState(Backend backend, const char* reason, bool forceNativeUnpause = false) {
         const bool hadState = HasActiveFramestepState();
+        // Native writes stop at the Practice boundary; releasing code bytes is process-global and always runs.
+        const bool nativeWritesAllowed = IsPracticeContext();
 
         s_stepRequested.store(false);
         s_menuWasVisible.store(false);
@@ -282,7 +280,7 @@ namespace {
         s_restoreWePausedAfterMenu.store(false);
 
         if (UsesRevivalNativeStep(backend)) {
-            if ((forceNativeUnpause || s_wePaused.load()) && PauseIntegration::IsPracticePaused()) {
+            if (nativeWritesAllowed && (forceNativeUnpause || s_wePaused.load()) && PauseIntegration::IsPracticePaused()) {
                 PauseIntegration::SetPracticePausedForFramestep(false);
             }
             s_paused.store(false);
@@ -294,7 +292,7 @@ namespace {
                     ApplyVisualPatches(false);
                     s_visualPatchesApplied.store(false);
                 }
-                SetGamespeed(3);
+                if (nativeWritesAllowed) SetGamespeed(3);
             }
             s_paused.store(false);
             ResetVanillaStepTracking();
@@ -308,51 +306,6 @@ namespace {
         }
     }
 
-    void AdvanceOneFrame() {
-        int subframes = static_cast<int>(s_stepMode.load());
-        int currentFrame = frameCounter.load();
-        s_stepStartFrame.store(currentFrame);
-        s_targetFrame.store(currentFrame + subframes);
-
-        if (s_visualPatchesApplied.load()) {
-            ApplyVisualPatches(false);
-            s_visualPatchesApplied.store(false);
-        }
-        uint8_t speed = static_cast<uint8_t>(subframes);
-        if (speed > 3) speed = 3;
-        if (speed == 0) speed = 1;
-        SetGamespeed(speed);
-
-        std::stringstream oss;
-        oss << "[FRAMESTEP] Advancing " << subframes << " subframe(s) from frame " 
-            << currentFrame << " to " << s_targetFrame.load();
-        LogOut(oss.str(), true);
-    }
-
-    bool IsFrameAdvanceComplete() {
-        if (!s_inFrameStep.load()) return true;
-        
-        int current = frameCounter.load();
-        int target = s_targetFrame.load();
-        
-        if (current >= target) {
-            SetGamespeed(0);
-            if (ApplyVisualPatches(true)) {
-                s_visualPatchesApplied.store(true);
-            }
-
-            std::stringstream oss;
-            oss << "[FRAMESTEP] Frame advance complete at frame " << current 
-                << " (advanced " << (current - s_stepStartFrame.load()) << " subframes)";
-            LogOut(oss.str(), true);
-
-            s_inFrameStep.store(false);
-            return true;
-        }
-        
-        return false;
-    }
-
     bool BeginEngineHookStep() {
         const int subframes = Framestep::GetSubframesPerStep();
         if (subframes <= 0) {
@@ -364,7 +317,6 @@ namespace {
         }
 
         s_stepRequested.store(false);
-        s_stepStartFrame.store(frameCounter.load());
         s_pendingVanillaSubsteps.store(subframes);
         s_vanillaHookStepActive.store(true);
         s_vanillaStepInBattleUpdate.store(false);
@@ -651,8 +603,9 @@ namespace {
     }
 
     void SnapshotPauseStateForMenu(Backend backend) {
+        // The menu publishes its visibility before its own pause; that pause is not the state to restore.
         const bool paused = UsesRevivalNativeStep(backend)
-            ? PauseIntegration::IsPracticePaused()
+            ? (PauseIntegration::IsPracticePaused() && !PauseIntegration::IsPracticePausedByMenu())
             : s_paused.load();
 
         s_restorePausedAfterMenu.store(paused);
@@ -724,6 +677,11 @@ namespace {
         }
     }
 
+    void ClearDisabledStateOnGameThread(uintptr_t) {
+        if (ImGuiImpl::IsVisible() || IsRuntimeEnabled()) return;  // the next tick re-posts after the close
+        ClearActiveFramestepState(GetBackend(), "disabled");
+    }
+
     void SyncRevivalFramestep() {
         PauseIntegration::EnsurePracticePointerCapture();
         const bool paused = PauseIntegration::IsPracticePaused();
@@ -792,13 +750,11 @@ namespace Framestep {
 
         Backend backend = GetBackend();
 
-        if (!IsConfigEnabled()) {
-            ClearActiveFramestepState(backend, "disabled by config");
-            return;
-        }
-
-        if (backend == Backend::Disabled) {
-            ClearActiveFramestepState(backend, "backend unavailable");
+        if (!IsConfigEnabled() || backend == Backend::Disabled) {
+            // Runs behind an open menu otherwise: the menu's pause stays until it closes.
+            if (HasActiveFramestepState() && !ImGuiImpl::IsVisible()) {
+                (void)GameThread::Post(&ClearDisabledStateOnGameThread);
+            }
             return;
         }
 
@@ -807,18 +763,9 @@ namespace Framestep {
         }
 
         if (!IsValidFramestepMode()) {
-            if (UsesRevivalNativeStep(backend)) {
-                // Revival's pause was released on the game thread at battle exit.
-                s_wePaused.store(false);
-                s_paused.store(false);
-                ResetRevivalStepTracking();
-            } else if (s_paused.load()) {
-                s_paused.store(false);
-                if (s_visualPatchesApplied.load()) {
-                    ApplyVisualPatches(false);
-                    s_visualPatchesApplied.store(false);
-                }
-                SetGamespeed(3);
+            // Normally already released on the game thread at battle exit.
+            if (HasActiveFramestepState()) {
+                ClearActiveFramestepState(backend, "left Practice");
             }
             return;
         }
@@ -868,25 +815,12 @@ namespace Framestep {
         }
 
         if (s_inFrameStep.load()) {
-            if (!s_vanillaHookStepActive.load()) {
-                IsFrameAdvanceComplete();
-            }
             return;
         }
 
-        if (s_stepRequested.load() && s_paused.load()) {
-            if (EnsureFrontendControlHooksInstalled() && BeginEngineHookStep()) {
-                return;
-            }
-
-            s_inFrameStep.store(true);
-            s_stepCounter++;
-
-            std::ostringstream oss;
-            oss << "[FRAMESTEP] Frame step requested (fallback step " << s_stepCounter.load() << ")";
-            LogOut(oss.str(), true);
-
-            AdvanceOneFrame();
+        // Steps run only inside the battle update; without it the request is dropped.
+        if (s_stepRequested.load() && s_paused.load()
+            && (!EnsureFrontendControlHooksInstalled() || !BeginEngineHookStep())) {
             s_stepRequested.store(false);
         }
     }
@@ -925,6 +859,10 @@ namespace Framestep {
         return OwnsPauseStateForRestore(backend);
     }
 
+    bool HoldsEnginePause() {
+        return s_paused.load() && UsesEngineStep(GetBackend());
+    }
+
     void FinishSavestateRestore(bool restoreStartedFromOwnedPause) {
         ClearActiveFramestepState(GetBackend(),
                                   "savestate restore complete",
@@ -932,10 +870,9 @@ namespace Framestep {
     }
 
     void TogglePause() {
-        if (!IsRuntimeEnabled()) return;
-
-        GameMode mode = GetCurrentGameMode();
-        if (mode != GameMode::Practice) return;
+        if (!IsRuntimeEnabled() || !IsPracticeContext()) return;
+        // Queued before the menu opened; Revival's toggle owns the pause until it closes.
+        if (ImGuiImpl::IsVisible()) return;
 
         Backend backend = GetBackend();
         if (UsesRevivalNativeStep(backend)) {
@@ -967,11 +904,15 @@ namespace Framestep {
             LogHotkeyGateUnavailableOnce("pause");
         }
 
-        bool newState = !s_paused.load();
+        const bool newState = !s_paused.load();
+        // Gamespeed decides: a refused write leaves the state untouched.
+        if (!SetGamespeed(static_cast<uint8_t>(newState ? 0 : 3))) {
+            LogOut("[FRAMESTEP] Pause toggle refused: gamespeed unavailable", true);
+            return;
+        }
         s_paused.store(newState);
 
         if (newState) {
-            SetGamespeed(0);
             if (ApplyVisualPatches(true)) {
                 s_visualPatchesApplied.store(true);
             }
@@ -983,7 +924,6 @@ namespace Framestep {
                 ApplyVisualPatches(false);
                 s_visualPatchesApplied.store(false);
             }
-            SetGamespeed(3);
             LogOut(backend == Backend::RevivalNativeFrame ? "[FRAMESTEP][REVIVAL] Engine-unpaused" : "[FRAMESTEP] Unpaused", true);
         }
 
@@ -991,10 +931,8 @@ namespace Framestep {
     }
 
     void RequestFrameStep() {
-        if (!IsRuntimeEnabled()) return;
-
-        GameMode mode = GetCurrentGameMode();
-        if (mode != GameMode::Practice) return;
+        if (!IsRuntimeEnabled() || !IsPracticeContext()) return;
+        if (ImGuiImpl::IsVisible()) return;
 
         Backend backend = GetBackend();
         if (UsesRevivalNativeStep(backend)) {
@@ -1031,6 +969,7 @@ namespace Framestep {
 
         if (!s_paused.load()) {
             TogglePause();
+            if (!s_paused.load()) return;
         }
 
         s_stepRequested.store(true);
@@ -1044,7 +983,9 @@ namespace Framestep {
     bool ShouldSuppressRevivalHotkey(void* practiceController, int key) {
         if (!practiceController || key == 0) return false;
         if (!IsRuntimeEnabled() || !IsRevivalBackend(GetBackend())) return false;
-        if (!ShouldSuppressNativeRevivalFramestep()) return false;
+        // J toggles inline in its dispatcher, past the TogglePause hook; a held engine pause keeps the key out either way.
+        const bool configSuppress = ShouldSuppressNativeRevivalFramestep();
+        if (!configSuppress && !HoldsEnginePause()) return false;
         if (GetCurrentGameMode() != GameMode::Practice || IsNetplaySuspendActive()) return false;
 
         uint32_t pauseKey = 0;
@@ -1060,7 +1001,7 @@ namespace Framestep {
         }
 
         const bool suppress = (pauseKey != 0 && key == static_cast<int>(pauseKey))
-            || (stepKey != 0 && key == static_cast<int>(stepKey));
+            || (configSuppress && stepKey != 0 && key == static_cast<int>(stepKey));
         if (suppress && detailedLogging.load()) {
             LogOut("[FRAMESTEP][REVIVAL] Suppressed native Revival pause/step hotkey", true);
         }
@@ -1080,7 +1021,8 @@ namespace Framestep {
         }
 
         const bool paused = IsPaused();
-        s_paused.store(paused);
+        // Engine backends own s_paused on the game thread; a stale write here would undo a boundary cancel.
+        if (UsesRevivalNativeStep(GetBackend())) s_paused.store(paused);
 
         if (!paused) {
             RemoveStatusMessage();

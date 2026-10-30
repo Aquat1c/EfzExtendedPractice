@@ -8,6 +8,7 @@
 namespace Config {
 Settings settings{}; unsigned calls=0;
 std::unordered_map<std::string,std::unordered_map<std::string,std::string>> iniData;
+void SetIniValue(const std::string& section,const std::string& key,const std::string& value) { iniData[section][key]=value; }
 #include "utils/audio_config_publication.inl"
 const Settings& GetSettings() { return settings; }
 void SetSetting(const std::string& section,const std::string& key,const std::string& value) {

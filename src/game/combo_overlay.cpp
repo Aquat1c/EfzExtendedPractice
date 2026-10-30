@@ -3,7 +3,6 @@
 #include "../include/core/constants.h"
 #include "../include/core/logger.h"
 #include "../include/core/memory.h"
-#include "../include/game/collision_hook.h"
 #include "../include/gui/imgui_impl.h"
 #include "../include/gui/overlay.h"
 #include "../include/game/mission/mission_engine.h" // suppress overlay during missions
@@ -136,7 +135,6 @@ namespace {
     ComboState g_state{};
     DisplayIds g_displayIds{};
     PreviousPlayerFrame g_prevPlayers[3]{};
-    int g_frameDataAttackOffsets[3] = {-1, -1, -1};
     int g_sessionMaxComboDamage = 0;
     bool g_idleBaselineRequired = true;
     bool g_idleBaselineWaitLogged = false;
@@ -195,69 +193,36 @@ namespace {
         return true;
     }
 
-    bool IsPlausibleAttackDataPtr(uintptr_t attackPtr) {
-        if (!attackPtr) return false;
-        if (attackPtr < 0x00400000 || attackPtr > 0x0FFFFFFF) return false;
-
-        uint8_t flags = 0;
-        uint16_t damage = 0;
-        uint16_t blockstun = 0;
-        uint16_t hitstop = 0;
-        if (!SafeReadMemory(attackPtr + ATTACK_FLAGS_OFFSET, &flags, sizeof(flags))) return false;
-        if (!SafeReadMemory(attackPtr + ATTACK_DAMAGE_OFFSET, &damage, sizeof(damage))) return false;
-        if (!SafeReadMemory(attackPtr + ATTACK_BLOCKSTUN_OFFSET, &blockstun, sizeof(blockstun))) return false;
-        if (!SafeReadMemory(attackPtr + ATTACK_HITSTOP_OFFSET, &hitstop, sizeof(hitstop))) return false;
-        return damage <= 5000 && blockstun <= 1000 && hitstop <= 1000;
-    }
-
-    uintptr_t ResolveAttackDataPtrFromFrameData(uintptr_t frameDataPtr, int attackerSide) {
-        if (!frameDataPtr) {
-            return 0;
-        }
-
-        if (attackerSide >= 1 && attackerSide <= 2) {
-            int& cachedOffset = g_frameDataAttackOffsets[attackerSide];
-            if (cachedOffset >= 0) {
-                uintptr_t candidate = 0;
-                if (SafeReadMemory(frameDataPtr + cachedOffset, &candidate, sizeof(candidate))
-                    && IsPlausibleAttackDataPtr(candidate)) {
-                    return candidate;
-                }
-                cachedOffset = -1;
-            }
-        }
-
-        for (int off = 0; off <= 0x200 - 4; off += 4) {
-            uintptr_t candidate = 0;
-            if (!SafeReadMemory(frameDataPtr + off, &candidate, sizeof(candidate))) {
-                continue;
-            }
-            if (IsPlausibleAttackDataPtr(candidate)) {
-                if (attackerSide >= 1 && attackerSide <= 2) {
-                    g_frameDataAttackOffsets[attackerSide] = off;
-                }
-                return candidate;
-            }
-        }
-        return 0;
-    }
-
+    // The 200-byte frame record holds the attack properties inline (efz.c:200340).
     AttackDetail ReadAttackDetail(int attackerSide) {
         AttackDetail detail{};
-        const uintptr_t frameDataPtr = GetCachedAttackDataForPlayer(attackerSide);
-        const uintptr_t attackDataPtr = ResolveAttackDataPtrFromFrameData(frameDataPtr, attackerSide);
-        if (!attackDataPtr) {
+        const uintptr_t player = (attackerSide == 1 || attackerSide == 2) ? GetPlayerBase(attackerSide) : 0;
+        uintptr_t animTable = 0;
+        uint16_t move = 0;
+        uint16_t frame = 0;
+        if (!player ||
+            !SafeReadMemory(player + ANIM_TABLE_OFFSET, &animTable, sizeof(animTable)) || !animTable ||
+            !SafeReadMemory(player + MOVE_ID_OFFSET, &move, sizeof(move)) ||
+            !SafeReadMemory(player + CURRENT_FRAME_INDEX_OFFSET, &frame, sizeof(frame))) {
             return detail;
         }
+        uintptr_t frames = 0;
+        const uintptr_t entry = animTable + ANIM_ENTRY_STRIDE * static_cast<uintptr_t>(move) + ANIM_ENTRY_FRAMES_PTR_OFFSET;
+        if (!SafeReadMemory(entry, &frames, sizeof(frames)) || !frames) {
+            return detail;
+        }
+        const uintptr_t record = frames + FRAME_BLOCK_STRIDE * static_cast<uintptr_t>(frame);
 
         uint8_t flags = 0;
         uint16_t damage = 0;
         uint16_t blockstun = 0;
         uint16_t hitstop = 0;
-        if (!SafeReadMemory(attackDataPtr + ATTACK_FLAGS_OFFSET, &flags, sizeof(flags))) return detail;
-        if (!SafeReadMemory(attackDataPtr + ATTACK_DAMAGE_OFFSET, &damage, sizeof(damage))) return detail;
-        if (!SafeReadMemory(attackDataPtr + ATTACK_BLOCKSTUN_OFFSET, &blockstun, sizeof(blockstun))) return detail;
-        if (!SafeReadMemory(attackDataPtr + ATTACK_HITSTOP_OFFSET, &hitstop, sizeof(hitstop))) return detail;
+        if (!SafeReadMemory(record + ATTACK_FLAGS_OFFSET, &flags, sizeof(flags))) return detail;
+        if (!SafeReadMemory(record + ATTACK_DAMAGE_OFFSET, &damage, sizeof(damage))) return detail;
+        if (!SafeReadMemory(record + ATTACK_BLOCKSTUN_OFFSET, &blockstun, sizeof(blockstun))) return detail;
+        if (!SafeReadMemory(record + ATTACK_HITSTOP_OFFSET, &hitstop, sizeof(hitstop))) return detail;
+        // The attacker may already be past the hit frame; keep the previous detail then.
+        if (flags == 0 && damage == 0 && blockstun == 0 && hitstop == 0) return detail;
 
         detail.valid = true;
         detail.flags = static_cast<int>(flags);
@@ -408,11 +373,6 @@ namespace {
         g_prevPlayers[2] = PreviousPlayerFrame{};
     }
 
-    void ResetAttackDetailCacheUnlocked() {
-        g_frameDataAttackOffsets[1] = -1;
-        g_frameDataAttackOffsets[2] = -1;
-    }
-
     void ResetSessionStatsUnlocked() {
         g_sessionMaxComboDamage = 0;
     }
@@ -426,7 +386,6 @@ namespace {
         ClearDisplayUnlocked();
         g_state = ComboState{};
         ResetPrevSamplesUnlocked();
-        ResetAttackDetailCacheUnlocked();
         if (resetSessionStats) {
             ResetSessionStatsUnlocked();
         }
@@ -622,7 +581,7 @@ namespace {
 
     void RenderUnlocked(unsigned long long nowMs) {
         const Config::Settings& cfg = Config::GetSettings();
-        if (!cfg.showComboStatisticsOverlay) {
+        if (!cfg.showComboStatisticsOverlay || g_statsDisplayEnabled.load()) {
             ClearDisplayUnlocked();
             return;
         }
@@ -688,15 +647,15 @@ namespace {
             line4 << I18n::TrFormat("OPP  M %s   RF %s", FormatMeterDelta(remoteMeterDelta).c_str(),
                                     FormatRfDelta(remoteRfDelta).c_str());
         } else {
-            line1 << "MOVE " << FormatOptionalDamage(g_state.lastHitDamage > 0, g_state.lastHitDamage)
-                  << "  COMBO " << g_state.totalDamage
-                  << "  MAX " << g_sessionMaxComboDamage;
+            line1 << I18n::TrFormat("MOVE %s  COMBO %d  MAX %d",
+                                    FormatOptionalDamage(g_state.lastHitDamage > 0, g_state.lastHitDamage).c_str(),
+                                    (int)g_state.totalDamage, g_sessionMaxComboDamage);
             line2 << "HP " << g_state.defenderHpStart << " -> " << g_state.defenderHpCurrent
                   << " (-" << g_state.defenderHpDelta << ")";
-            line3 << "YOU  M " << FormatMeterDelta(localMeterDelta)
-                << "   RF " << FormatRfDelta(localRfDelta);
-            line4 << "OPP  M " << FormatMeterDelta(remoteMeterDelta)
-                << "   RF " << FormatRfDelta(remoteRfDelta);
+            line3 << I18n::TrFormat("YOU  M %s   RF %s", FormatMeterDelta(localMeterDelta).c_str(),
+                                    FormatRfDelta(localRfDelta).c_str());
+            line4 << I18n::TrFormat("OPP  M %s   RF %s", FormatMeterDelta(remoteMeterDelta).c_str(),
+                                    FormatRfDelta(remoteRfDelta).c_str());
         }
 
         line5 << I18n::TrFormat("PRORATION %.3f%%", g_state.scalePercent);
@@ -717,7 +676,7 @@ namespace {
             if (hasLine6) {
                 line6 << "   ";
             }
-            line6 << "Raw " << static_cast<int>(std::lround(g_state.scaleRaw));
+            line6 << I18n::TrFormat("Raw %d", static_cast<int>(std::lround(g_state.scaleRaw)));
             hasLine6 = true;
         }
 

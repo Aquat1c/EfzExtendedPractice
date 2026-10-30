@@ -10,6 +10,7 @@
 #include "../include/core/logger.h"
 #include "../include/core/memory.h"
 #include "../include/game/auto_action.h"
+#include "../include/game/game_state.h"
 #include "../include/game/macro_controller.h"
 #include "../include/utils/utilities.h" // for g_onlineModeActive
 #include "../include/runtime/practice_runtime.h"
@@ -82,6 +83,15 @@ static bool OtherInputOwnerActive(int playerNum) {
             MacroController::GetPlaybackPlayer() == playerNum);
 }
 
+// Only a live worker can retire a timed or held mask, and it never restarts here:
+// Start stays with EnableFeatures so nothing re-arms after the Practice boundary.
+// Caller holds g_p2ControlMutex, which netplay publication also takes.
+static bool WorkerAcceptsInput() {
+    return s_running.load(std::memory_order_acquire) &&
+           !s_stop.load(std::memory_order_acquire) &&
+           IsPracticeContext();
+}
+
 static uint64_t NextWorkerGeneration() {
     uint64_t generation =
         s_workerGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -136,6 +146,8 @@ static void Worker(uint64_t generation) {
     while (!s_stop.load(std::memory_order_acquire) &&
            OwnsWorkerGeneration(generation)) {
         Practice::WorkLease work;
+        // Held until Stop; the monitor retires this worker at the Practice boundary.
+        const bool inPractice = IsPracticeContext();
         if (s_boundWorld.id.battleWorld) {
             work = EnterBoundWork();
             if (!work) break;
@@ -164,6 +176,7 @@ static void Worker(uint64_t generation) {
             // A hook-owned AI normal must survive to EFZ's later character
             // consumer; hold the write lease across the whole pulse/release
             // transaction.
+            if (!inPractice) break;
             ImmediateWriteLease writeLease(p);
             if (!writeLease) continue;
             if (g_onlineModeActive.load(std::memory_order_acquire) ||
@@ -258,9 +271,9 @@ static void Worker(uint64_t generation) {
         return;
     }
 
-    const bool onlineExit = g_onlineModeActive.load(std::memory_order_acquire);
+    const bool canWriteNeutral = IsPracticeContext();
     for (int p = 1; p <= 2; ++p) {
-        if (!onlineExit) {
+        if (canWriteNeutral) {
             ImmediateWriteLease writeLease(p);
             if (writeLease) WriteWorkerInput(p, 0);
         }
@@ -280,7 +293,7 @@ void Start() {
     std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
     std::lock_guard<std::mutex> lifecycleLock(s_lifecycleMutex);
     if (s_practiceAdmissionClosed.load(std::memory_order_acquire) ||
-        g_onlineModeActive.load(std::memory_order_acquire) ||
+        !IsPracticeContext() ||
         s_running.load(std::memory_order_acquire)) return;
     if (s_boundWorld.id.battleWorld && (s_ownedRaw[1] || s_ownedRaw[2])) return;
 
@@ -354,7 +367,7 @@ static bool StopWorker(bool releaseNeutral, const EfzTmEntryV1* heldWorld = null
         s_slot[p].desired.store(0, std::memory_order_relaxed);
         s_slot[p].ticks.store(0, std::memory_order_relaxed);
         s_slot[p].needNeutralEdge.store(false, std::memory_order_relaxed);
-        if (releaseNeutral && !g_onlineModeActive.load(std::memory_order_acquire)) {
+        if (releaseNeutral && IsPracticeContext()) {
             ImmediateWriteLease writeLease(p);
             if (writeLease) restored = WriteWorkerInput(p, 0) && restored;
         }
@@ -425,9 +438,15 @@ bool Set(int playerNum, uint8_t mask) {
     // A non-zero continuous source must win admission now, never be cached
     // behind another owner to appear later out of context.
     if (mask != 0) {
+        if (!WorkerAcceptsInput()) return false;
         ImmediateWriteLease writeLease(playerNum);
         if (!writeLease) return false;
         SetImpl(playerNum, mask);
+        // CancelWork takes only the lifecycle lock; drop anything armed behind its exit.
+        if (!WorkerAcceptsInput()) {
+            SetImpl(playerNum, 0);
+            return false;
+        }
         return true;
     }
     SetImpl(playerNum, mask);
@@ -437,6 +456,7 @@ bool Set(int playerNum, uint8_t mask) {
 static bool PressForImpl(int playerNum, uint8_t mask, int ticks) {
     if (s_practiceAdmissionClosed.load(std::memory_order_acquire)) return false;
     if (playerNum < 1 || playerNum > 2 || ticks <= 0) return false;
+    if (!WorkerAcceptsInput()) return false;
     auto work = s_boundWorld.id.battleWorld ? EnterBoundWork() : Practice::WorkLease{};
     if (s_boundWorld.id.battleWorld && !work) return false;
     const uint8_t last = s_slot[playerNum].lastWritten.load(std::memory_order_relaxed);
@@ -462,6 +482,14 @@ static bool PressForImpl(int playerNum, uint8_t mask, int ticks) {
     // Set desired first with release semantics, then arm the remaining worker ticks.
     s_slot[playerNum].desired.store(mask, std::memory_order_release);
     s_slot[playerNum].ticks.store((ticks > 1) ? (ticks - 1) : 1, std::memory_order_relaxed);
+    // CancelWork takes only the lifecycle lock; drop anything armed behind its exit.
+    if (!WorkerAcceptsInput()) {
+        s_slot[playerNum].desired.store(0, std::memory_order_relaxed);
+        s_slot[playerNum].ticks.store(0, std::memory_order_relaxed);
+        if (mask != 0 && IsPracticeContext()) (void)WriteWorkerInput(playerNum, 0);
+        s_slot[playerNum].lastWritten.store(0, std::memory_order_relaxed);
+        return false;
+    }
     return true;
 }
 
@@ -479,8 +507,8 @@ bool PressFor(int playerNum, uint8_t mask, int ticks) {
 static void ClearImpl(int playerNum) {
     if (s_practiceAdmissionClosed.load(std::memory_order_acquire)) return;
     if (playerNum < 1 || playerNum > 2) return;
-    if (g_onlineModeActive.load(std::memory_order_acquire)) {
-        // Netplay owns the fighters: drop the desired mask, never write it.
+    if (!IsPracticeContext()) {
+        // Netplay may own the fighters: drop the desired mask, never write it.
         s_slot[playerNum].desired.store(0, std::memory_order_relaxed);
         s_slot[playerNum].ticks.store(0, std::memory_order_relaxed);
         s_slot[playerNum].lastWritten.store(0, std::memory_order_relaxed);

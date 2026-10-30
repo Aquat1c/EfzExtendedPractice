@@ -19,19 +19,41 @@
 static double saved_x1 = 240.0, saved_y1 = 0.0;
 static double saved_x2 = 400.0, saved_y2 = 0.0;
 
+static bool TryCopyMemory(void* destination, const void* source, size_t size) {
+    __try {
+        memcpy(destination, source, size);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// A protect pair on a live data page races other writers' restores and can leave it executable.
+static bool RangeAlreadyWritable(uintptr_t address, size_t size) {
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(reinterpret_cast<LPCVOID>(address), &info, sizeof(info))
+        || info.State != MEM_COMMIT || (info.Protect & PAGE_GUARD)) {
+        return false;
+    }
+    const DWORD protection = info.Protect & 0xFF;
+    return (protection == PAGE_READWRITE || protection == PAGE_WRITECOPY
+            || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY)
+        && size <= reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize - address;
+}
+
 bool SafeWriteMemory(uintptr_t address, const void* data, size_t size) {
     if (!address || !data || size == 0) return false;
+
+    if (RangeAlreadyWritable(address, size)) {
+        return TryCopyMemory(reinterpret_cast<void*>(address), data, size);
+    }
 
     DWORD oldProtect;
     if (!VirtualProtect((LPVOID)address, size, PAGE_EXECUTE_READWRITE, &oldProtect)) {
         return false;
     }
 
-    bool success = false;
-    if (!IsBadWritePtr((LPVOID)address, size)) {
-        memcpy((void*)address, data, size);
-        success = true;
-    }
+    const bool success = TryCopyMemory(reinterpret_cast<void*>(address), data, size);
 
     VirtualProtect((LPVOID)address, size, oldProtect, &oldProtect);
     return success;
@@ -41,14 +63,8 @@ bool SafeReadMemory(uintptr_t address, void* buffer, size_t size) {
     if (!address || !buffer || size == 0) {
         return false;
     }
-    
-    // Use IsBadReadPtr to check readability before the memcpy
-    if (!IsBadReadPtr((LPVOID)address, size)) {
-        memcpy(buffer, (void*)address, size);
-        return true;
-    }
-    
-    return false;
+
+    return TryCopyMemory(buffer, reinterpret_cast<const void*>(address), size);
 }
 
 uintptr_t ResolvePointer(uintptr_t base, uintptr_t baseOffset, uintptr_t offset) {
@@ -717,20 +733,20 @@ void LoadPlayerPositions(uintptr_t base) {
     LogOut("[POSITION] Verified Y positions after teleport - P1:" + 
           std::to_string(verifyY1) + ", P2:" + std::to_string(verifyY2), true);
 
-    // If Y positions were not applied, try setting them with air state
-    if ((saved_y1 > 0.1 && verifyY1 < 0.1) || (saved_y2 > 0.1 && verifyY2 < 0.1)) {
+    // Airborne Y is negative. If it was not applied, try setting it with air state.
+    if ((saved_y1 < -0.1 && verifyY1 > -0.1) || (saved_y2 < -0.1 && verifyY2 > -0.1)) {
         LogOut("[POSITION] Y positions were reset by game, forcing air state", true);
         
         uintptr_t moveIDAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, MOVE_ID_OFFSET);
         uintptr_t moveIDAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, MOVE_ID_OFFSET);
         
-        if (moveIDAddr1 && saved_y1 > 0.1) {
+        if (moveIDAddr1 && saved_y1 < -0.1) {
             short airState = FALLING_ID;
             SafeWriteMemory(moveIDAddr1, &airState, sizeof(short));
             SafeWriteMemory(yAddr1, &saved_y1, sizeof(double));
         }
         
-        if (moveIDAddr2 && saved_y2 > 0.1) {
+        if (moveIDAddr2 && saved_y2 < -0.1) {
             short airState = FALLING_ID;
             SafeWriteMemory(moveIDAddr2, &airState, sizeof(short));
             SafeWriteMemory(yAddr2, &saved_y2, sizeof(double));

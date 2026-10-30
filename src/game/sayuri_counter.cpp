@@ -3,6 +3,7 @@
 #include "../include/core/constants.h"
 #include "../include/core/memory.h"
 #include "../include/core/logger.h"
+#include "../include/game/frame_advantage.h"
 #include "../include/game/game_state.h"
 #include "../include/utils/utilities.h"   // GetEFZBase, g_featuresEnabled
 #include "../include/utils/network.h"     // IsNetplaySuspendActive
@@ -39,7 +40,7 @@ constexpr int kAutoCutterMaxAttempts = 3;
 
 // Delay in visual frames (3 internal ticks each) from the first tick the window is seen open; the engine would accept a press on the very first tick.
 std::atomic<int> g_autoCutterDelay[3];   // visual frames, 0 = earliest
-int g_cutterWindowOpenTick[3] = { -1, -1, -1 };  // frameCounter at first open
+int g_cutterWindowOpenTick[3] = { -1, -1, -1 };  // engine tick at first open
 constexpr int kInternalTicksPerVisualFrame = 3;
 
 // Biased +1 so 0 = nothing pinned; never write a pick unless the live opponent resolves to the same table.
@@ -48,8 +49,9 @@ std::atomic<int> g_pickedTableBias[3];
 // Set on opponent change; stale indices at/past the fixed head read as OFF until the next publish.
 std::atomic<int> g_selectionStale[3];
 
-// LAST BLOCKED samples the opponent once, on blockstun entry (later states would overwrite the memory).
+// LAST BLOCKED samples the opponent once per blocked hit (later states would overwrite the memory).
 std::atomic<int> g_prevMoveId[3];
+std::atomic<int> g_prevBlockstop[3];
 
 // Menu/render thread only; Tick() never touches this.
 constexpr int kFixedChoices = 3;    // OFF / NOTHING / LAST BLOCKED
@@ -331,6 +333,10 @@ void TickSide(int playerNum, uintptr_t base) {
     // The poll runs several times per internal frame; the blockstun entry edge is never missed.
     const int prevMove = g_prevMoveId[playerNum].exchange(moveID, std::memory_order_acq_rel);
     const bool blockstunEntry = inBlockstun && !IsGroundedBlockstun(prevMove);
+    int blockstopNow = 0;
+    (void)ReadWord(base, baseOffset, BLOCKSTUN_OFFSET, blockstopNow);
+    const int prevBlockstop = g_prevBlockstop[playerNum].exchange(blockstopNow, std::memory_order_acq_rel);
+    const bool freshBlock = inBlockstun && blockstopNow > prevBlockstop;
 
     if (choice == MEMORY_NOTHING) {
         uint32_t stored = 0;
@@ -340,8 +346,8 @@ void TickSide(int playerNum, uintptr_t base) {
                        (uint32_t)SAYURI_COUNTER_MEMORY_EMPTY);
         }
     } else if (choice == MEMORY_LAST_BLOCKED) {
-        // The engine compares on the blockstun ENTRY frame; a write during blockstun takes effect on the NEXT entry - race-free by construction.
-        if (blockstunEntry) {
+        // The engine compares on frame 0 of every blocked hit: a re-block in a string resets the animation, so it is a fresh entry too, seen here as blockstop rising.
+        if (blockstunEntry || freshBlock) {
             const uintptr_t oppOffset = (playerNum == 1) ? EFZ_BASE_OFFSET_P2
                                                          : EFZ_BASE_OFFSET_P1;
             int oppMove = 0;
@@ -419,7 +425,7 @@ void TickSide(int playerNum, uintptr_t base) {
                 ReadWord(base, baseOffset, BLOCKSTUN_OFFSET, blockstop) && blockstop == 0 &&
                 ReadWord(base, oppOffset, SUPERFLASH_FREEZE_OFFSET, oppSuperflash) && oppSuperflash == 0;
             int& openTick = g_cutterWindowOpenTick[playerNum];
-            const int nowTick = frameCounter.load(std::memory_order_relaxed);
+            const int nowTick = GetEngineTick();
             if (windowOpen && openTick < 0) openTick = nowTick;
             const int delayVisual = g_autoCutterDelay[playerNum].load(std::memory_order_acquire);
             const bool delayElapsed = windowOpen && openTick >= 0 &&

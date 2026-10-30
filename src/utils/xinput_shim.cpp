@@ -29,6 +29,7 @@ namespace {
     PFN_XInputGetState pGetState = nullptr;
     PFN_XInputGetCapabilities pGetCaps = nullptr;
     PFN_XInputEnable pEnable = nullptr;
+    std::atomic<bool> g_xinputLoadFailed{false};
     std::array<XINPUT_CAPABILITIES, XInputShim::kControllerSlotCount> g_nativeCapabilities{};
     unsigned g_nativeCapabilitiesMask = 0;
 
@@ -51,6 +52,7 @@ namespace {
         bool startupBlockedLeftTrigger = false;
         bool startupBlockedRightTrigger = false;
         int startupTriggerBlockWarmupFrames = 8;
+        bool zRzRightStick = false;
         std::string lastInputDebugSummary;
         bool inputDebugWasEnabled = false;
         DWORD lastInputDebugLogTick = 0;
@@ -60,6 +62,8 @@ namespace {
     std::vector<GenericPad> g_genericPads;
     bool g_directInputInitAttempted = false;
     DWORD g_lastGenericEnumTick = 0;
+    // The last enumeration saw controllers, but all of them are already XInput slots.
+    bool g_genericEnumSawOnlyXInput = false;
     XInputShim::Snapshot g_cachedSnapshot{};
     std::string g_lastSlotSummary;
     std::string g_lastGenericInventorySummary;
@@ -187,6 +191,7 @@ namespace {
         // Already polled through its native XInput slot; without XInput keep it as the only path.
         if (g_xinput && IsXInputDevice(device)) {
             device->Release();
+            g_genericEnumSawOnlyXInput = true;
             return DIENUM_CONTINUE;
         }
 
@@ -216,6 +221,9 @@ namespace {
         GenericPad pad;
         pad.device = device;
         pad.name = NarrowDeviceName(instance->tszProductName);
+        // guidProduct.Data1 is MAKELONG(vendor, product).
+        pad.zRzRightStick = GenericPadAxisPolicy::UsesZRzRightStick(
+            LOWORD(instance->guidProduct.Data1), HIWORD(instance->guidProduct.Data1));
         DIDEVCAPS caps{};
         caps.dwSize = sizeof(caps);
         if (SUCCEEDED(device->GetCapabilities(&caps))) {
@@ -249,6 +257,7 @@ namespace {
 
         ReleaseGenericPadsLocked();
         g_lastGenericEnumTick = GetTickCount();
+        g_genericEnumSawOnlyXInput = false;
 
         std::vector<GenericPad> pads;
         g_directInput->EnumDevices(DI8DEVCLASS_GAMECTRL, EnumGenericPadsCallback, &pads, DIEDFL_ATTACHEDONLY);
@@ -279,6 +288,14 @@ namespace {
         for (size_t i = 0; i < g_genericPads.size(); ++i) {
             LogOut("[GAMEPAD] DirectInput pad " + std::to_string(i) + ": " + g_genericPads[i].name, true);
         }
+    }
+
+    static LONG RightStickX(const GenericPad& pad, const DIJOYSTATE2& state) {
+        return pad.zRzRightStick ? state.lZ : state.lRx;
+    }
+
+    static LONG RightStickY(const GenericPad& pad, const DIJOYSTATE2& state) {
+        return pad.zRzRightStick ? state.lRz : state.lRy;
     }
 
     bool PollGenericPadLocked(GenericPad& pad) {
@@ -336,7 +353,7 @@ namespace {
             pad.neutralState.lY = state.lY;
         }
         if (GenericPadAxisPolicy::ObserveNeutral(
-                pad.rightStickCalibration, state.lRx, state.lRy)) {
+                pad.rightStickCalibration, RightStickX(pad, state), RightStickY(pad, state))) {
             pad.neutralState.lRx = state.lRx;
             pad.neutralState.lRy = state.lRy;
         }
@@ -344,7 +361,7 @@ namespace {
             GenericPadAxisPolicy::RelaxNeutral(
                 pad.leftStickCalibration, state.lX, state.lY);
             GenericPadAxisPolicy::RelaxNeutral(
-                pad.rightStickCalibration, state.lRx, state.lRy);
+                pad.rightStickCalibration, RightStickX(pad, state), RightStickY(pad, state));
             if (pad.leftStickCalibration.valid) {
                 pad.neutralState.lX = pad.leftStickCalibration.neutralX;
                 pad.neutralState.lY = pad.leftStickCalibration.neutralY;
@@ -683,7 +700,7 @@ namespace {
         state.Gamepad.wButtons = buttons;
         BYTE leftTrigger = ButtonDown(pad.rawState, 6) ? 255 : 0;
         BYTE rightTrigger = ButtonDown(pad.rawState, 7) ? 255 : 0;
-        if (leftTrigger == 0 && rightTrigger == 0 && pad.neutralStateValid) {
+        if (leftTrigger == 0 && rightTrigger == 0 && pad.neutralStateValid && !pad.zRzRightStick) {
             // Some DirectInput pads expose analog triggers on Z/Rz instead of digital buttons.
             const LONG zDelta = AxisDelta(pad.rawState.lZ, pad.neutralState.lZ);
             const LONG rzDelta = AxisDelta(pad.rawState.lRz, pad.neutralState.lRz);
@@ -703,9 +720,9 @@ namespace {
         state.Gamepad.sThumbLY = ClampAxisToShort(leftStickY);
         if (pad.rightStickCalibration.valid) {
             state.Gamepad.sThumbRX = ClampAxisToShort(
-                AxisDelta(pad.rawState.lRx, pad.rightStickCalibration.neutralX));
+                AxisDelta(RightStickX(pad, pad.rawState), pad.rightStickCalibration.neutralX));
             state.Gamepad.sThumbRY = ClampAxisToShort(
-                -AxisDelta(pad.rawState.lRy, pad.rightStickCalibration.neutralY));
+                -AxisDelta(RightStickY(pad, pad.rawState), pad.rightStickCalibration.neutralY));
         }
 
         if (memcmp(&state.Gamepad, &pad.syntheticState.Gamepad, sizeof(XINPUT_GAMEPAD)) != 0) {
@@ -737,14 +754,22 @@ namespace {
     // Native polls can block seconds per disconnected slot; never hold g_snapshotMutex during them.
     static void PollNativeSnapshotUnlocked(std::array<XINPUT_STATE, 4>& outStates,
                                            unsigned& outMask) {
+        // An empty slot is the slow case, so only look for new pads once a second.
+        static unsigned s_lastMask = 0;
+        static DWORD s_nextEmptySlotProbe = 0;
+        const DWORD now = GetTickCount();
+        const bool probeEmpty = static_cast<LONG>(now - s_nextEmptySlotProbe) >= 0;
+        if (probeEmpty) s_nextEmptySlotProbe = now + 1000;
         outMask = 0;
         for (DWORD i = 0; i < 4; ++i) {
-            if (GetNativeState(i, &outStates[i]) == ERROR_SUCCESS) {
+            const bool poll = probeEmpty || (s_lastMask & (1u << i)) != 0;
+            if (poll && GetNativeState(i, &outStates[i]) == ERROR_SUCCESS) {
                 outMask |= (1u << i);
             } else {
                 ZeroMemory(&outStates[i], sizeof(XINPUT_STATE));
             }
         }
+        s_lastMask = outMask;
     }
 
     static void RefreshNewNativeCapabilitiesUnlocked(unsigned nativeMask) {
@@ -773,7 +798,9 @@ namespace {
 
         const bool firstGenericEnum = (g_lastGenericEnumTick == 0);
         const bool noKnownGenericPads = g_genericPads.empty();
-        if (firstGenericEnum || (noKnownGenericPads && (now - g_lastGenericEnumTick >= 5000))) {
+        // Enumeration can stall on some drivers; XInput-only users only need it for a late-added generic pad.
+        const DWORD genericEnumIntervalMs = g_genericEnumSawOnlyXInput ? 60000 : 5000;
+        if (firstGenericEnum || (noKnownGenericPads && (now - g_lastGenericEnumTick >= genericEnumIntervalMs))) {
             EnumerateGenericPadsLocked(firstGenericEnum);
         }
 
@@ -952,6 +979,8 @@ namespace XInputShim {
     bool Init() {
         EnsureWatcherStarted();
         if (g_xinput) return true;
+        // No system DLL appears mid-session; this is reached per slot per poll.
+        if (g_xinputLoadFailed.load(std::memory_order_acquire)) return false;
         const char* cands[] = { "xinput1_4.dll", "xinput9_1_0.dll", "xinput1_3.dll" };
         for (const char* c : cands) {
             HMODULE h = TryLoad(c);
@@ -961,6 +990,7 @@ namespace XInputShim {
                 return true;
             }
         }
+        g_xinputLoadFailed.store(true, std::memory_order_release);
         LogOut("[XINPUT] No XInput DLL found; gamepad features will use fallback paths only.", true);
         return false;
     }

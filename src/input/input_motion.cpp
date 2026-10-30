@@ -37,13 +37,13 @@ void SetAIControlFlag(int playerNum, bool human) {
     // Motion producers humanize and restore either side under this mutex; a role write must not land in between.
     std::unique_lock<std::recursive_mutex> p2ControlLock(g_p2ControlMutex);
     if (g_onlineModeActive.load(std::memory_order_acquire)) return;
-    if (playerNum == 2) {
-        // A control-role change supersedes authored P2 commands; retire the generation before the flag becomes visible.
-        KaoriRecoilDuck::Cancel(2, "P2 control role changed");
-        CancelAutoActionChargeFollowup(2, "P2 control role changed");
-        CancelP2AutoActionMotionTransaction("P2 control role changed");
+    if (playerNum == 1 || playerNum == 2) {
+        // A control-role change supersedes authored commands on either side (P1 is the dummy after Switch Players); retire the generation before the flag becomes visible.
+        KaoriRecoilDuck::Cancel(playerNum, "control role changed");
+        CancelAutoActionChargeFollowup(playerNum, "control role changed");
+        CancelAutoActionMotionTransaction(playerNum, "control role changed");
         if (g_onlineModeActive.load(std::memory_order_acquire)) return;
-        if (IsP2AutoActionMotionTransactionActive()) return;
+        if (IsAutoActionMotionTransactionActive(playerNum)) return;
     }
 
     uintptr_t base = GetEFZBase();

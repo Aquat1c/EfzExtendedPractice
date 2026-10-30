@@ -51,8 +51,7 @@ extern FrameAdvantageState frameAdvState;
 extern std::atomic<int> g_SkipRegularFAOverlayUntilFrame;
 
 void ResetFrameAdvantageState();
-// World/timeline boundary only, after prior measurement readers have drained;
-// re-seeds the pause clock on its next sample without changing frameCounter.
+// World/timeline boundary only, after prior measurement readers have drained.
 void ResetFrameAdvantageTimeline();
 void ClearFrameAdvantageDisplay();
 void CancelFrameAdvantageCalculation();
@@ -61,14 +60,17 @@ bool IsFrameAdvantageActive();
 FrameAdvantageState GetFrameAdvantageState();
 void ArmFrameAdvantageDisplayTimer();
 
+// Engine ticks since entering the Practice battle: stops with the engine (pause,
+// framestep, hitch) and is 0 outside Practice.
+int GetEngineTick();
+// Tick of this player's last non-actionable to actionable edge.
+int GetActionableEdgeTick(int player);
+// Practice boundary: drops the clock and everything timed on it. Mod state only, no
+// game memory. Retries on the next call if the auto-action state lock is busy.
+void DropEngineTickState();
+
 int GetCurrentInternalFrame();
 int GetDisplayDurationInternalFrames();
-double GetCurrentVisualFrame();      // frame with .33/.66 subframes
 std::string FormatFrameAdvantage(int advantageInternal);
 bool IsAttackMove(short moveID);
 bool IsRecoveryFromAttack(short currentMoveID, short prevMoveID);
-// True when FA timers need ticking even without moveID changes.
-bool FrameAdvantageTimersActive();
-// Overload taking the unified per-frame sample.
-struct PerFrameSample; // forward decl
-void MonitorFrameAdvantage(const PerFrameSample& sample);

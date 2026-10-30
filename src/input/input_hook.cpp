@@ -230,10 +230,10 @@ bool RetryPendingAiRestoreLocked(int playerNum, const char* context) {
         return true;
     }
 
-    // Never replay an offline snapshot once online mode owns controller setup.
-    if (g_onlineModeActive.load(std::memory_order_acquire)) {
+    // Never replay an offline snapshot outside Practice; netplay may own controller setup.
+    if (!IsPracticeContext()) {
         LogOut("[AA_INPUT_TXN] P" + std::to_string(playerNum) +
-                   " discarded pending offline AI restore during netplay", true);
+                   " discarded pending offline AI restore outside Practice", true);
         ClearPendingAiRestoreLocked(playerNum);
         return true;
     }
@@ -355,11 +355,12 @@ bool CleanupMotionTxnLocked(
 
     // Netplay is a hard ownership boundary: retire bookkeeping without touching the new owner's world.
     if (heldWorld && g_onlineModeActive.load(std::memory_order_acquire)) return false;
-    if (g_onlineModeActive.load(std::memory_order_acquire)) {
+    if (g_onlineModeActive.load(std::memory_order_acquire) ||
+        (!heldWorld && !IsPracticeContext())) {
         LogOut("[AA_INPUT_TXN] P" + std::to_string(playerNum) +
                    " retired offline gen=" +
                    std::to_string(generation) +
-                   " without writes at netplay ownership boundary reason=" +
+                   " without writes at Practice ownership boundary reason=" +
                    std::string(reason ? reason : "unspecified"),
                true);
         // Release ownership before publishing the terminal outcome; Accepted callers may resubmit immediately.
@@ -480,7 +481,7 @@ AutoActionMotionSubmitResult QueueMotionPatternCommon(
 
     std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
     if (!InputHooksReadyForTransactions() ||
-        g_onlineModeActive.load(std::memory_order_acquire) ||
+        !IsPracticeContext() ||
         !IsMatchPhase()) {
         return AutoActionMotionSubmitResult::Invalid;
     }
@@ -3736,7 +3737,8 @@ static int __fastcall HookedPollPlayerInputState(int inputManagerPtr, int /*edx*
             static_cast<int>(g_pollOverrideMask[idxFromProcessContext].load(std::memory_order_relaxed)));
     }
 
-    if (idxFromPollArg <= 2 && idxFromPollArg != 0
+    // Only with no process context; a side-routed pass must not take the other fighter's override.
+    if (idxFromProcessContext == 0 && idxFromPollArg <= 2 && idxFromPollArg != 0
         && g_pollOverrideActive[idxFromPollArg].load(std::memory_order_relaxed)) {
         g_pollOverrideHitCount[idxFromPollArg].fetch_add(1, std::memory_order_relaxed);
         ObservePhysicalPollIfRequested(idxFromPollArg, inputManagerPtr, playerIndex);
@@ -3813,6 +3815,8 @@ int __fastcall HookedProcessCharacterInput(int characterPtr, int edx) {
 #if EFZ_ENABLE_AUTO_ACTION_WAKE_TRACE
     InputHookWakeTraceScope wakeTrace(playerNum, static_cast<uintptr_t>(characterPtr));
 #endif
+
+    if (playerNum == 1) OnEngineTick();
 
     // Run once per internal sub-tick before P1 processing.
     if (g_tickIntegratedAutoActions.load() && playerNum == 1) {

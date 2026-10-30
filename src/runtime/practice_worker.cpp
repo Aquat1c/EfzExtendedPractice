@@ -80,7 +80,8 @@ void NotifyRetirementProgress() noexcept {
 bool WaitForRetirementProgress() noexcept {
     try {
         std::unique_lock<std::mutex> lock(signalMutex);
-        retirementChanged.wait(lock,[]{return pendingRetirementProgress || waitFaulted.load(std::memory_order_acquire);});
+        // Bounded: this blocks the native thread, and the caller re-polls on a timeout.
+        retirementChanged.wait_for(lock,std::chrono::milliseconds(250),[]{return pendingRetirementProgress || waitFaulted.load(std::memory_order_acquire);});
         if(waitFaulted.load(std::memory_order_acquire))return false;
         pendingRetirementProgress=false;return true;
     }catch(...) {RecordMonitorFailure();return false;}

@@ -2,7 +2,7 @@
 
 Modern training mode for Eternal Fighter Zero with a live in-game overlay, frame analysis, robust auto-actions, macro playback, and online-safe behavior. Designed for players first, with practical tools and clear UI.
 
-This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable ImGui overlay, accurate frame and RG analysis, input automation, macros, and quality-of-life training tools while automatically disabling risky features during online play to avoid desyncs.
+This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable overlay menu, accurate frame and RG analysis, input automation, macros, and quality-of-life training tools while automatically disabling risky features during online play to avoid desyncs.
 
 ---
 
@@ -50,7 +50,7 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
 **First Run**
 - The mod loads in-game. Open the training menu with `Esc` (rebindable).
 - A config file `efz_training_config.ini` is created next to the DLL (`mods\efz_training_mode\`).
-- The debug console is **off** by default. Enable it in Settings → General. Logs since startup are buffered and appear when you turn it on.
+- The debug console is **off** by default. Enable it in Settings → Debug → Logging → SHOW DEBUG CONSOLE. Logs since startup are buffered and appear when you turn it on.
 
 ---
 
@@ -71,7 +71,7 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
 
 - **Auto-Airtech:** Automatic air recovery with direction (Forward/Neutral/Back) and optional delay; tuned for actionable states around FALLING.
 
-- **Frame Analysis:** Shows frame advantage on block, hit, and RG, plus the gap between blocked hits.
+- **Frame Analysis:** Shows frame advantage on block, hit, and RG, plus the gap between blocked hits. The frame bar's MOVE DATA line (Main → Options → Frame Bar) shows each fighter's last attack as startup, active, and recovery.
 
 - **Jumps and Dashes:**
   - Jumps use immediate input injection (direction respects facing)
@@ -101,38 +101,36 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
   - Adaptive Guard: automatically chooses Stand/Crouch/Air guard based on incoming attack properties and state. Doesn't walk backwards on high-block.
   - Guard overrides (force stand/crouch/air where applicable)
 
-- **Missions and Tutorials:** Data-driven training challenges shipped as JSON packs:
-  - A core tutorial curriculum and authored missions, browsable from the title screen
-  - In-match recipe overlays, per-lesson progress, and a lesson pause menu
+- **Japanese UI:** Settings → General → Interface → LANGUAGE switches the custom menu and in-game overlays between English and Japanese. In the config file this is `language = en` or `language = ja` under `[General]`.
 
 - **Overlay Controls:**
   - Toggle overlay visibility and stats
   - Optional debug console view; log buffering from startup
 
 - **Settings UI:**
-  - General: Use ImGui UI, detailed logging, restrict to Practice Mode, show/hide debug console
-  - Hotkeys: press-to-bind directly in the UI; Save/Reload config
+  - General → Interface: USE CUSTOM MENU, UI scale, LANGUAGE, MENU ANIMATIONS, CHECK FOR UPDATES
+  - General: SAVE ALL TO DISK and RELOAD FROM DISK
+  - Hotkeys: press-to-bind directly in the UI
+  - Debug → Logging: detailed logging, debug file log, SHOW DEBUG CONSOLE
 
 - **Online-Safe Behavior:**
-  - Detects active online sessions and automatically:
-    - Hides the console after a short countdown
-    - Disables training hotkeys and injected inputs
-  - Restores console/hotkeys after the match ends
+  - Detects active online sessions and automatically disables training hotkeys and injected inputs
+  - Restores them after the session ends
 
 ---
 
 **Online Play Safety**
 - When connected to another player, training-only features are disabled to avoid desyncs.
-- Console auto-hides; hotkeys are suppressed; injected inputs are blocked.
+- Hotkeys are suppressed and injected inputs are blocked.
 
 **Update Check**
-- Once per session, the first time you open the training menu, the mod asks GitHub whether a newer
-  release exists. It sends nothing but a `User-Agent` of `EfzExtendedPractice/<version>` and the
+- When you open the training menu, the mod asks GitHub whether a newer release exists, until one check
+  succeeds in that session. It sends nothing but a `User-Agent` of `EfzExtendedPractice/<version>` and the
   request path - no machine name, no identifier, no usage data - and it never runs during online play.
 - A `[!]` appears on the **Help** tab and its **About** page when an update is available; opening **About**
   dismisses it until a newer release ships.
-- Turn it off under **Settings > General > Check for updates**. Any failure (no network, or Windows XP,
-  whose TLS is too old for GitHub) is silent and never retried.
+- Turn it off under **Settings > General > Interface > CHECK FOR UPDATES**. Any failure (no network, or
+  Windows XP, whose TLS is too old for GitHub) is silent; the next menu open retries once 5 minutes have passed.
 
 ---
 
@@ -157,21 +155,25 @@ Most hotkeys are configurable in Settings → Hotkeys or in `efz_training_config
 **Configuration**
 - Config file is created next to `efz_training_mode.dll` as `efz_training_config.ini`.
 - Settings → General:
-  - Use ImGui UI, detailed logging, restrict to Practice mode, show debug console (off by default; logs are buffered)
+  - Interface holds USE CUSTOM MENU, UI scale, LANGUAGE, MENU ANIMATIONS, and CHECK FOR UPDATES
+  - SAVE ALL TO DISK / RELOAD FROM DISK from within the UI
+- Main → Options → Frame Bar:
+  - SHOW FRAME BAR, CELL STEP, DETAIL, and MOVE DATA
+- Settings → Debug → Logging:
+  - Detailed logging, debug file log, SHOW DEBUG CONSOLE (off by default; logs are buffered)
 - Settings → Hotkeys:
   - Click Bind to reassign; or edit INI (virtual-key codes, hex like `0x31`)
-  - Save to disk / Reload from disk from within the UI
 
 ---
 
 **Troubleshooting**
 - Console shows nothing when enabled
-  - Ensure Settings → General → Show debug console is ON; logs are buffered and should flush immediately
+  - Ensure Settings → Debug → Logging → SHOW DEBUG CONSOLE is ON; logs are buffered and should flush immediately
 - Hotkeys don't respond
   - Verify online mode isn't active (features are disabled during online play)
   - Rebind hotkeys in Settings → Hotkeys and try again
 - Menu not visible
-  - Press `Esc` or ensure ImGui UI is enabled in Settings → General
+  - Press your menu key (`Esc` by default) during a Practice match, and check that `useImGui = 1` is set in `efz_training_config.ini`
 - Revival side switch does nothing
   - Side switching in Revival is now intentionally blocked until the mod has confirmed the live Practice controller pointer during an active Practice match
   - If it stays blocked, check the startup/match logs for `[PAUSE] Match-entry confirmed Practice controller=0x...` or `[SWITCH] Revival swap blocked: Practice controller not yet confirmed`
@@ -226,7 +228,7 @@ External libraries (bundled under `3rdparty/`):
 - This project is provided for educational purposes. Eternal Fighter Zero is property of Twilight Frontier and its respective owners.
 - Fonts embedded in the DLL keep their own licenses:
   - ITC Bolt (`assets/fonts/ITC Bolt.ttf`): fonts made from [Web Fonts](http://www.onlinewebfonts.com) are licensed by CC BY 4.0. Vertical metrics were adjusted; see `assets/fonts/ITC Bolt License.txt`.
-  - Noto Sans CJK JP subset (`assets/fonts/NotoSansJP-subset.ttf`): © The Noto Project Authors, SIL Open Font License 1.1; see `assets/fonts/OFL-NotoSansCJK.txt`.
+  - Noto Sans CJK JP subset (`assets/fonts/NotoSansJP-subset.ttf`): © 2014-2021 Adobe, with Reserved Font Name 'Source', SIL Open Font License 1.1; see `assets/fonts/OFL-NotoSansCJK.txt`.
 
 ---
 
@@ -234,6 +236,8 @@ External libraries (bundled under `3rdparty/`):
 
 - [How it works](docs/HOW_IT_WORKS.md): a tour of every subsystem, the repository
   map, and where to make common changes.
+- Missions and tutorials are experimental and not in release builds; configure with
+  `-DEFZ_ENABLE_EXPERIMENTAL_TRIAL_TUTORIAL=ON` to build them.
 - [Overlay reset contract](docs/displaymanager-reset-contract.md): how this mod's
   ImGui backend cooperates when another mod (EfzDisplayManager) resets the
   Direct3D 9 device (`EFZ_QueryOverlayResetApiV1`).

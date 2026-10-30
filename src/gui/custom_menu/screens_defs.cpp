@@ -1,4 +1,5 @@
 #include "../include/gui/custom_menu/screens.h"
+#include "../include/gui/custom_menu/sound.h"
 #include "../include/gui/custom_menu/renderer.h"
 #include "../include/gui/custom_menu/layout.h"
 #include "../include/gui/custom_menu/theme.h"
@@ -8,6 +9,7 @@
 #include "../include/gui/imgui_impl.h"
 #include "../include/utils/utilities.h"
 #include "../include/utils/config.h"
+#include "../include/game/collision_display.h"
 #include "../include/utils/i18n.h"
 #include "../include/utils/debug_log.h"
 #include "../include/core/constants.h"
@@ -25,8 +27,6 @@
 #include "../include/game/mission/mission_engine.h"
 #include "../include/game/mission/mission_data.h"
 #include "../include/game/mission/mission_authoring.h"
-#include "../include/game/custom_savestate.h"
-#include "../include/game/savestate_hook.h"
 #include "../include/game/fm_commands.h"
 #include "../include/game/character_settings.h"
 #include "../include/game/character_action_catalog.h"
@@ -199,9 +199,24 @@ void OnDebugFileLogging() {
     PersistBool("General", "enableDebugFileLog", enabled);
 }
 
+// The config path is in the ANSI code page; menu text is UTF-8.
+std::string AnsiToUtf8(const std::string& ansi) {
+    const int wideLen = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), -1, nullptr, 0);
+    if (wideLen <= 0) return ansi;
+    std::wstring wide(static_cast<size_t>(wideLen), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), -1, &wide[0], wideLen);
+    const int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Len <= 0) return ansi;
+    std::string utf8(static_cast<size_t>(utf8Len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, &utf8[0], utf8Len, nullptr, nullptr);
+    utf8.resize(static_cast<size_t>(utf8Len) - 1);
+    return utf8;
+}
+
 const char* CurrentConfigPathInfo() {
-    static char buf[320];
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("Config file: %s"), Config::GetConfigFilePath().c_str());
+    static char buf[512];
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("Config file: %s"),
+                AnsiToUtf8(Config::GetConfigFilePath()).c_str());
     return buf;
 }
 
@@ -486,7 +501,7 @@ const char* const kStrengthChoices[4] = { "A", "B", "C", "S" };
 const char* const kChargeFollowupChoices[3] = { "OFF", "IC ON CONTACT", "FIC WINDOW" };
 const char* const kJumpDirChoicesAuto[3] = { "NEUTRAL", "FORWARD", "BACK" };
 const char* const kFdFollowupChoices[7] = {
-    "NO FOLLOW-UP", "A", "B", "C", "2A", "2B", "2C"
+    "NO FOLLOW-UP", "5A", "5B", "5C", "2A", "2B", "2C"
 };
 const char* const kAkikoSlowChoices[4] = { "INACTIVE", "A", "B", "C" };
 const char* const kAkikoBulletChoices[3] = { "EGG / TUNA", "CARROT / RADISH", "SARDINE / DURIAH" };
@@ -538,7 +553,7 @@ constexpr int kTriggerMotionCount = sizeof(kTriggerMotionChoices) / sizeof(kTrig
 const char* const kActionPoolNames[] = {
     "5A", "5B", "5C", "5S",
     "2A", "2B", "2C", "2S",
-    "jA", "jB", "jC", "jS",
+    "j.A", "j.B", "j.C", "j.S",
     "6A", "6B", "6C", "6S",
     "4A", "4B", "4C", "4S",
 
@@ -560,7 +575,7 @@ const char* const kActionPoolNames[] = {
     "FINAL MEMORY",
 
     "JUMP NEUTRAL", "JUMP FORWARD", "JUMP BACK",
-    "BACKDASH", "FORWARD DASH",
+    "44", "66",
     "BLOCK",
 
     // Appended catalog recipes.  These indices are stable and must never be
@@ -875,7 +890,6 @@ struct TriggerActionChoice {
 
 enum TriggerActionCategory {
     kTriggerActionCategoryNormals = 0,
-    kTriggerActionCategoryCommandNormals,
     kTriggerActionCategorySpecials,
     kTriggerActionCategorySupers,
     kTriggerActionCategoryMovement,
@@ -885,7 +899,6 @@ enum TriggerActionCategory {
 
 const char* const kTriggerActionCategoryChoices[kTriggerActionCategoryCount] = {
     "NORMALS",
-    "COMMAND NORMALS",
     "SPECIALS",
     "SUPERS",
     "MOVEMENT",
@@ -893,8 +906,7 @@ const char* const kTriggerActionCategoryChoices[kTriggerActionCategoryCount] = {
 };
 
 int ActionPoolCategoryForIndex(int index) {
-    if (index >= 0 && index <= 11) return kTriggerActionCategoryNormals;
-    if (index >= 12 && index <= 19) return kTriggerActionCategoryCommandNormals;
+    if (index >= 0 && index <= 19) return kTriggerActionCategoryNormals;
     // Kano's selectable 22 entry is 22B and is a super; other characters use this family as a special.
     if (index >= 40 && index <= 43 &&
         EffectiveAutoActionCharId() == CHAR_ID_KANO) {
@@ -906,7 +918,7 @@ int ActionPoolCategoryForIndex(int index) {
     if (index == CharacterActionCatalog::kPoolKaoriRecoilDuck) {
         return kTriggerActionCategoryMovement;
     }
-    if (index >= CharacterActionCatalog::kPool1X) return kTriggerActionCategoryCommandNormals;
+    if (index >= CharacterActionCatalog::kPool1X) return kTriggerActionCategoryNormals;
     return kTriggerActionCategoryDefense;
 }
 
@@ -1094,7 +1106,6 @@ const char* FormatActionPoolChoiceHelp(const Row&, int choiceValue) {
     const char* kind = "response";
     switch (category) {
         case kTriggerActionCategoryNormals:
-        case kTriggerActionCategoryCommandNormals:
             kind = "normal";
             break;
         case kTriggerActionCategorySpecials:
@@ -1122,10 +1133,9 @@ const char* FormatActionPoolSummary(const Row& row) {
     return FormatMaskSelectionSummary(row, 3);
 }
 
-constexpr int kMaxTriggerActionChoices = 96;
+constexpr int kMaxTriggerActionChoices = 128;
 TriggerActionChoice g_triggerActionChoices[kMaxTriggerActionChoices];
 char g_triggerActionLabels[kMaxTriggerActionChoices][48];
-char g_triggerActionShortLabels[kMaxTriggerActionChoices][32];
 const char* g_triggerActionChoiceArr[kMaxTriggerActionChoices];
 int g_triggerActionCategoryMap[kMaxTriggerActionChoices];
 int g_triggerActionChoiceCount = 0;
@@ -1219,7 +1229,7 @@ int TriggerActionCategoryForMotion(int motionIdx) {
         case 28:
         case 29:
         case 30:
-            return kTriggerActionCategoryCommandNormals;
+            return kTriggerActionCategoryNormals;
         case 31:
             return kTriggerActionCategoryMovement;
         case 3:
@@ -1248,7 +1258,7 @@ const char* TriggerActionLabelForMotion(int motionIdx) {
     switch (motionIdx) {
         case 0:  return "STANDING";
         case 1:  return "CROUCHING";
-        case 2:  return "AIR";
+        case 2:  return I18n::GetLanguage() == I18n::English ? "JUMP" : "AIR";
         case 3:  return "QCF (236)";
         case 4:  return "DP (623)";
         case 5:  return "QCB (214)";
@@ -1264,8 +1274,8 @@ const char* TriggerActionLabelForMotion(int motionIdx) {
         case 15: return "4123641236";
         case 16: return "6321463214";
         case 17: return "JUMP";
-        case 18: return "BACKDASH";
-        case 19: return "FORWARD DASH";
+        case 18: return "44";
+        case 19: return "66";
         case 20: return "BLOCK";
         case 21: return "FINAL MEMORY";
         case 22: return "FORWARD NORMAL";
@@ -1282,6 +1292,39 @@ const char* TriggerActionLabelForMotion(int motionIdx) {
     }
 }
 
+// Numpad prefix of a button-strength motion: prefix + A/B/C/S is the move.
+const char* TriggerActionNotationForMotion(int motionIdx) {
+    switch (motionIdx) {
+        case 0:  return "5";
+        case 1:  return "2";
+        case 2:  return "j.";
+        case 3:  return "236";
+        case 4:  return "623";
+        case 5:  return "214";
+        case 6:  return "421";
+        case 7:  return "41236";
+        case 8:  return "2141236";
+        case 9:  return "236236";
+        case 10: return "214214";
+        case 11: return "641236";
+        case 12: return "463214";
+        case 13: return "412";
+        case 14: return "22";
+        case 15: return "4123641236";
+        case 16: return "6321463214";
+        case 22: return "6";
+        case 23: return "4";
+        case 24: return "1";
+        case 25: return "3";
+        case 26: return "j.2";
+        case 27: return "j.6";
+        case 28: return "66";
+        case 29: return "662";
+        case 30: return "664";
+        default: return "";
+    }
+}
+
 void AddTriggerActionChoice(int category,
                             int motionIdx,
                             const char* shortLabel,
@@ -1294,18 +1337,41 @@ void AddTriggerActionChoice(int category,
     motionIdx = ClampIndex(motionIdx, kTriggerMotionCount);
     g_triggerActionChoices[i] = { motionIdx, action, strength, dashFollowup, category };
     g_triggerActionCategoryMap[i] = category;
-    strncpy_s(g_triggerActionShortLabels[i], sizeof(g_triggerActionShortLabels[i]), shortLabel, _TRUNCATE);
     strncpy_s(g_triggerActionLabels[i], sizeof(g_triggerActionLabels[i]), shortLabel, _TRUNCATE);
     g_triggerActionChoiceArr[i] = g_triggerActionLabels[i];
 }
 
-void AddMotionActionChoice(int motionIdx) {
-    AddTriggerActionChoice(TriggerActionCategoryForMotion(motionIdx),
-                           motionIdx,
-                           TriggerActionLabelForMotion(motionIdx),
-                           MapMotionIndexToAction(motionIdx, 0),
-                           0,
-                           -1);
+// One entry per button, jump direction or dash follow-up.
+void AddMotionActionChoices(int category, int motionIdx, int charId) {
+    const char* label = TriggerActionLabelForMotion(motionIdx);
+    const int action = MapMotionIndexToAction(motionIdx, 0);
+    const TriggerButtonMode mode = GetTriggerButtonMode(action);
+    const int count = TriggerButtonChoiceCount(mode);
+    if (mode == TriggerButtonMode::Abcd) {
+        const bool known = CharacterActionCatalog::IsKnownCharacter(charId);
+        for (int strength = 0; strength < count; ++strength) {
+            const int variant = MapMotionIndexToAction(motionIdx, strength);
+            if (known && !CharacterActionCatalog::IsAvailable(charId, variant, strength)) continue;
+            AddTriggerActionChoice(category, motionIdx, label, variant, strength, -1);
+        }
+    } else if (mode == TriggerButtonMode::JumpDir) {
+        for (int dir = 0; dir < count; ++dir) {
+            AddTriggerActionChoice(category, motionIdx, label, action, dir, -1);
+        }
+    } else if (mode == TriggerButtonMode::FdFollowup) {
+        for (int followup = 0; followup < count; ++followup) {
+            // A character's real dash normal is this same input; it is already listed as 66A / 662A.
+            if (followup > 0 && CharacterActionCatalog::IsAvailable(
+                                    charId, followup <= 3 ? ACTION_66X : ACTION_662X, (followup - 1) % 3)) continue;
+            AddTriggerActionChoice(category, motionIdx, label, action, 0, followup);
+        }
+    } else {
+        AddTriggerActionChoice(category, motionIdx, label, action, 0, -1);
+    }
+}
+
+void AddMotionActionChoice(int motionIdx, int charId) {
+    AddMotionActionChoices(TriggerActionCategoryForMotion(motionIdx), motionIdx, charId);
 }
 
 void RefreshTriggerActionChoices() {
@@ -1316,35 +1382,32 @@ void RefreshTriggerActionChoices() {
 
     const int normalMotions[] = { 0, 1, 2 };
     for (int motionIdx : normalMotions) {
-        AddMotionActionChoice(motionIdx);
+        AddMotionActionChoice(motionIdx, charId);
     }
 
     const int commandNormalMotions[] = { 22, 23 };
     for (int motionIdx : commandNormalMotions) {
-        if (MotionChoiceAvailable(charId, motionIdx)) AddMotionActionChoice(motionIdx);
+        if (MotionChoiceAvailable(charId, motionIdx)) AddMotionActionChoice(motionIdx, charId);
     }
 
     const int extendedCommandNormalMotions[] = { 24, 25, 26, 27, 28, 29, 30 };
     for (int motionIdx : extendedCommandNormalMotions) {
-        if (MotionChoiceAvailable(charId, motionIdx)) AddMotionActionChoice(motionIdx);
+        if (MotionChoiceAvailable(charId, motionIdx)) AddMotionActionChoice(motionIdx, charId);
     }
 
     const int specialMotions[] = { 3, 4, 5, 6, 7, 13, 14 };
     for (int motionIdx : specialMotions) {
         if (!MotionChoiceAvailable(charId, motionIdx)) continue;
         if (motionIdx == 14 && charId == CHAR_ID_KANO) {
-            AddTriggerActionChoice(kTriggerActionCategorySupers, motionIdx,
-                                   TriggerActionLabelForMotion(motionIdx),
-                                   MapMotionIndexToAction(motionIdx, 0),
-                                   0, -1);
+            AddMotionActionChoices(kTriggerActionCategorySupers, motionIdx, charId);
         } else {
-            AddMotionActionChoice(motionIdx);
+            AddMotionActionChoice(motionIdx, charId);
         }
     }
 
     const int superMotions[] = { 8, 9, 10, 11, 12, 15, 16 };
     for (int motionIdx : superMotions) {
-        if (MotionChoiceAvailable(charId, motionIdx)) AddMotionActionChoice(motionIdx);
+        if (MotionChoiceAvailable(charId, motionIdx)) AddMotionActionChoice(motionIdx, charId);
     }
 
     if (MotionChoiceAvailable(charId, 21)) {
@@ -1352,9 +1415,9 @@ void RefreshTriggerActionChoices() {
                                "FINAL MEMORY", ACTION_FINAL_MEMORY, 0, -1);
     }
 
-    AddTriggerActionChoice(kTriggerActionCategoryMovement, 17, "JUMP", ACTION_JUMP, 0, -1);
-    AddTriggerActionChoice(kTriggerActionCategoryMovement, 18, "BACKDASH", ACTION_BACKDASH, 0, -1);
-    AddTriggerActionChoice(kTriggerActionCategoryMovement, 19, "FORWARD DASH", ACTION_FORWARD_DASH, 0, 0);
+    AddMotionActionChoice(17, charId);
+    AddMotionActionChoice(18, charId);
+    AddMotionActionChoice(19, charId);
     if (MotionChoiceAvailable(charId, 31)) {
         AddTriggerActionChoice(kTriggerActionCategoryMovement, 31,
                                "RECOIL DUCKING (44~66)",
@@ -1395,13 +1458,17 @@ int GetTriggerActionChoiceIndex(int action, int strength) {
     if (g_triggerActionChoiceCount <= 0) return 0;
 
     const int motionIdx = GetMotionIndexForAction(action);
+    const TriggerButtonMode mode = GetTriggerButtonMode(action);
+    const int wanted = GetTriggerButtonIndex(action, strength, g_mirrorFwdDashFollowup, mode);
 
+    int firstOfMotion = -1;
     for (int i = 0; i < g_triggerActionChoiceCount; ++i) {
         const TriggerActionChoice& choice = g_triggerActionChoices[i];
         if (choice.motionIdx != motionIdx) continue;
-        return i;
+        if (firstOfMotion < 0) firstOfMotion = i;
+        if (GetTriggerButtonIndex(choice.action, choice.strength, choice.dashFollowup, mode) == wanted) return i;
     }
-    return 0;
+    return firstOfMotion >= 0 ? firstOfMotion : 0;
 }
 
 void ApplyTriggerActionChoiceIndex(int selectedIdx, int& action, int& strength) {
@@ -1409,29 +1476,11 @@ void ApplyTriggerActionChoiceIndex(int selectedIdx, int& action, int& strength) 
     if (g_triggerActionChoiceCount <= 0) return;
     selectedIdx = ClampIndex(selectedIdx, g_triggerActionChoiceCount);
     const TriggerActionChoice& choice = g_triggerActionChoices[selectedIdx];
-    const TriggerButtonMode mode = GetTriggerButtonMode(choice.action);
-    switch (mode) {
-        case TriggerButtonMode::Abcd: {
-            const int buttonIdx = AvailableStrengthForMotion(
-                EffectiveAutoActionCharId(), choice.motionIdx, strength);
-            action = MapMotionIndexToAction(choice.motionIdx, buttonIdx);
-            strength = buttonIdx;
-            break;
-        }
-        case TriggerButtonMode::JumpDir:
-            action = choice.action;
-            strength = ClampIndex(strength, 3);
-            break;
-        case TriggerButtonMode::FdFollowup:
-            action = choice.action;
-            strength = 0;
-            g_mirrorFwdDashFollowup = ClampIndex(g_mirrorFwdDashFollowup, 7);
-            forwardDashFollowup.store(g_mirrorFwdDashFollowup);
-            break;
-        default:
-            action = choice.action;
-            strength = choice.strength;
-            break;
+    action = choice.action;
+    strength = choice.strength;
+    if (GetTriggerButtonMode(choice.action) == TriggerButtonMode::FdFollowup) {
+        g_mirrorFwdDashFollowup = ClampIndex(choice.dashFollowup, 7);
+        forwardDashFollowup.store(g_mirrorFwdDashFollowup);
     }
 }
 
@@ -1442,26 +1491,32 @@ const char* FormatTriggerActionChoiceLabel(int choiceIdx,
     if (g_triggerActionChoiceCount <= 0) return "?";
     choiceIdx = ClampIndex(choiceIdx, g_triggerActionChoiceCount);
     const TriggerActionChoice& choice = g_triggerActionChoices[choiceIdx];
-    const char* baseLabel = g_triggerActionShortLabels[choiceIdx];
+    const char* baseLabel = TriggerActionLabelForMotion(choice.motionIdx);
     const TriggerButtonMode mode = GetTriggerButtonMode(choice.action);
-    static char s_buf[64];
+    static char s_buf[128];
     switch (mode) {
         case TriggerButtonMode::Abcd:
+            if (I18n::GetLanguage() == I18n::English) {
+                _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE, "%s%s",
+                            TriggerActionNotationForMotion(choice.motionIdx),
+                            TriggerButtonChoiceLabel(mode, ClampIndex(strength, 4)));
+                return s_buf;
+            }
             _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE, "%s %s",
-                        baseLabel,
-                        TriggerButtonChoiceLabel(mode, ClampIndex(strength, 4)));
+                        I18n::Tr(baseLabel),
+                        I18n::Tr(TriggerButtonChoiceLabel(mode, ClampIndex(strength, 4))));
             return s_buf;
         case TriggerButtonMode::JumpDir:
             _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE, "%s %s",
-                        baseLabel,
-                        TriggerButtonChoiceLabel(mode, ClampIndex(strength, 3)));
+                        I18n::Tr(baseLabel),
+                        I18n::Tr(TriggerButtonChoiceLabel(mode, ClampIndex(strength, 3))));
             return s_buf;
         case TriggerButtonMode::FdFollowup:
             dashFollowup = ClampIndex(dashFollowup, 7);
             if (hideNoDashFollowup && dashFollowup == 0) return baseLabel;
             _snprintf_s(s_buf, sizeof(s_buf), _TRUNCATE, "%s > %s",
-                        baseLabel,
-                        TriggerButtonChoiceLabel(mode, dashFollowup));
+                        I18n::Tr(baseLabel),
+                        I18n::Tr(TriggerButtonChoiceLabel(mode, dashFollowup)));
             return s_buf;
         default:
             return baseLabel;
@@ -1481,46 +1536,31 @@ const char* FormatTriggerActionChoiceRow(const Row& row) {
     return FormatTriggerActionChoiceLabel(idx, strength, g_mirrorFwdDashFollowup, true);
 }
 
-const char* FormatTriggerActionPopupChoice(const Row& row, int choiceValue) {
+const char* FormatTriggerActionPopupChoice(const Row&, int choiceValue) {
     RefreshTriggerActionChoices();
     if (g_triggerActionChoiceCount <= 0) return "?";
     choiceValue = ClampIndex(choiceValue, g_triggerActionChoiceCount);
     const TriggerActionChoice& choice = g_triggerActionChoices[choiceValue];
-    int strength = row.intPtr ? *row.intPtr : choice.strength;
-    if (GetTriggerButtonMode(choice.action) == TriggerButtonMode::Abcd) {
-        strength = AvailableStrengthForMotion(
-            EffectiveAutoActionCharId(), choice.motionIdx, strength);
-    }
-    const int dashFollowup = row.choiceVariantPtr ? *row.choiceVariantPtr : g_mirrorFwdDashFollowup;
-    return FormatTriggerActionChoiceLabel(choiceValue, strength, dashFollowup, false);
+    return FormatTriggerActionChoiceLabel(choiceValue, choice.strength, choice.dashFollowup, true);
 }
 
-bool AdjustTriggerActionPopupChoice(const Row& row, int choiceValue, int direction) {
-    if (!row.intPtr || direction == 0) return false;
-    RefreshTriggerActionChoices();
-    if (g_triggerActionChoiceCount <= 0) return false;
-    choiceValue = ClampIndex(choiceValue, g_triggerActionChoiceCount);
-    const TriggerActionChoice& choice = g_triggerActionChoices[choiceValue];
-    const TriggerButtonMode mode = GetTriggerButtonMode(choice.action);
-    const int count = TriggerButtonChoiceCount(mode);
-    if (count <= 0) return false;
+const char* FormatTriggerActionGroup(const Row&, int choiceValue) {
+    return TriggerActionLabelForMotion(g_triggerActionChoices[ClampIndex(choiceValue, kMaxTriggerActionChoices)].motionIdx);
+}
 
-    switch (mode) {
-        case TriggerButtonMode::Abcd:
-            *row.intPtr = NextAvailableStrengthForMotion(
-                EffectiveAutoActionCharId(), choice.motionIdx,
-                *row.intPtr, direction);
-            return true;
-        case TriggerButtonMode::JumpDir:
-            *row.intPtr = (*row.intPtr + direction + count) % count;
-            return true;
-        case TriggerButtonMode::FdFollowup:
-            if (!row.choiceVariantPtr) return false;
-            *row.choiceVariantPtr = (*row.choiceVariantPtr + direction + count) % count;
-            return true;
-        default:
-            return false;
+// Pool bits run in blocks of four, see kActionPoolNames.
+const char* FormatActionPoolGroup(const Row&, int choiceValue) {
+    static const int kLegacyBlockMotions[] = { 0, 1, 2, 22, 23, 3, 4, 5, 6, 13, 14, 7, 8, 9, 10, 11, 12, 15, 16 };
+    const int legacyBlocks = sizeof(kLegacyBlockMotions) / sizeof(kLegacyBlockMotions[0]);
+    if (choiceValue >= 0 && choiceValue / 4 < legacyBlocks) {
+        return TriggerActionLabelForMotion(kLegacyBlockMotions[choiceValue / 4]);
     }
+    if (choiceValue >= 77 && choiceValue <= 79) return "JUMP";
+    if (choiceValue >= CharacterActionCatalog::kPool1X &&
+        choiceValue < CharacterActionCatalog::kPoolKaoriRecoilDuck) {
+        return TriggerActionLabelForMotion(24 + (choiceValue - CharacterActionCatalog::kPool1X) / 4);
+    }
+    return nullptr;
 }
 
 bool AdjustTriggerActionChoiceRow(const Row& row, int direction) {
@@ -1727,12 +1767,6 @@ void OnLanguage() {
 void OnPracticeHint() {
     PersistBool("General", "showPracticeEntryHint", MutableSettings().showPracticeEntryHint);
 }
-void OnSavestateBackendMode() {
-    PersistInt("General", "savestateBackendMode", MutableSettings().savestateBackendMode);
-}
-void OnSavestateLoadCustomPalettes() {
-    PersistBool("General", "savestateLoadCustomPalettes", MutableSettings().savestateLoadCustomPalettes);
-}
 void OnCheckForUpdates() {
     PersistBool("General", "checkForUpdates", MutableSettings().checkForUpdates);
 }
@@ -1843,6 +1877,8 @@ Row* BuildDisplayOverlayRows(int& count) {
     return s_rows;
 }
 
+void OnMenuAnimations();
+
 Row* BuildSettingsInterfaceRows(int& count) {
     static Row s_rows[16];
     int n = 0;
@@ -1854,6 +1890,8 @@ Row* BuildSettingsInterfaceRows(int& count) {
     s_rows[n++] = ChoicesRow("UI FONT (ADVANCED MENU)", &s.uiFontMode,   kUiFontChoices, 2, OnUiFont);
     s_rows[n] = ChoicesRow("LANGUAGE", &s.language, kLanguageChoices, 2, OnLanguage);
     s_rows[n++].helpText = "Chooses the language of the custom menu and in-game overlays.";
+    s_rows[n] = Toggle      ("MENU ANIMATIONS",        &s.menuAnimations,      OnMenuAnimations);
+    s_rows[n++].helpText = "Fades the menu in and out and slides between pages, like the game's own menus. Off makes them instant.";
     s_rows[n++] = Toggle    ("PRACTICE OVERLAY HINT",  &s.showPracticeEntryHint, OnPracticeHint);
     s_rows[n++] = Toggle    ("CHECK FOR UPDATES",       &s.checkForUpdates,     OnCheckForUpdates);
     count = n;
@@ -2003,6 +2041,7 @@ bool ManualKeybindAllowed(int vk, bool disallowMenuReserved) {
     if (vk == VK_LWIN || vk == VK_RWIN) return false;
     if (vk == VK_CLEAR) return false;
     if (vk == VK_ESCAPE) return false;
+    if (CollisionDisplay::IsGameHotkeyVk(vk)) return false;
     if (vk == Config::GetSettings().configMenuKey) return false;
     if (disallowMenuReserved && (vk == VK_RETURN || vk == VK_SPACE)) return false;
     return true;
@@ -2145,7 +2184,7 @@ bool TickManualKeybindEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
         }
 
         if (g_manualKeybindEditor.errorBuf[0]) {
-            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", g_manualKeybindEditor.errorBuf);
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", I18n::Tr(g_manualKeybindEditor.errorBuf));
         } else {
             const std::string preview = ManualKeybindPreviewText();
             ImGui::TextDisabled("%s", I18n::Tr(preview.c_str()));
@@ -2341,7 +2380,7 @@ void RefreshHotkeyStrings() {
 }
 
 const char* ValHotkeyGameplay() { return "5 KEYS"; }
-const char* ValHotkeySavestate() { return "4 KEYS"; }
+const char* ValHotkeySavestate() { return "2 KEYS"; }
 const char* ValHotkeyMacros()   { return "3 KEYS"; }
 const char* ValHotkeyMenu()     { return "6 KEYS"; }
 const char* ValHotkeyController() { return "12 BINDS"; }
@@ -2532,17 +2571,6 @@ bool g_mirrorHudBottomBar   = false;
 bool g_mirrorHudSpMeter     = false;
 bool g_mirrorHudRfGauge     = false;
 bool g_mirrorHudCombo       = false;
-int g_customSavestateDiskSlot = 0;
-CustomSavestate::EditableFields g_customSavestateFields;
-char g_customSavestateModeInfo[256] = "Mode: custom savestates active";
-char g_customSavestateWorkingInfo[256] = "Current State: empty";
-char g_customSavestateMetaInfo[256] = "Meta: n/a";
-char g_customSavestateStatusInfo[256] = "Status: idle";
-char g_customSavestateDiskInfo[256] = "Slot 0: initial snapshot | memory only";
-bool g_customSavestateHotswapPrompt = false;
-bool g_customSavestateHotswapDismissed = false;
-unsigned int g_customSavestateHotswapWorkingStamp = 0;
-char g_customSavestateHotswapInfo[256] = "Loaded slot differs from the current match.";
 int g_debugPracticeLocalSide = -1;
 bool g_debugSwitchPlayersAvailable = false;
 bool g_debugRfFreezeP1Active = false;
@@ -2559,244 +2587,6 @@ int CharacterSelectIdFromInternalCharacterId(int internalCharId);
 bool ReadCurrentHotswapState(HotswapCurrentState& state);
 bool RevivalBgmMuted();
 const char* GetNamedStageLabel(int stageId);
-void UpdateCustomSavestateHotswapPromptFromWorking();
-void UpdateCustomSavestateHotswapPromptFromSummary(const CustomSavestate::Summary& summary);
-
-const char* const kSavestateBackendChoices[3] = {
-    "CUSTOM",
-    "REVIVAL",
-    "CUSTOM+FALLBACK",
-};
-
-int SavedSavestateSelectId(uint8_t rawCharId) {
-    if (rawCharId == 0xFF) {
-        return -1;
-    }
-
-    // Custom savestate headers capture characterObject+141, the select ID consumed by CharacterHotswap::QueueReload.
-    const int selectId = static_cast<int>(rawCharId);
-    if (selectId < 0 || selectId >= CharacterHotswap::kCharacterSelectCount) {
-        return -1;
-    }
-    return selectId;
-}
-
-const char* SavedSavestateDisplayName(uint8_t rawCharId) {
-    const int selectId = SavedSavestateSelectId(rawCharId);
-    return selectId >= 0 ? CharacterHotswap::GetDisplayNameForSelectId(selectId) : "UNKNOWN";
-}
-
-void LogSavestateMirrorStateIfChanged(const char* source,
-                                      const CustomSavestate::Summary& summary,
-                                      CustomSavestate::BackendMode backendMode,
-                                      int activeDiskSlot,
-                                      bool fieldsOk) {
-    static std::string s_lastLogLine;
-
-    std::ostringstream oss;
-    oss << "[SAVESTATE][MENU][" << (source ? source : "MIRROR") << "]"
-        << " backend=" << CustomSavestate::BackendModeName(backendMode)
-        << " slot=" << activeDiskSlot
-        << " stamp=" << summary.workingSnapshotStamp
-        << " working=" << (summary.hasWorkingSnapshot ? 1 : 0)
-        << " dirty=" << (summary.workingSnapshotDirty ? 1 : 0)
-        << " rawChars=" << static_cast<unsigned int>(summary.savedP1CharId)
-        << "/" << static_cast<unsigned int>(summary.savedP2CharId)
-        << " selectChars=" << SavedSavestateSelectId(summary.savedP1CharId)
-        << "/" << SavedSavestateSelectId(summary.savedP2CharId)
-        << " stage=" << static_cast<unsigned int>(summary.savedStageId)
-        << " compat=" << (summary.currentPairCompatible ? 1 : 0)
-        << "/" << (summary.currentStageCompatible ? 1 : 0)
-        << "/" << (summary.currentVersionCompatible ? 1 : 0)
-        << " restoreAllowed=" << (summary.currentRestoreAllowed ? 1 : 0)
-        << " fieldsOk=" << (fieldsOk ? 1 : 0)
-        << " saveLoad=" << summary.saveCount << "/" << summary.loadCount
-        << " revival=" << summary.savedRevivalVersion;
-
-    const std::string line = oss.str();
-    if (line != s_lastLogLine) {
-        LogOut(line, true);
-        s_lastLogLine = line;
-    }
-}
-
-bool CustomSavestateDiskSlotExistsCached(int slot, DWORD maxAgeMs = 1000) {
-    struct CacheEntry {
-        bool valid = false;
-        int slot = -999;
-        bool exists = false;
-        DWORD tick = 0;
-    };
-
-    constexpr int kCacheSlots = 16;
-    static CacheEntry s_cache[kCacheSlots];
-    const int index = (slot >= 0 && slot < kCacheSlots) ? slot : (kCacheSlots - 1);
-    CacheEntry& entry = s_cache[index];
-
-    const DWORD now = GetTickCount();
-    if (maxAgeMs > 0 &&
-        entry.valid &&
-        entry.slot == slot &&
-        (now - entry.tick) < maxAgeMs) {
-        return entry.exists;
-    }
-
-    const DWORD start = now;
-    const bool exists = CustomSavestate::DoesDiskSlotExist(slot);
-    const DWORD elapsed = GetTickCount() - start;
-
-    entry.valid = true;
-    entry.slot = slot;
-    entry.exists = exists;
-    entry.tick = GetTickCount();
-
-    static DWORD s_lastSlowLog = 0;
-    if (elapsed >= 25 && (s_lastSlowLog == 0 || (now - s_lastSlowLog) >= 1000)) {
-        s_lastSlowLog = now;
-        char buf[192];
-        _snprintf_s(buf, sizeof(buf), _TRUNCATE,
-            "[CUSTOM_MENU][TIMING] Savestate slot existence probe took %lums slot=%d exists=%d",
-            static_cast<unsigned long>(elapsed),
-            slot,
-            exists ? 1 : 0);
-        LogOut(buf, true);
-    }
-
-    return exists;
-}
-
-void RefreshCustomSavestateMirrors() {
-    CustomSavestate::Summary summary{};
-    CustomSavestate::GetSummary(summary);
-    const CustomSavestate::BackendMode backendMode = CustomSavestate::GetConfiguredBackendMode();
-    g_customSavestateDiskSlot = CustomSavestate::GetActiveDiskSlot();
-
-    const char* currentVersionName = EfzRevivalVersionName(GetEfzRevivalVersion());
-    const char* savedVersionName = summary.savedRevivalVersion != 0
-        ? EfzRevivalVersionName(static_cast<EfzRevivalVersion>(summary.savedRevivalVersion))
-        : "UNKNOWN/LEGACY";
-    const unsigned int revivalSaves = SavestateHook::GetSaveCount();
-    const unsigned int revivalLoads = SavestateHook::GetLoadCount();
-    if (summary.workingSnapshotStamp != g_customSavestateHotswapWorkingStamp) {
-        g_customSavestateHotswapWorkingStamp = summary.workingSnapshotStamp;
-        g_customSavestateHotswapDismissed = false;
-    }
-    UpdateCustomSavestateHotswapPromptFromSummary(summary);
-
-    const bool fieldsOk = summary.hasWorkingSnapshot && CustomSavestate::GetWorkingEditableFields(g_customSavestateFields);
-    if (fieldsOk) {
-        const std::string p1Name = SavedSavestateDisplayName(summary.savedP1CharId);
-        const std::string p2Name = SavedSavestateDisplayName(summary.savedP2CharId);
-        const char* savedStageName = GetNamedStageLabel(summary.savedStageId);
-        _snprintf_s(g_customSavestateWorkingInfo, sizeof(g_customSavestateWorkingInfo), _TRUNCATE,
-                "Current State: %s / %s | %s | stage %s | restore %s/%s/%s | save/load %u/%u | revival %u/%u",
-                    p1Name.c_str(),
-                    p2Name.c_str(),
-                summary.workingSnapshotDirty ? "EDITED" : "READY",
-                    savedStageName,
-                    summary.currentPairCompatible ? "PAIR OK" : "PAIR BLOCK",
-                    summary.currentStageCompatible ? "STAGE OK" : "STAGE BLOCK",
-                    summary.currentVersionCompatible ? "VER OK" : "VER BLOCK",
-                    summary.saveCount,
-                    summary.loadCount,
-                    revivalSaves,
-                    revivalLoads);
-        _snprintf_s(g_customSavestateMetaInfo, sizeof(g_customSavestateMetaInfo), _TRUNCATE,
-                    "Meta: saved %s | current %s | BGM %u | P1 0x%X CPU %u | P2 0x%X CPU %u | side %d | BC 0x%X GS 0x%X RB 0x%X",
-                    savedVersionName,
-                    currentVersionName,
-                    summary.savedBgmTrack,
-                    summary.savedP1StateSize,
-                    summary.savedP1CpuFlag,
-                    summary.savedP2StateSize,
-                    summary.savedP2CpuFlag,
-                    summary.savedLocalSide,
-                    summary.savedBattleContextSize,
-                    summary.savedGameStateSize,
-                    summary.savedRenderBitmapSize);
-    } else {
-        g_customSavestateFields = CustomSavestate::EditableFields{};
-        _snprintf_s(g_customSavestateWorkingInfo, sizeof(g_customSavestateWorkingInfo), _TRUNCATE,
-                    "Current State: empty | save/load %u/%u | revival %u/%u",
-                    summary.saveCount,
-                    summary.loadCount,
-                    revivalSaves,
-                    revivalLoads);
-        _snprintf_s(g_customSavestateMetaInfo, sizeof(g_customSavestateMetaInfo), _TRUNCATE,
-                    "Meta: current %s | backend %s",
-                    currentVersionName,
-                    CustomSavestate::BackendModeName(backendMode));
-    }
-
-    switch (backendMode) {
-    case CustomSavestate::BackendMode::Revival:
-        _snprintf_s(g_customSavestateModeInfo, sizeof(g_customSavestateModeInfo), _TRUNCATE,
-                    "Mode: Revival save/load is active. Custom current-state capture, restore, edits, and slot files are locked.");
-        break;
-    case CustomSavestate::BackendMode::CustomWithRevivalFallback:
-        _snprintf_s(g_customSavestateModeInfo, sizeof(g_customSavestateModeInfo), _TRUNCATE,
-                    "Mode: Custom savestates are active. Revival stays installed for tracking and supported fallback cases.");
-        break;
-    case CustomSavestate::BackendMode::Custom:
-    default:
-        _snprintf_s(g_customSavestateModeInfo, sizeof(g_customSavestateModeInfo), _TRUNCATE,
-                    "Mode: Custom savestates are active. Current State editing and slot files are available.");
-        break;
-    }
-
-    _snprintf_s(g_customSavestateStatusInfo, sizeof(g_customSavestateStatusInfo), _TRUNCATE,
-                "Status: %s",
-                CustomSavestate::GetLastStatus().c_str());
-
-    constexpr DWORD kDiskInfoRefreshMs = 1000;
-    static int s_lastDiskInfoSlot = -999;
-    static unsigned int s_lastDiskInfoSaveCount = 0xFFFFFFFFu;
-    static unsigned int s_lastDiskInfoLoadCount = 0xFFFFFFFFu;
-    static DWORD s_lastDiskInfoRefresh = 0;
-
-    const DWORD diskNow = GetTickCount();
-    const bool diskInfoDue = s_lastDiskInfoRefresh == 0
-        || (diskNow - s_lastDiskInfoRefresh) >= kDiskInfoRefreshMs
-        || s_lastDiskInfoSlot != g_customSavestateDiskSlot
-        || s_lastDiskInfoSaveCount != summary.saveCount
-        || s_lastDiskInfoLoadCount != summary.loadCount;
-
-    if (diskInfoDue) {
-        const DWORD diskStart = diskNow;
-        if (g_customSavestateDiskSlot == 0) {
-            _snprintf_s(g_customSavestateDiskInfo, sizeof(g_customSavestateDiskInfo), _TRUNCATE,
-                        "Slot 0: %s | memory snapshot | next save uses slot 1",
-                        CustomSavestateDiskSlotExistsCached(0, 0) ? "READY" : "EMPTY");
-        } else {
-            const std::string slotPath = CustomSavestate::GetDiskSlotPath(g_customSavestateDiskSlot);
-            _snprintf_s(g_customSavestateDiskInfo, sizeof(g_customSavestateDiskInfo), _TRUNCATE,
-                        "Slot %d: %s | %s",
-                        g_customSavestateDiskSlot,
-                        CustomSavestateDiskSlotExistsCached(g_customSavestateDiskSlot, 0) ? "HAS FILE" : "EMPTY",
-                        slotPath.c_str());
-        }
-
-        s_lastDiskInfoSlot = g_customSavestateDiskSlot;
-        s_lastDiskInfoSaveCount = summary.saveCount;
-        s_lastDiskInfoLoadCount = summary.loadCount;
-        s_lastDiskInfoRefresh = GetTickCount();
-
-        const DWORD diskElapsed = s_lastDiskInfoRefresh - diskStart;
-        static DWORD s_lastSlowDiskLog = 0;
-        if (diskElapsed >= 25 && (s_lastSlowDiskLog == 0 || (diskNow - s_lastSlowDiskLog) >= 1000)) {
-            s_lastSlowDiskLog = diskNow;
-            char buf[192];
-            _snprintf_s(buf, sizeof(buf), _TRUNCATE,
-                "[CUSTOM_MENU][TIMING] Savestate disk mirror took %lums slot=%d",
-                static_cast<unsigned long>(diskElapsed),
-                g_customSavestateDiskSlot);
-            LogOut(buf, true);
-        }
-    }
-
-    LogSavestateMirrorStateIfChanged("SUMMARY", summary, backendMode, g_customSavestateDiskSlot, fieldsOk);
-}
-
 void RefreshDebugRuntimeMirrors() {
     g_debugSwitchPlayersAvailable = GetCurrentGameMode() == GameMode::Practice;
     g_debugPracticeLocalSide = -1;
@@ -3203,9 +2993,6 @@ const char* const kFrameBarDetailChoices[3] = { "FULL", "COMPACT", "BARS ONLY" }
 const char* ValDebugLogging() { return MutableSettings().detailedLogging ? "DETAILED" : "NORMAL"; }
 const char* ValDebugOverlays() {
     return (g_ShowOverlayDebugBorders.load() || g_ShowRGDebugToasts.load()) ? "ON" : "TOOLS";
-}
-const char* ValDebugSavestate() {
-    return CustomSavestate::BackendModeName(CustomSavestate::GetConfiguredBackendMode());
 }
 const char* ValDebugBgm() {
     SeedDebugBgmChoiceIfNeeded();
@@ -4848,7 +4635,7 @@ Row* BuildHelpMenuTipsRows(int& count) {
     static Row s_rows[32];
     int n = 0;
     s_rows[n++] = Header("NAVIGATION");
-    s_rows[n++] = Info  ("Use Up/Down or the D-Pad to move focus. Press Enter, Space, or the controller confirm button (A / Cross) to pick the highlighted row.");
+    s_rows[n++] = Info  ("Use Up/Down or the D-Pad to move focus. Press Enter or the controller confirm button (A / Cross) to pick the highlighted row.");
     s_rows[n++] = Info  ("Left/Right adjusts the selected value. Hold Shift while pressing Left/Right to use the larger adjustment step.");
     s_rows[n++] = Info  ("Esc or the controller back button (B / Circle) returns from a submenu, closes a picker, or closes the menu.");
     s_rows[n++] = Spacer();
@@ -5297,6 +5084,35 @@ const char* ValPoolDelaySummary() {
     return s_buf;
 }
 
+// Row builders run twice per frame and stay read-only; this runs once per frame while the page is open.
+void NormalizeOpenPoolOptions() {
+    const char* title = ActiveSubmenuTitle();
+    if (!title || strcmp(title, "POOL OPTIONS") != 0) return;
+    const int triggerIdx = ClampIndex(g_selectedAutoTrigger, 5);
+    if (!PoolEnabledForTriggerIndex(triggerIdx)) return;
+    uint64_t lo = 0;
+    uint64_t hi = 0;
+    CurrentPoolMaskForTriggerIndex(triggerIdx, lo, hi);
+    int* delays = PoolDelayArrayForTriggerIndex(triggerIdx);
+    int* charges = PoolChargeArrayForTriggerIndex(triggerIdx);
+    if (!delays || !charges || (lo | hi) == 0) return;
+
+    const bool normalized = NormalizeSelectedPoolDelaysForTrigger(triggerIdx, lo, hi, true);
+    for (int i = 0; i < kActionPoolCount; ++i) {
+        if (!ConcretePoolBitSet(lo, hi, i)) continue;
+        if (!CharacterActionCatalog::IsPoolIndexAvailable(
+                EffectiveAutoActionCharId(), i)) continue;
+        int action = ACTION_5A;
+        int strength = 0;
+        const bool chargeable = CharacterActionCatalog::PoolIndexToAction(i, action, strength) &&
+                                ActionSupportsChargeFollowup(action);
+        charges[i] = chargeable ? ClampIndex(charges[i], 3) : 0;
+    }
+    if (normalized) {
+        OnAutoApply();
+    }
+}
+
 Row* BuildPoolDelayRows(int& count) {
     static Row s_rows[224];
     static char s_labels[MAX_ACTION_POOL_OPTIONS][48];
@@ -5324,11 +5140,6 @@ Row* BuildPoolDelayRows(int& count) {
         return s_rows;
     }
 
-    const bool normalized = NormalizeSelectedPoolDelaysForTrigger(triggerIdx, lo, hi, true);
-    if (normalized) {
-        OnAutoApply();
-    }
-
     s_rows[n++] = Info("Each selected move keeps its own delay and optional IC/FIC follow-up.");
     for (int i = 0; i < kActionPoolCount && n < 222; ++i) {
         if (!ConcretePoolBitSet(lo, hi, i)) continue;
@@ -5351,7 +5162,6 @@ Row* BuildPoolDelayRows(int& count) {
         int strength = 0;
         if (CharacterActionCatalog::PoolIndexToAction(i, action, strength) &&
             ActionSupportsChargeFollowup(action)) {
-            charges[i] = ClampIndex(charges[i], 3);
             _snprintf_s(s_chargeLabels[i], sizeof(s_chargeLabels[i]), _TRUNCATE,
                         I18n::Tr("%s AFTER MOVE"), kActionPoolNames[i]);
             _snprintf_s(s_chargeHelp[i], sizeof(s_chargeHelp[i]), _TRUNCATE,
@@ -5363,8 +5173,6 @@ Row* BuildPoolDelayRows(int& count) {
                                               3,
                                               OnAutoApply),
                                    s_chargeHelp[i]);
-        } else {
-            charges[i] = 0;
         }
     }
 
@@ -5401,8 +5209,7 @@ void AddTriggerRows(Row* rows, int& n,
     actionRow.valueFormatter = FormatTriggerActionChoiceRow;
     actionRow.inlineAdjuster = AdjustTriggerActionChoiceRow;
     actionRow.choiceValueFormatter = FormatTriggerActionPopupChoice;
-    actionRow.choiceValueAdjuster = AdjustTriggerActionPopupChoice;
-    actionRow.choiceVariantPtr = &g_mirrorFwdDashFollowup;
+    actionRow.choiceGroupFormatter = FormatTriggerActionGroup;
     actionRow.choiceCategoryMap = g_triggerActionCategoryMap;
     actionRow.categoryChoices = kTriggerActionCategoryChoices;
     actionRow.categoryCount = kTriggerActionCategoryCount;
@@ -5429,6 +5236,7 @@ void AddTriggerRows(Row* rows, int& n,
     poolRow.valueFormatter = FormatActionPoolSummary;
     poolRow.choiceValueFormatter = FormatActionPoolChoice;
     poolRow.choiceHelpFormatter = FormatActionPoolChoiceHelp;
+    poolRow.choiceGroupFormatter = FormatActionPoolGroup;
     poolRow.choiceFilter = FilterActionPoolChoice;
     poolRow.helpText = "Selects the exact move versions Random Pool is allowed to roll.";
     rows[n++] = poolRow;
@@ -5466,7 +5274,7 @@ Row* BuildTriggersRows(int& count) {
                            "Auto Actions run on the side you are not playing, so switching sides moves the target.");
     g_selectedAutoTrigger = ClampIndex(g_selectedAutoTrigger, 5);
     s_rows[n++] = WithHelp(ChoicesRow("TRIGGER", &g_selectedAutoTrigger, kAutoTriggerChoices, 5),
-                           "Chooses which auto-action timing you are editing on this page.");
+                           "Chooses which auto-action timing you are editing on this page. D or controller Y switches from any row.");
 
     s_rows[n++] = Spacer();
     switch (g_selectedAutoTrigger) {
@@ -5672,19 +5480,21 @@ void AddMishioRows(Row* rows, int& n, DisplayData& d, int player) {
     }
 }
 
+bool AlwaysDisabled() { return true; }
+
 void AddAkikoRows(Row* rows, int& n, DisplayData& d, int player) {
     if (player == 1) {
         rows[n++] = WithHelp(ChoicesRow("BULLET CYCLE", &d.p1AkikoBulletCycle, kAkikoBulletChoices, 3, OnAutoApply), "Which bullets 236A and 236B throw next. Using either one advances the cycle; Freeze Cycle holds it in place.");
         rows[n++] = Toggle("FREEZE CYCLE", &d.p1AkikoFreezeCycle, OnAutoApply);
         rows[n++] = Toggle("SHOW CLEAN HIT", &d.p1AkikoShowCleanHit, OnAutoApply);
-        rows[n++] = ChoicesRow("TIME-SLOW TRIGGER", &d.p1AkikoTimeslowTrigger, kAkikoSlowChoices, 4, OnAutoApply);
+        rows[n++] = ChoicesRow("TIME-SLOW TRIGGER", &d.p1AkikoTimeslowTrigger, kAkikoSlowChoices, 4, nullptr, AlwaysDisabled);
         rows[n++] = WithHelp(Toggle("INFINITE TIMESLOW", &d.p1AkikoInfiniteTimeslow, OnAutoApply), "Stops the time-slow counter, so a 641236 slow never winds down. Patch on her tick, no memory writes.");
         rows[n++] = WithHelp(Toggle("FREEZE CURSE TIMER", &d.p1AkikoFreezeCurse, OnAutoApply), "Holds the 214214 curse timer once a curse lands, so the opponent stays at that curse level.");
     } else {
         rows[n++] = WithHelp(ChoicesRow("BULLET CYCLE", &d.p2AkikoBulletCycle, kAkikoBulletChoices, 3, OnAutoApply), "Which bullets 236A and 236B throw next. Using either one advances the cycle; Freeze Cycle holds it in place.");
         rows[n++] = Toggle("FREEZE CYCLE", &d.p2AkikoFreezeCycle, OnAutoApply);
         rows[n++] = Toggle("SHOW CLEAN HIT", &d.p2AkikoShowCleanHit, OnAutoApply);
-        rows[n++] = ChoicesRow("TIME-SLOW TRIGGER", &d.p2AkikoTimeslowTrigger, kAkikoSlowChoices, 4, OnAutoApply);
+        rows[n++] = ChoicesRow("TIME-SLOW TRIGGER", &d.p2AkikoTimeslowTrigger, kAkikoSlowChoices, 4, nullptr, AlwaysDisabled);
         rows[n++] = WithHelp(Toggle("INFINITE TIMESLOW", &d.p2AkikoInfiniteTimeslow, OnAutoApply), "Stops the time-slow counter, so a 641236 slow never winds down. Patch on her tick, no memory writes.");
         rows[n++] = WithHelp(Toggle("FREEZE CURSE TIMER", &d.p2AkikoFreezeCurse, OnAutoApply), "Holds the 214214 curse timer once a curse lands, so the opponent stays at that curse level.");
     }
@@ -6234,47 +6044,6 @@ bool HotswapCurrentStatesEqual(const HotswapCurrentState& lhs, const HotswapCurr
         && lhs.bgmTrack == rhs.bgmTrack;
 }
 
-void LogSavestateHotswapPromptStateIfChanged(const char* reason,
-                                             bool promptVisible,
-                                             const CustomSavestate::Summary* summary,
-                                             const HotswapCurrentState* current,
-                                             int savedP1SelectId,
-                                             int savedP2SelectId) {
-    static std::string s_lastLogLine;
-
-    std::ostringstream oss;
-    oss << "[SAVESTATE][MENU][HOTSWAP]"
-        << " reason=" << (reason ? reason : "unknown")
-        << " prompt=" << (promptVisible ? 1 : 0);
-
-    if (summary) {
-        oss << " rawChars=" << static_cast<unsigned int>(summary->savedP1CharId)
-            << "/" << static_cast<unsigned int>(summary->savedP2CharId)
-            << " selectChars=" << savedP1SelectId
-            << "/" << savedP2SelectId
-            << " savedStage=" << static_cast<unsigned int>(summary->savedStageId)
-            << " compat=" << (summary->currentPairCompatible ? 1 : 0)
-            << "/" << (summary->currentStageCompatible ? 1 : 0)
-            << "/" << (summary->currentVersionCompatible ? 1 : 0);
-    }
-
-    if (current) {
-        oss << " currentCharsValid=" << (current->charsValid ? 1 : 0)
-            << " currentChars=" << current->p1SelectId
-            << "/" << current->p2SelectId
-            << " currentStageValid=" << (current->stageValid ? 1 : 0)
-            << " currentStage=" << current->stageId
-            << " currentBgmValid=" << (current->bgmValid ? 1 : 0)
-            << " currentBgm=" << current->bgmTrack;
-    }
-
-    const std::string line = oss.str();
-    if (line != s_lastLogLine) {
-        LogOut(line, true);
-        s_lastLogLine = line;
-    }
-}
-
 void LogHotswapMenuSelection(const char* reason) {
     std::ostringstream oss;
     oss << "[HOTSWAP][MENU] " << (reason ? reason : "state")
@@ -6611,73 +6380,6 @@ bool ReadCurrentHotswapStateCached(HotswapCurrentState& state, DWORD maxAgeMs = 
     }
 
     return ok;
-}
-
-void UpdateCustomSavestateHotswapPromptFromSummary(const CustomSavestate::Summary& summary) {
-    g_customSavestateHotswapPrompt = false;
-
-    if (g_customSavestateHotswapDismissed) {
-        LogSavestateHotswapPromptStateIfChanged("dismissed", false, nullptr, nullptr, -1, -1);
-        return;
-    }
-    if (!summary.hasWorkingSnapshot) {
-        LogSavestateHotswapPromptStateIfChanged("no-working-snapshot", false, &summary, nullptr, -1, -1);
-        return;
-    }
-    if (summary.savedStageId == 0xFF) {
-        LogSavestateHotswapPromptStateIfChanged("saved-stage-unset", false, &summary, nullptr, -1, -1);
-        return;
-    }
-
-    const int savedP1SelectId = SavedSavestateSelectId(summary.savedP1CharId);
-    const int savedP2SelectId = SavedSavestateSelectId(summary.savedP2CharId);
-    if (savedP1SelectId < 0 || savedP2SelectId < 0) {
-        LogSavestateHotswapPromptStateIfChanged("invalid-char-map", false, &summary, nullptr, savedP1SelectId, savedP2SelectId);
-        return;
-    }
-
-    HotswapCurrentState current{};
-    if (!ReadCurrentHotswapStateCached(current) || !current.charsValid || !current.stageValid) {
-        LogSavestateHotswapPromptStateIfChanged("current-unavailable", false, &summary, &current, savedP1SelectId, savedP2SelectId);
-        return;
-    }
-
-    const bool mismatch = current.p1SelectId != savedP1SelectId
-        || current.p2SelectId != savedP2SelectId
-        || current.stageId != summary.savedStageId;
-    if (!mismatch) {
-        LogSavestateHotswapPromptStateIfChanged("already-matching", false, &summary, &current, savedP1SelectId, savedP2SelectId);
-        return;
-    }
-
-    const std::string p1Name = SavedSavestateDisplayName(summary.savedP1CharId);
-    const std::string p2Name = SavedSavestateDisplayName(summary.savedP2CharId);
-    const char* stageName = GetNamedStageLabel(summary.savedStageId);
-    _snprintf_s(g_customSavestateHotswapInfo,
-                sizeof(g_customSavestateHotswapInfo),
-                _TRUNCATE,
-                "Loaded slot differs from current match. Hotswap to %s / %s on %s?",
-                p1Name.c_str(),
-                p2Name.c_str(),
-                stageName);
-    g_customSavestateHotswapPrompt = true;
-    LogSavestateHotswapPromptStateIfChanged("prompt-visible", true, &summary, &current, savedP1SelectId, savedP2SelectId);
-}
-
-void UpdateCustomSavestateHotswapPromptFromWorking() {
-    if (g_customSavestateHotswapDismissed) {
-        g_customSavestateHotswapPrompt = false;
-        LogSavestateHotswapPromptStateIfChanged("dismissed", false, nullptr, nullptr, -1, -1);
-        return;
-    }
-
-    CustomSavestate::Summary summary{};
-    if (!CustomSavestate::GetSummary(summary)) {
-        g_customSavestateHotswapPrompt = false;
-        LogSavestateHotswapPromptStateIfChanged("summary-unavailable", false, nullptr, nullptr, -1, -1);
-        return;
-    }
-    UpdateCustomSavestateHotswapPromptFromSummary(summary);
 }
 
 bool RevivalBgmMuted() {
@@ -7152,6 +6854,14 @@ Row* BuildHotswapOptionsRows(int& count) {
 
 // OPTIONS screen
 void OnFaOverlayPersist()  { g_showFrameAdvantageOverlay.store(g_mirrorFaOverlay); }
+void OnMenuAnimations() {
+    PersistBool("General", "menuAnimations", MutableSettings().menuAnimations);
+}
+
+void OnFrameBarMoveData() {
+    PersistBool("General", "frameBarMoveData", MutableSettings().frameBarMoveData);
+}
+
 void OnFrameBarPersist() {
     PersistBool("General", "showFrameBar", MutableSettings().showFrameBar);
     FrameBar::g_enabled.store(MutableSettings().showFrameBar);
@@ -7480,6 +7190,8 @@ Row* BuildOptionsRows(int& count) {
                              OnFrameBarTiming, nullptr, FrameBarOptionsHidden);
     s_rows[n++] = ChoicesRow("  DETAIL", &s.frameBarDetailMode, kFrameBarDetailChoices, 3,
                              OnFrameBarDetail, nullptr, FrameBarOptionsHidden);
+    s_rows[n] = Toggle("  MOVE DATA", &s.frameBarMoveData, OnFrameBarMoveData, nullptr, FrameBarOptionsHidden);
+    s_rows[n++].helpText = "Shows each fighter's last attack as S startup, A active, and R recovery, in the units Cell Step uses.";
 
     s_rows[n++] = Spacer();
     s_rows[n++] = Header("FRAMESTEP");
@@ -8072,7 +7784,7 @@ Row* BuildMacrosRows(int& count) {
     g_macroSlotMirror = MacroController::GetCurrentSlot();
 
     static char status[128];
-    _snprintf_s(status, sizeof(status), _TRUNCATE, "State: %s", MacroController::GetStatusLine().c_str());
+    _snprintf_s(status, sizeof(status), _TRUNCATE, I18n::Tr("State: %s"), MacroController::GetStatusLine().c_str());
 
     s_rows[n++] = Header("MACRO CONTROLLER");
     s_rows[n++] = Info(status);
@@ -8313,6 +8025,7 @@ void RefreshSecondaryScreenMirrors() {
     struct Step { const char* name; void (*fn)(); };
     static const Step kFastSteps[] = {
         { "RefreshAutoMirrors",        &RefreshAutoMirrors        },
+        { "NormalizeOpenPoolOptions",  &NormalizeOpenPoolOptions  },
         { "RefreshCharMirrors",        &RefreshCharMirrors        },
         { "RefreshOpponentMirrors",    &RefreshOpponentMirrors    },
         { "RefreshOptionsMirrors",     &RefreshOptionsMirrors     },
@@ -8402,6 +8115,17 @@ void CorrectValueLocksForEngineRegenUi(GuiValueLocks::State& locks) { CorrectVal
 
 // AUTO sub-panes
 void TickTriggers(ImDrawList* dl, const ScreenLayout& layout, int& focus, ScrollState& scroll, bool& backEdge) {
+    if (layout.inputEnabled && !IsPopupActive() && !IsKeybindActive() && !IsSubmenuActive() &&
+        Input::SwitchPlayer()) {
+        g_selectedAutoTrigger = (ClampIndex(g_selectedAutoTrigger, 5) + 1) % 5;
+        Sound::PlayCursor();
+    }
+    static int s_shownTrigger = -1;
+    if (s_shownTrigger >= 0 && s_shownTrigger != g_selectedAutoTrigger) {
+        const int delta = g_selectedAutoTrigger - s_shownTrigger;
+        PlayContentSlide((delta == 1 || delta == -4) ? +1 : -1);
+    }
+    s_shownTrigger = g_selectedAutoTrigger;
     int n = 0; Row* rows = BuildTriggersRows(n);
     TickListScreen(dl, layout, "TRIGGERS", rows, n, focus, scroll, backEdge);
 }

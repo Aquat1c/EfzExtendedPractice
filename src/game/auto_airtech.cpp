@@ -3,6 +3,7 @@
 #include "../include/utils/utilities.h"
 #include "../include/utils/network.h"
 #include "../include/game/auto_action.h"
+#include "../include/game/frame_advantage.h"
 #include "../include/game/game_state.h"
 #include "../include/game/macro_controller.h"
 
@@ -180,15 +181,17 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
     constexpr int kMaxRetryAttempts = 3;          // A, then B, then C
     static int p1PreNeutral = 0, p2PreNeutral = 0;
     static bool p1AttemptActive = false, p2AttemptActive = false;
+    static int p1PhaseAnchorTick = -1, p2PhaseAnchorTick = -1; // tick the current phase was last seen published
 
     bool p1FacingRightNow = GetPlayerFacingDirection(1);
     bool p2FacingRightNow = GetPlayerFacingDirection(2);
     g_airtechP1FacingRight.store(p1FacingRightNow);
     g_airtechP2FacingRight.store(p2FacingRightNow);
     const uint32_t lifecycleGeneration = GetRuntimeLifecycleGeneration();
-    const int currentInternalTick = frameCounter.load();
+    const int currentInternalTick = GetEngineTick();
 
     auto clearPlayerState = [&](int playerNum, const char* reason, bool verboseLog) {
+        ((playerNum == 1) ? p1PhaseAnchorTick : p2PhaseAnchorTick) = -1;
         int* readyTick = (playerNum == 1) ? &p1DelayReadyTick : &p2DelayReadyTick;
         int* lastRemainingVisual = (playerNum == 1) ? &p1LastLoggedRemainingVisual : &p2LastLoggedRemainingVisual;
         int* injectRemaining = (playerNum == 1) ? &p1InjectRemaining : &p2InjectRemaining;
@@ -251,6 +254,12 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
         g_airtechP2Airtechable.store(false);
         if (g_manualInputOverride[1].load()) (void)ReleaseAirtechOverride(1);
         if (g_manualInputOverride[2].load()) (void)ReleaseAirtechOverride(2);
+        // A stale armed delay must not fire the moment the feature is re-enabled.
+        if (prevEnabled) {
+            clearPlayerState(1, "disabled", false);
+            clearPlayerState(2, "disabled", false);
+            prevEnabled = false;
+        }
         static auto s_lastDisabledBeat = std::chrono::steady_clock::now();
         auto nowBeat = std::chrono::steady_clock::now();
         if (detailedLogging.load() && (nowBeat - s_lastDisabledBeat) >= std::chrono::seconds(30)) {
@@ -475,10 +484,19 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
         }
     }
 
+    // Counts down engine ticks only, from the first sighting with the mask published.
+    auto consumeTicks = [&](int& remaining, int& anchorTick) {
+        if (anchorTick >= 0) {
+            remaining -= currentInternalTick - anchorTick;
+            if (remaining < 0) remaining = 0;
+        }
+        anchorTick = remaining > 0 ? currentInternalTick : -1;
+    };
+
     if (autoAirtechEnabled.load()) {
         if (p1PreNeutral > 0) {
             if (PublishAirtechOverride(1, 0, true)) {
-                p1PreNeutral--;
+                consumeTicks(p1PreNeutral, p1PhaseAnchorTick);
                 p1AttemptActive = false;
             }
         } else if (p1InjectRemaining > 0) {
@@ -488,7 +506,7 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                     p1AttemptActive = true;
                 }
             }
-            if (p1AttemptActive) p1InjectRemaining--;
+            if (p1AttemptActive) consumeTicks(p1InjectRemaining, p1PhaseAnchorTick);
         } else if (p1AttemptActive) {
             (void)ReleaseAirtechOverride(1);
             p1AttemptActive = false;
@@ -503,7 +521,7 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
 
         if (p2PreNeutral > 0) {
             if (PublishAirtechOverride(2, 0, true)) {
-                p2PreNeutral--;
+                consumeTicks(p2PreNeutral, p2PhaseAnchorTick);
                 p2AttemptActive = false;
             }
         } else if (p2InjectRemaining > 0) {
@@ -513,7 +531,7 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                     p2AttemptActive = true;
                 }
             }
-            if (p2AttemptActive) p2InjectRemaining--;
+            if (p2AttemptActive) consumeTicks(p2InjectRemaining, p2PhaseAnchorTick);
         } else if (p2AttemptActive) {
             (void)ReleaseAirtechOverride(2);
             p2AttemptActive = false;

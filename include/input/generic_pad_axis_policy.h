@@ -143,4 +143,12 @@ constexpr bool ShouldUseButtonDpadFallback(std::uint32_t povObjectCount) {
     return povObjectCount == 0;
 }
 
+// Sony DS4/DualSense over DirectInput: Z/Rz are the right stick, Rx/Ry are analog
+// L2/R2, and buttons 6/7 are digital L2/R2. Unknown pads keep the generic mapping.
+constexpr bool UsesZRzRightStick(std::uint16_t vendor, std::uint16_t product) {
+    return vendor == 0x054C &&
+           (product == 0x05C4 || product == 0x09CC || product == 0x0BA0 ||
+            product == 0x0CE6 || product == 0x0DF2);
+}
+
 } // namespace GenericPadAxisPolicy

@@ -2,8 +2,8 @@
 void SetAudioSettingsMirror(int bgm, int se) {
     settings.bgmVolumePercent = (std::clamp)(bgm, 0, 100);
     settings.seVolumePercent = (std::clamp)(se, 0, 100);
-    iniData["general"]["bgmvolumepercent"] = std::to_string(settings.bgmVolumePercent);
-    iniData["general"]["sevolumepercent"] = std::to_string(settings.seVolumePercent);
+    SetIniValue("general", "bgmvolumepercent", std::to_string(settings.bgmVolumePercent));
+    SetIniValue("general", "sevolumepercent", std::to_string(settings.seVolumePercent));
 }
 void PublishLoadedAudioSettings() {
     EfzAudioFileTransaction transaction;

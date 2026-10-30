@@ -1,4 +1,5 @@
 #include "../include/gui/custom_menu/renderer.h"
+#include "../include/gui/custom_menu/anim.h"
 #include "../include/gui/custom_menu/fonts.h"
 #include "../include/game/practice_menu/mission_title_screen.h" // title screens use our fonts
 #include "../include/game/mission/mission_pause_menu.h"         // session pause menu uses them too
@@ -22,6 +23,7 @@
 #include "../include/game/character_hotswap.h"
 #include "../3rdparty/imgui/imgui.h"
 
+#include <atomic>
 #include <windows.h>
 #include <algorithm>
 #include <cstdarg>
@@ -109,7 +111,7 @@ const char* TopTabLabel(int index) {
     }
     static char s_badged[48];
     _snprintf_s(s_badged, sizeof(s_badged), _TRUNCATE,
-                "%s %s", kTopTabs[index].label, UpdateCheck::BadgeText());
+                "%s %s", I18n::Tr(kTopTabs[index].label), UpdateCheck::BadgeText());
     return s_badged;
 }
 
@@ -119,7 +121,7 @@ const char* SubTabLabel(const SubTab& sub) {
     }
     static char s_badged[48];
     _snprintf_s(s_badged, sizeof(s_badged), _TRUNCATE,
-                "%s %s", sub.label, UpdateCheck::BadgeText());
+                "%s %s", I18n::Tr(sub.label), UpdateCheck::BadgeText());
     return s_badged;
 }
 
@@ -279,16 +281,22 @@ void MoveFocusAboveContent(const char* reason) {
     // Mirror EFZ's replay-menu submenu slide: accumulate 0..180, cosine for the offset.
 struct AnimState {
     DWORD openTick = 0;
+    DWORD closeTick = 0;
     DWORD paneTick = 0;
     int   paneDir = 1;
 };
 AnimState g_anim;
 
-constexpr float kOpenAnimMs = 180.0f;
-constexpr float kPaneAnimMs = 170.0f;
-constexpr float kPaneSlidePx = 72.0f;
-constexpr float kOpenSlidePx = 18.0f;
-constexpr double kDegToRadDivisor = 57.29579143313326;
+// Linear like efz.exe fadeScreenEffect / performFadeOutAnimation, in less time.
+constexpr float kFadeAnimMs = 130.0f;
+// About eight frames at 64 fps: a short slide under a fade, a long one would jump.
+constexpr float kPaneAnimMs = 130.0f;
+constexpr float kPaneSlidePx = 36.0f;
+using Anim::AnimT;
+using Anim::Clamp01;
+using Anim::EfzCosEase;
+std::atomic<bool> g_closeRequested{false};
+std::atomic<DWORD> g_lastRenderTick{0};
 constexpr DWORD kTransientStatusMs = 1800;
 
 void SetTransientStatus(const char* text) {
@@ -342,31 +350,32 @@ void HandleSettingsQuickSave() {
     }
 }
 
-float Clamp01(float v) {
-    if (v < 0.0f) return 0.0f;
-    if (v > 1.0f) return 1.0f;
-    return v;
+void EndCloseAnimation() {
+    g_anim.closeTick = 0;
+    Input::SetSuspended(false);
 }
 
-float AnimT(DWORD startTick, float durationMs) {
-    if (startTick == 0 || durationMs <= 0.0f) return 1.0f;
-    const DWORD now = GetTickCount();
-    return Clamp01(static_cast<float>(now - startTick) / durationMs);
-}
-
-float EfzCosEase(float t01) {
-    const double degrees = 180.0 * Clamp01(t01);
-    return static_cast<float>((1.0 - std::cos(degrees / kDegToRadDivisor)) * 0.5);
+void BeginCloseAnimation() {
+    if (!Config::GetSettings().menuAnimations) {
+        ImGuiImpl::ToggleVisibility();
+        return;
+    }
+    if (g_anim.closeTick == 0) {
+        g_anim.closeTick = Anim::NowTick();
+        Input::SetSuspended(true);
+    }
 }
 
 void StartOpenAnimation() {
-    g_anim.openTick = GetTickCount();
+    EndCloseAnimation();
+    g_closeRequested.store(false, std::memory_order_relaxed);
+    g_anim.openTick = Anim::NowTick();
     g_anim.paneTick = g_anim.openTick;
     g_anim.paneDir = 1;
 }
 
 void StartPaneAnimation(int dir) {
-    g_anim.paneTick = GetTickCount();
+    g_anim.paneTick = Anim::NowTick();
     g_anim.paneDir = (dir < 0) ? -1 : 1;
 }
 
@@ -375,10 +384,23 @@ float CurrentPaneOffsetX() {
     return Scale::Snap((1.0f - ease) * kPaneSlidePx * static_cast<float>(g_anim.paneDir));
 }
 
-float CurrentOpenOffsetY() {
-    const float ease = EfzCosEase(AnimT(g_anim.openTick, kOpenAnimMs));
-    return Scale::Snap((1.0f - ease) * -kOpenSlidePx);
+float CurrentFadeAlpha() {
+    return g_anim.closeTick != 0 ? 1.0f - AnimT(g_anim.closeTick, kFadeAnimMs)
+                                 : AnimT(g_anim.openTick, kFadeAnimMs);
 }
+
+// Scales the alpha of everything drawn in its lifetime.
+struct MenuFadeScope {
+    ImDrawList* dl = nullptr;
+    int firstVertex = 0;
+    float alpha = 1.0f;
+
+    explicit MenuFadeScope(ImDrawList* list) : dl(list), alpha(CurrentFadeAlpha()) {
+        if (dl) firstVertex = dl->VtxBuffer.Size;
+    }
+
+    ~MenuFadeScope() { Anim::ScaleVertexAlpha(dl, firstVertex, alpha); }
+};
 
 enum class MainMode {
     Browse = 0,
@@ -613,9 +635,9 @@ std::string LockStatusText(const GuiValueLocks::State& locks, int rowIdx) {
     }
 
     if (RowIsICColor(rowIdx) && RowIsLocked(locks, rowIdx)) {
-        return std::string(RowPlayer(rowIdx) == 1 ? "P1" : "P2") +
-               " IC LOCKED - MANAGED BY " +
-               RowLockReason(locks, rowIdx);
+        return I18n::TrFormat("%s IC LOCKED - MANAGED BY %s",
+                              RowPlayer(rowIdx) == 1 ? "P1" : "P2",
+                              I18n::Tr(RowLockReason(locks, rowIdx)));
     }
 
     return "";
@@ -826,6 +848,7 @@ void CancelEditMode() {
     g_edit.buf[0] = '\0';
     g_edit.caret = 0;
     SetMainMode(MainMode::Browse, "edit cancel");
+    SetCrMode(MainMode::Browse, "edit cancel");
 }
 
 void CommitEditMode() {
@@ -911,13 +934,8 @@ struct MainLayout {
 
 void ApplyContentAnimation(MainLayout& L) {
     const float x = CurrentPaneOffsetX();
-    const float y = CurrentOpenOffsetY();
     L.colLeftX += x;
     L.colRightX += x;
-    L.dataStartY += y;
-    for (float& rowY : L.rowY) {
-        rowY += y;
-    }
 }
 
 MainLayout ComputeMainLayout(float contentTopY) {
@@ -1120,7 +1138,7 @@ bool HandleFocusedTabInput() {
 
     if (back) {
         LogMenuDetail("Back pressed -> close from tab focus");
-        ImGuiImpl::ToggleVisibility();
+        BeginCloseAnimation();
         return true;
     }
 
@@ -1129,9 +1147,11 @@ bool HandleFocusedTabInput() {
             SetActiveTopTab((g_shell.activeTopTab + TT_COUNT - 1) % TT_COUNT, "top tab focus left");
         } else if (navRight) {
             SetActiveTopTab((g_shell.activeTopTab + 1) % TT_COUNT, "top tab focus right");
-        } else if (navDown || activate) {
+        } else if (activate) {
+            SetFocusRegion(FocusRegion::Content, "top tab activate");
+        } else if (navDown) {
             SetFocusRegion(ActiveTopHasSubTabs() ? FocusRegion::SubTabs : FocusRegion::Content,
-                           navDown ? "top tab focus down" : "top tab activate");
+                           "top tab focus down");
         }
         return true;
     }
@@ -1433,7 +1453,7 @@ void HandleCrScreenInput(const DualColumnLayout& C) {
                 Screens::CloseTopSubmenu();
                 Sound::PlayDecision();
             } else {
-                ImGuiImpl::ToggleVisibility();
+                BeginCloseAnimation();
                 Sound::PlayDecision();
             }
             return;
@@ -1636,7 +1656,7 @@ void HandleMainScreenInput(const MainLayout& L, const GuiValueLocks::State& lock
             } else {
                 LogMenuDetail("Back pressed -> close from %s", ScreenName(ActivePane()));
                 Sound::PlayDecision();
-                ImGuiImpl::ToggleVisibility();
+                BeginCloseAnimation();
             }
             return;
         }
@@ -1687,6 +1707,7 @@ void HandleMainScreenInput(const MainLayout& L, const GuiValueLocks::State& lock
 void TearDownOnClose() {
     LogMenuTrace("MaybeRefreshOnOpen: visibility 1->0, tearing down");
     LogMenuDetail("Closed custom menu");
+    EndCloseAnimation();
     CancelEditMode();
     SehInvokeStep("close: ResetSubmenus", &Screens::ResetSubmenus);
     SehInvokeStep("close: ResetHotswapMenuSeed", &Screens::ResetHotswapMenuSeed);
@@ -1719,9 +1740,6 @@ bool MaybeRefreshOnOpen() {
         CharacterHotswap::InvalidateCustomPaletteCache();
         SehInvokeStep("open: ImGuiGui::RefreshLocalData", &ImGuiGui::RefreshLocalData);
         LogMenuTrace("open: RefreshLocalData done");
-        for (auto& f : g_shell.focusPerPane) f = 0;
-        for (auto& s : g_shell.subIdxPerTop) s = 0;
-        g_shell.activeTopTab = TT_MAIN;
         ResetMainState("menu open");
         CancelEditMode();
         g_shell.keybindWasActive = false;
@@ -1771,6 +1789,14 @@ bool MaybeRefreshOnOpen() {
 
 } // namespace
 
+bool RequestAnimatedClose() {
+    if (!Config::GetSettings().menuAnimations || !ImGuiImpl::IsVisible()) return false;
+    constexpr DWORD kRenderingRecentlyMs = 100;
+    if (GetTickCount() - g_lastRenderTick.load(std::memory_order_relaxed) > kRenderingRecentlyMs) return false;
+    g_closeRequested.store(true, std::memory_order_relaxed);
+    return true;
+}
+
 void PrepareFrame() {
     if (!ImGui::GetCurrentContext()) return;
     // The title MISSIONS/TUTORIAL screens and the pause menu also use the custom-menu
@@ -1803,6 +1829,16 @@ void Render() {
 
     if (!ImGuiImpl::IsVisible()) return;
 
+    g_lastRenderTick.store(GetTickCount(), std::memory_order_relaxed);
+    if (g_closeRequested.exchange(false, std::memory_order_relaxed)) {
+        BeginCloseAnimation();
+    }
+    if (g_anim.closeTick != 0 && AnimT(g_anim.closeTick, kFadeAnimMs) >= 1.0f) {
+        EndCloseAnimation();
+        ImGuiImpl::ToggleVisibility();
+        return;
+    }
+
     ApplyPendingMenuNavigation();
 
     ++s_renderFrame;
@@ -1819,6 +1855,9 @@ void Render() {
     UpdateMouseState();
     Scale::Update(Config::GetSettings().uiScale);
     const Scale::Metrics& metrics = Scale::Get();
+
+    // Polled every frame: a digit held through a capture or edit must not read as a new press.
+    const int topTabNumber = Input::TopTabNumberEdge();
 
     // Tab cycling is blocked while editing a value or while a dropdown popup is open.
     if (!g_edit.active && !Screens::IsPopupActive() && !Screens::IsKeybindActive() &&
@@ -1843,15 +1882,15 @@ void Render() {
             }
         }
 
-        const int n = Input::TopTabNumberEdge();
-        if (n >= 1 && n <= TT_COUNT) {
+        if (topTabNumber >= 1 && topTabNumber <= TT_COUNT) {
             CancelEditMode();
-            SetActiveTopTab(n - 1, "number-key jump");
+            SetActiveTopTab(topTabNumber - 1, "number-key jump");
         }
     }
 
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     if (!dl) return;
+    MenuFadeScope menuFade(dl);
     const ImVec2 origin = Layout::DrawPanel(dl, "TRAINING SETTINGS");
     GuiValueLocks::State valueLocks = GuiValueLocks::Compute(ImGuiGui::guiState.localData);
     Screens::CorrectValueLocksForEngineRegenUi(valueLocks);
@@ -1866,10 +1905,17 @@ void Render() {
     RenderTabBar(L);
 
     const int activePane = ActivePane();
+    static bool s_crEditorWasActive = false;
+    const bool crEditor = activePane == PANE_VALUES && Screens::IsValuesContinuousRecoveryActive();
+    if (crEditor && !s_crEditorWasActive) {
+        g_cr = CrMainState{};
+    }
+    s_crEditorWasActive = crEditor;
     HandleSettingsQuickSave();
     MainLayout contentL = L;
     ApplyContentAnimation(contentL);
 
+    const int contentFirstVertex = dl->VtxBuffer.Size;
     if (activePane == PANE_VALUES) {
         Screens::RefreshSecondaryScreenMirrors();
 
@@ -1880,20 +1926,13 @@ void Render() {
         sl.contentTopY    = Scale::Snap(L.dataStartY);
         sl.contentBottomY = ContentBottomY();
         sl.animOffsetX    = CurrentPaneOffsetX();
-        sl.animOffsetY    = CurrentOpenOffsetY();
+        sl.animOffsetY    = 0.0f;
         sl.inputEnabled   = g_shell.focusRegion == FocusRegion::Content && !tabFocusConsumed;
 
         MainLayout contentL = L;
         ApplyContentAnimation(contentL);
 
         if (Screens::IsValuesColumnEditorActive()) {
-            static bool s_crEditorWasActive = false;
-            const bool crEditor = Screens::IsValuesContinuousRecoveryActive();
-            if (crEditor && !s_crEditorWasActive) {
-                g_cr = CrMainState{};
-            }
-            s_crEditorWasActive = crEditor;
-
             const bool valuesInputEnabled = !tabClickConsumed && sl.inputEnabled;
             if (Screens::IsValuesPlayerEditorActive()) {
                 if (valuesInputEnabled &&
@@ -1904,7 +1943,10 @@ void Render() {
                 } else if (valuesInputEnabled) {
                     HandleMainScreenInput(contentL, valueLocks);
                 }
+                dl->PushClipRect(ImVec2(L.panelTL.x, sl.contentTopY),
+                                 ImVec2(L.panelTL.x + Theme::kPanelW, sl.contentBottomY), true);
                 RenderMainScreen(contentL, valueLocks);
+                dl->PopClipRect();
             } else if (Screens::IsValuesContinuousRecoveryActive()) {
                 const DualColumnLayout crL = ComputeCrLayout(contentL);
                 if (valuesInputEnabled &&
@@ -1915,7 +1957,10 @@ void Render() {
                 } else if (valuesInputEnabled) {
                     HandleCrScreenInput(crL);
                 }
+                dl->PushClipRect(ImVec2(L.panelTL.x, sl.contentTopY),
+                                 ImVec2(L.panelTL.x + Theme::kPanelW, sl.contentBottomY), true);
                 RenderCrScreen(crL);
+                dl->PopClipRect();
             }
         } else {
             int& focus = g_shell.focusPerPane[PANE_VALUES];
@@ -1933,7 +1978,7 @@ void Render() {
 
             if (!tabClickConsumed && g_shell.focusRegion == FocusRegion::Content && backEdge) {
                 LogMenuDetail("Back pressed -> close from %s", ScreenName(activePane));
-                ImGuiImpl::ToggleVisibility();
+                BeginCloseAnimation();
                 return;
             }
         }
@@ -1945,7 +1990,7 @@ void Render() {
         sl.contentTopY    = Scale::Snap(L.dataStartY);
         sl.contentBottomY = ContentBottomY();
         sl.animOffsetX    = CurrentPaneOffsetX();
-        sl.animOffsetY    = CurrentOpenOffsetY();
+        sl.animOffsetY    = 0.0f;
         sl.inputEnabled   = g_shell.focusRegion == FocusRegion::Content && !tabFocusConsumed;
 
         const DWORD mirrorStart = GetTickCount();
@@ -2014,10 +2059,12 @@ void Render() {
 
         if (!tabClickConsumed && g_shell.focusRegion == FocusRegion::Content && backEdge) {
             LogMenuDetail("Back pressed -> close from %s", ScreenName(activePane));
-            ImGuiImpl::ToggleVisibility();
+            BeginCloseAnimation();
             return;
         }
     }
+    Anim::ScaleVertexAlpha(dl, contentFirstVertex,
+                           AnimT(g_anim.paneTick, kPaneAnimMs) * Screens::CurrentSubmenuAlpha());
 
     ImFont* bFont = Layout::BodyFont();
     const float bPx = bFont ? bFont->FontSize : 13.0f;
@@ -2041,7 +2088,7 @@ void Render() {
             ? "Bind a controller button to this command after releasing the current input."
             : "Bind a keyboard hotkey to this command after releasing the current keys.");
     } else if (Screens::IsPopupActive()) {
-        hint = "UP/DOWN MOVE   ENTER SELECT   ESC CANCEL";
+        hint = Screens::CurrentPopupHint();
         setDescription(Screens::CurrentPopupHelpText());
     } else if (Screens::IsRawVkEditorActive()) {
         hint = "TYPE VK CODE   APPLY   ESC CANCEL";
@@ -2072,9 +2119,11 @@ void Render() {
         const bool focusLocked = RowIsLocked(valueLocks, focus);
         statusText = LockStatusText(valueLocks, focus);
         static char s_desc[256];
+        const std::string focusName = std::string(RowPlayer(focus) == 1 ? "P1 " : "P2 ") +
+                                      I18n::Tr(g_valueRowsAll[focus].label);
         _snprintf_s(s_desc, sizeof(s_desc), _TRUNCATE,
                     I18n::Tr("Edit %s for the current match; locked values are managed by recovery settings."),
-                    I18n::Tr(DescribeFocus(PANE_VALUES, focus).c_str()));
+                    focusName.c_str());
         setDescription(s_desc);
         if (g_main.mode == MainMode::Browse) {
             if (focusLocked) {
@@ -2098,10 +2147,16 @@ void Render() {
         hint = "UP/DOWN MOVE   L/R ADJUST   ENTER SELECT   ESC BACK";
         setDescription(Screens::CurrentHelpText());
     } else if (SettingsTabActive()) {
-        hint = "U/D MOVE   L/R ADJUST   D SAVE   ENTER PICK   PGUP/PGDN TOP";
+        hint = "U/D MOVE   L/R ADJUST   D SAVE   ENTER PICK   PGUP/PGDN TAB   [ ] SUB";
+        setDescription(Screens::CurrentHelpText());
+    } else if (ActivePane() == PANE_TRIGGERS && !Screens::IsSubmenuActive()) {
+        hint = "U/D MOVE   L/R ADJUST   D NEXT TRIGGER   ENTER PICK   PGUP/PGDN TAB   [ ] SUB";
+        setDescription(Screens::CurrentHelpText());
+    } else if (ActiveTopHasSubTabs()) {
+        hint = "U/D MOVE   L/R ADJUST   SHIFT+L/R 2ND   ENTER PICK   PGUP/PGDN TAB   [ ] SUB";
         setDescription(Screens::CurrentHelpText());
     } else {
-        hint = "U/D MOVE   L/R ADJUST   SHIFT+L/R 2ND   ENTER PICK   PGUP/PGDN TOP";
+        hint = "U/D MOVE   L/R ADJUST   SHIFT+L/R 2ND   ENTER PICK   PGUP/PGDN TAB";
         setDescription(Screens::CurrentHelpText());
     }
     if (descriptionText.empty()) {

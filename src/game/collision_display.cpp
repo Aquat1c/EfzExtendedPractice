@@ -1,4 +1,5 @@
 #include "../../include/game/collision_display.h"
+#include "../../include/game/collision_box_policy.h"
 
 #include "../../include/core/constants.h"
 #include "../../include/core/di_keycodes.h"
@@ -50,7 +51,10 @@ constexpr std::size_t kOffsetCameraY = 1120u;
 constexpr std::size_t kHurtRectBase = 0u;
 constexpr std::size_t kHitRectBase = 80u;
 constexpr std::size_t kCollisionRectBase = 144u;
+constexpr std::size_t kBlobAttackFlags = 170u;
 constexpr std::size_t kBlobSuppressHurtFlag = 176u;
+constexpr std::size_t kOffsetAttackState = 364u;
+constexpr std::size_t kOffsetHitImmunity = 316u;
 
 constexpr int kHurtRectCount = 5;
 constexpr int kHitRectCount = 4;
@@ -79,6 +83,7 @@ constexpr uint32_t kColorHurtOutline = 0xFF00DC00u;      // green
 constexpr uint32_t kColorCollisionOutline = 0xFFFFDC00u; // yellow
 constexpr uint32_t kColorProjectileOutline = 0xFF28C8FFu; // cyan
 constexpr uint32_t kColorProjectileInactiveOutline = 0xAA28C8FFu;
+constexpr float kInactiveHitFillScale = 0.2f;
 constexpr uint32_t kColorProjectileDot = 0xFFFFFFFFu;
 constexpr uint32_t kColorProjectileIntersect = 0xFFFF40FFu; // magenta
 constexpr uint32_t kColorNagamoriRange = 0xFFFFA000u;       // orange
@@ -97,6 +102,7 @@ struct RectI {
 struct DrawRect {
     RectI rect;
     uint32_t color = 0;
+    bool inactive = false;
 };
 
 struct ProjectileInfo {
@@ -115,6 +121,7 @@ struct ProjectileInfo {
     float screenX = 0.0f;
     float screenY = 0.0f;
     std::vector<RectI> hitRects;
+    bool hitActive = true;
     bool hasCollisionRect = false;
     bool nagamoriOwner = false;
     bool nagamoriFlagged = false;
@@ -151,7 +158,6 @@ struct RevivalDisplayHotkeys {
     int hit = DIK_PRIOR;
     int hurt = DIK_NEXT;
     int collision = DIK_HOME;
-    DWORD lastRefreshTick = 0;
     bool loaded = false;
     char iniPath[MAX_PATH] = {};
 };
@@ -512,14 +518,10 @@ int ReadRevivalHotkeyFromIni(const char* path, const char* keyName, int fallback
     return ParseDikValue(value, fallback);
 }
 
-void RefreshRevivalHotkeysLocked(bool force = false) {
-    const DWORD now = GetTickCount();
-    if (!force && g_revivalHotkeys.loaded && (now - g_revivalHotkeys.lastRefreshTick) < 1000u) {
-        return;
-    }
+void RefreshRevivalHotkeysLocked() {
+    if (g_revivalHotkeys.loaded) return;
 
     RevivalDisplayHotkeys next{};
-    next.lastRefreshTick = now;
     next.loaded = true;
     if (ResolveRevivalIniPath(next.iniPath, sizeof(next.iniPath))) {
         next.hit = ReadRevivalHotkeyFromIni(next.iniPath, "ToggleHitBoxes", next.hit);
@@ -542,8 +544,19 @@ bool ResolveTransformFunctions() {
 
     const uintptr_t entityAddr = base + kRvaTransformEntityHitbox;
     const uintptr_t characterAddr = base + kRvaTransformCharacterHitbox;
-    uint8_t probe = 0;
-    if (!ReadValue(entityAddr, probe) || !ReadValue(characterAddr, probe)) {
+    // Retail 1.02e prologues, shared up to the first argument read:
+    //   push ebp; mov ebp,esp; sub esp,0x3C; mov [ebp-0x1C],ecx; mov eax,[ebp+0xC]
+    static const uint8_t kExpected[] = {0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x3C, 0x89, 0x4D, 0xE4, 0x8B, 0x45, 0x0C};
+    uint8_t entityBytes[sizeof(kExpected)] = {};
+    uint8_t characterBytes[sizeof(kExpected)] = {};
+    if (!SafeReadMemory(entityAddr, entityBytes, sizeof(entityBytes)) ||
+        !SafeReadMemory(characterAddr, characterBytes, sizeof(characterBytes)) ||
+        std::memcmp(entityBytes, kExpected, sizeof(kExpected)) != 0 ||
+        std::memcmp(characterBytes, kExpected, sizeof(kExpected)) != 0) {
+        static std::atomic<bool> s_logged{false};
+        if (!s_logged.exchange(true)) {
+            LogOut("[COLLISION_DISPLAY] Refusing native hitbox transforms: signature mismatch", true);
+        }
         return false;
     }
 
@@ -656,11 +669,11 @@ void MapCharacterHitToScreen(
     out->bottom = out->top + 2 * localHeight;
 }
 
-void QueueRect(const RectI& rect, uint32_t color, std::vector<DrawRect>& out) {
+void QueueRect(const RectI& rect, uint32_t color, std::vector<DrawRect>& out, bool inactive = false) {
     if (rect.right <= rect.left || rect.bottom <= rect.top) {
         return;
     }
-    out.push_back(DrawRect{rect, color});
+    out.push_back(DrawRect{rect, color, inactive});
 }
 
 void QueueVerticalLine(RectI rect, uint32_t color, std::vector<DrawRect>& out) {
@@ -702,7 +715,7 @@ RectI MapWorldRangeToScreen(double centerX, double centerY, int rangeX, int rang
     return out;
 }
 
-void AppendOverlayRect(const RectI& rect, uint32_t outlineColor, uint8_t fillAlpha) {
+void AppendOverlayRect(const RectI& rect, uint32_t outlineColor, uint8_t fillAlpha, bool dottedOutline = false) {
     if (!RectHasArea(rect)) {
         return;
     }
@@ -715,6 +728,7 @@ void AppendOverlayRect(const RectI& rect, uint32_t outlineColor, uint8_t fillAlp
     box.fillArgb = ColorWithAlphaByte(outlineColor, fillAlpha);
     box.outlineArgb = outlineColor;
     box.shape = ShapeRectangle;
+    box.dottedOutline = dottedOutline;
     g_overlayBoxes.push_back(box);
 }
 
@@ -740,7 +754,10 @@ void AppendProjectilePhysicalBoxes(const ProjectileInfo& projectile,
     if (showHitRects) {
         for (const RectI& hitRect : projectile.hitRects) {
             AppendOverlayRect(hitRect, kColorHitOutline,
-                              FillAlphaByte(hitFillMultiplier));
+                              FillAlphaByte(projectile.hitActive
+                                                ? hitFillMultiplier
+                                                : hitFillMultiplier * kInactiveHitFillScale),
+                              !projectile.hitActive);
         }
     }
 
@@ -912,6 +929,8 @@ bool ReadProjectileInfo(int playerIndex,
 
     auto* entityHeader = reinterpret_cast<unsigned short*>(entryBase);
 
+    out.hitActive = CollisionBoxPolicy::ProjectileHitBoxActive(
+        frameBlob[kBlobSuppressHurtFlag], life, destroyed);
     out.hitRects.reserve(kHitRectCount);
     int gameRect[4] = {};
     RectI screenRect{};
@@ -1311,17 +1330,22 @@ void AppendCharacterLayer(int boxType,
         return;
     }
 
-    const bool suppressHurt = (snapshot[kBlobSuppressHurtFlag] & 0x20) != 0;
     const int* rectBase = nullptr;
     int rectCount = 0;
     uint32_t color = 0;
+    bool inactive = false;
 
     if (boxType == 0) {
         rectBase = reinterpret_cast<const int*>(snapshot + kHitRectBase);
         rectCount = kHitRectCount;
         color = kColorHitOutline;
+        uint8_t attackState = 0;
+        ReadValue(entity + kOffsetAttackState, attackState);
+        inactive = !CollisionBoxPolicy::CharacterHitBoxActive(snapshot[kBlobAttackFlags], attackState);
     } else if (boxType == 1) {
-        if (suppressHurt) {
+        int16_t hitImmunity = 0;
+        ReadValue(entity + kOffsetHitImmunity, hitImmunity);
+        if (!CollisionBoxPolicy::CharacterHurtBoxesShown(snapshot[kBlobSuppressHurtFlag], hitImmunity)) {
             return;
         }
         rectBase = reinterpret_cast<const int*>(snapshot + kHurtRectBase);
@@ -1350,7 +1374,7 @@ void AppendCharacterLayer(int boxType,
         }
 
         MapCharacterHitToScreen(transformed, localRect, snapshot, camX, camY, &screenRect);
-        QueueRect(screenRect, color, out);
+        QueueRect(screenRect, color, out, inactive);
         if (boxType == 2) {
             QueueVerticalLine(screenRect, color, out);
         }
@@ -1395,10 +1419,17 @@ void AppendProjectileLayer(int boxType,
     const int* rectBase = nullptr;
     int rectCount = 0;
     uint32_t color = 0;
+    bool inactive = false;
     if (boxType == 0) {
         rectBase = reinterpret_cast<const int*>(frameBlob + kHitRectBase);
         rectCount = kHitRectCount;
         color = kColorHitOutline;
+        int16_t life = 0;
+        uint32_t destroyed = 0;
+        ReadValue(entryBase + kProjectileLifeOffset, life);
+        ReadValue(entryBase + kProjectileDestroyedOffset, destroyed);
+        inactive = !CollisionBoxPolicy::ProjectileHitBoxActive(
+            frameBlob[kBlobSuppressHurtFlag], life, destroyed);
     } else if (boxType == 1) {
         rectBase = reinterpret_cast<const int*>(frameBlob + kHurtRectBase);
         rectCount = kHurtRectCount;
@@ -1422,7 +1453,7 @@ void AppendProjectileLayer(int boxType,
         }
 
         MapEntityHitToScreen(transformed, camX, camY, &screenRect);
-        QueueRect(screenRect, color, out);
+        QueueRect(screenRect, color, out, inactive);
     }
 }
 
@@ -1615,6 +1646,7 @@ void RebuildOverlayBoxesLocked() {
     g_overlayBoxes.reserve(g_frameRects.size());
 
     const uint8_t fillAlpha = FillAlphaByte();
+    const uint8_t inactiveFillAlpha = FillAlphaByte(kInactiveHitFillScale);
     for (const DrawRect& drawRect : g_frameRects) {
         const float x = static_cast<float>(drawRect.rect.left);
         const float y = static_cast<float>(drawRect.rect.top);
@@ -1629,8 +1661,9 @@ void RebuildOverlayBoxesLocked() {
         box.y = y;
         box.w = w;
         box.h = h;
-        box.fillArgb = ColorWithAlphaByte(drawRect.color, fillAlpha);
+        box.fillArgb = ColorWithAlphaByte(drawRect.color, drawRect.inactive ? inactiveFillAlpha : fillAlpha);
         box.outlineArgb = ColorWithAlphaByte(drawRect.color, 255u);
+        box.dottedOutline = drawRect.inactive;
         g_overlayBoxes.push_back(box);
     }
 }
@@ -1870,6 +1903,43 @@ bool GetOverlayBox(std::size_t index, OverlayBox* outBox) {
     return true;
 }
 
+bool IsGameHotkeyVk(int vk) {
+    if (vk >= VK_F4 && vk <= VK_F8) return true;
+    switch (vk) {
+    case '1': case '2': case 'U': case 'J': case 'L': case 'I': case 'O': case 'K': case 'P': case VK_SPACE:
+        return false;
+    default:
+        break;
+    }
+    if (vk <= 0 || vk >= 256) return false;
+
+    static bool s_loaded = false;
+    static bool s_reserved[256] = {};
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!s_loaded) {
+        s_loaded = true;
+        RefreshRevivalHotkeysLocked();
+        const auto reserve = [](int dik) {
+            const int mapped = dik > 0 ? MapDIKToVK(dik) : 0;
+            if (mapped > 0 && mapped < 256) s_reserved[mapped] = true;
+        };
+        reserve(g_revivalHotkeys.hit);
+        reserve(g_revivalHotkeys.hurt);
+        reserve(g_revivalHotkeys.collision);
+        char path[MAX_PATH] = {};
+        if (ResolveRevivalIniPath(path, sizeof(path))) {
+            static const char* const kKeys[] = {
+                "Pause", "StepFrame", "Save", "Load", "ToggleReplay", "ToggleRecord",
+                "SwitchStartCondition", "ToggleReplayRandom", "ToggleDisplay", "SwitchPlayers",
+                "MirrorPlayers", "IncreaseFPS", "DecreaseFPS", "ResetFPS",
+                "SetBuffer1", "SetBuffer2", "SetBuffer3", "SetBuffer4", "SetBuffer5", "KillBG",
+            };
+            for (const char* key : kKeys) reserve(ReadRevivalHotkeyFromIni(path, key, 0));
+        }
+    }
+    return s_reserved[vk];
+}
+
 bool ShouldSuppressRevivalHotkey(void* /*practiceController*/, int key) {
     if (key == 0 || !GetModuleHandleA("EfzRevival.dll")) {
         return false;
@@ -1879,6 +1949,10 @@ bool ShouldSuppressRevivalHotkey(void* /*practiceController*/, int key) {
     }
 
     std::lock_guard<std::mutex> lock(g_mutex);
+    // If the overlay can't render, Revival's own display must keep its hotkeys.
+    if (!ResolveTransformFunctions()) {
+        return false;
+    }
     return ConsumeDisplayHotkeyLocked(key);
 }
 

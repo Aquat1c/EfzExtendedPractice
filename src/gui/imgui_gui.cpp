@@ -4133,7 +4133,7 @@ namespace ImGuiGui {
             bool charsInit = AreCharactersInitialized();
             LogOut("[IMGUI_GUI] Applying settings from ImGui interface (charsInit=" + std::string(charsInit ? "Y" : "N") +
                    ", P1CharID=" + std::to_string(guiState.localData.p1CharID) +
-                   ", P2CharID=" + std::to_string(guiState.localData.p2CharID) + ")", true);
+                   ", P2CharID=" + std::to_string(guiState.localData.p2CharID) + ")", detailedLogging.load());
 
             DisplayData updatedData = guiState.localData;
             if (updatedData.p1RumiInfiniteShinai) updatedData.p1RumiBarehanded = false;
@@ -4145,7 +4145,7 @@ namespace ImGuiGui {
          displayData.p1AkikoShowCleanHit = updatedData.p1AkikoShowCleanHit;
          displayData.p2AkikoShowCleanHit = updatedData.p2AkikoShowCleanHit;
          LogOut("[IMGUI_GUI] CleanHit flags applied: P1=" + std::to_string((int)displayData.p1AkikoShowCleanHit) +
-             " P2=" + std::to_string((int)displayData.p2AkikoShowCleanHit), true);
+             " P2=" + std::to_string((int)displayData.p2AkikoShowCleanHit), detailedLogging.load());
 
             displayData.p1RumiInfiniteShinai = updatedData.p1RumiInfiniteShinai;
             displayData.p2RumiInfiniteShinai = updatedData.p2RumiInfiniteShinai;
@@ -4294,7 +4294,7 @@ namespace ImGuiGui {
                    ", Mishio Elem Inf: " + std::to_string(displayData.infiniteMishioElement) +
                    ", Mishio Awakened Inf: " + std::to_string(displayData.infiniteMishioAwakened) +
                    ", P1 Blue IC: " + std::to_string(displayData.p1BlueIC) + 
-                   ", P2 Blue IC: " + std::to_string(displayData.p2BlueIC), true);
+                   ", P2 Blue IC: " + std::to_string(displayData.p2BlueIC), detailedLogging.load());
             
             auto crColorManaged = [&](int player)->bool {
                 if (player == 1) {
@@ -4337,7 +4337,7 @@ namespace ImGuiGui {
                 }
                 // Engine F4 recovery safety is handled inside ApplyRuntimeSettings so the
                 // in-game and fallback hosts stay aligned.
-                LogOut("[IMGUI_GUI] Calling ApplyRuntimeSettings from ImGui (base!=0)", true);
+                LogOut("[IMGUI_GUI] Calling ApplyRuntimeSettings from ImGui (base!=0)", detailedLogging.load());
                 ApplyRuntimeSettings(&displayData);
 
                 CharacterSettings::TickCharacterEnforcements(base, displayData);
@@ -4459,7 +4459,7 @@ namespace ImGuiGui {
                 enforceForPlayer(1);
                 enforceForPlayer(2);
             } else {
-                LogOut("[IMGUI_GUI] ApplyImGuiSettings: base=0; skipping ApplySettings/TickCharacterEnforcements", true);
+                LogOut("[IMGUI_GUI] ApplyImGuiSettings: base=0; skipping ApplySettings/TickCharacterEnforcements", detailedLogging.load());
             }
         }
     }

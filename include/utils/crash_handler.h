@@ -5,6 +5,5 @@
 namespace CrashHandler {
 
 void Install(HMODULE selfModule);
-void WarmupSymbolMaps();
 
 } // namespace CrashHandler

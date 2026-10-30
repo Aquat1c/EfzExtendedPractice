@@ -205,7 +205,13 @@ DWORD WINAPI AudioNotificationWorker(LPVOID) {
         if (result != WAIT_OBJECT_0 + 1) break;
         // Rearm before reading: changes during import remain signalled.
         if (!FindNextChangeNotification(g_change)) break;
-        Refresh(true);
+        const auto before = AudioControl::ReadAudioSettings();
+        // Any file in the directory wakes this; only a changed gain reaches the mirror's consumers.
+        if (ImportAudioSettingsIfAvailable(true)) {
+            const auto after = AudioControl::ReadAudioSettings();
+            if (after.bgmPercent != before.bgmPercent || after.sePercent != before.sePercent)
+                AudioControl::ApplyConfiguredVolumesNow();
+        }
     }
     return 0;
 }
@@ -256,7 +262,7 @@ bool InitializeAudioControl() {
     auto parent = std::filesystem::path(g_status.sharedConfigPath).parent_path();
     std::error_code ec;
     while (!parent.empty() && !std::filesystem::is_directory(parent, ec)) parent = parent.parent_path();
-    if (!parent.empty()) g_change = FindFirstChangeNotificationA(parent.string().c_str(), TRUE,
+    if (!parent.empty()) g_change = FindFirstChangeNotificationA(parent.string().c_str(), FALSE,
         FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE);
     g_stop = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     g_admitted = true;

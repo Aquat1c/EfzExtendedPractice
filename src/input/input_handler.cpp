@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <chrono>
 #include "../include/input/input_handler.h"
+#include "../include/gui/custom_menu/renderer.h"
 #include "../include/game/frame_advantage.h"
 #include "../include/utils/utilities.h"
 
@@ -23,6 +24,7 @@
 #include "../include/game/mission/mission_pause_menu.h"
 #include "../include/game/mission/tutorial_session.h"
 #include "../include/utils/config.h"
+#include "../include/utils/i18n.h"
 #include "../include/input/input_motion.h" // For QueueMotionInput
 #include "../include/utils/bgm_control.h"
 #include "../include/game/mission/mission_engine.h" // Mission record/playback hotkeys
@@ -88,11 +90,11 @@ static void MenuOpenCommand(uintptr_t) { OpenMenu(); }
 static void MenuOpenIfHiddenCommand(uintptr_t) { if (!ImGuiImpl::IsVisible()) OpenMenu(); }
 static void MenuToggleCommand(uintptr_t) {
     if (!ImGuiImpl::IsVisible()) OpenMenu();
-    else ImGuiImpl::ToggleVisibility();
+    else if (!CustomMenu::RequestAnimatedClose()) ImGuiImpl::ToggleVisibility();
 }
-// Without the battle hooks there is no game-thread owner; the legacy direct path stays.
-static void PostMenuCommand(GameThread::Command cmd) {
-    if (!GameThread::Post(cmd) && !AreFrontendControlHooksInstalled()) cmd(0);
+// Without the battle hooks there is no game-thread owner; the legacy direct path stays, Practice only.
+static void PostGameCommand(GameThread::Command cmd, uintptr_t arg = 0) {
+    if (!GameThread::Post(cmd, arg) && !AreFrontendControlHooksInstalled() && IsPracticeContext()) cmd(arg);
 }
 static void ToggleLocalSideCommand(uintptr_t) {
     if (SwitchPlayers::ToggleLocalSide()) {
@@ -118,6 +120,69 @@ static void SavestateLoadCommand(uintptr_t) {
 }
 static void FramestepTogglePauseCommand(uintptr_t) { Framestep::TogglePause(); }
 static void FramestepStepCommand(uintptr_t) { Framestep::RequestFrameStep(); }
+
+enum PositionAction : uintptr_t {
+    kPositionSave,
+    kPositionLoad,
+    kPositionRoundStart,
+    kPositionCenter,
+    kPositionLeftCorner,
+    kPositionRightCorner,
+    kPositionSwapTeleport, // teleport key + D: cancels auto-actions like any teleport
+    kPositionSwap,         // dedicated swap binding: leaves auto-actions running
+};
+
+static void PositionCommand(uintptr_t action) {
+    const uintptr_t base = GetEFZBase();
+    if (!base) return;
+    if (action == kPositionSave) {
+        SavePlayerPositions(base);
+        DirectDrawHook::AddMessage("Position Saved", "SYSTEM", RGB(255, 255, 100), 1500, 0, 100);
+        return;
+    }
+
+    // Artificial position changes void the exchange being measured.
+    CancelFrameAdvantageCalculation();
+    if (action != kPositionSwap) CancelAutoActionsAndMacros();
+
+    constexpr double centerX = 320.0, leftX = 43.6548, rightX = 595.425, floorY = 0.0;
+    constexpr double p1StartX = 240.0, p2StartX = 400.0;
+    const auto place = [base, floorY](double x1, double x2, const char* message) {
+        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, x1, floorY);
+        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, x2, floorY);
+        DirectDrawHook::AddMessage(message, "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
+    };
+    switch (action) {
+        case kPositionRoundStart: place(p1StartX, p2StartX, "Round Start Position"); break;
+        case kPositionCenter: place(centerX, centerX, "Players Centered"); break;
+        case kPositionLeftCorner: place(leftX, leftX, "Left Corner"); break;
+        case kPositionRightCorner: place(rightX, rightX, "Right Corner"); break;
+        case kPositionLoad:
+            LoadPlayerPositions(base);
+            DirectDrawHook::AddMessage("Position Loaded", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
+            break;
+        default: {
+            double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+            const uintptr_t xAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, XPOS_OFFSET);
+            const uintptr_t yAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, YPOS_OFFSET);
+            const uintptr_t xAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, XPOS_OFFSET);
+            const uintptr_t yAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, YPOS_OFFSET);
+            if (!xAddr1 || !yAddr1 || !xAddr2 || !yAddr2) {
+                DirectDrawHook::AddMessage("Swap Failed: Can't read positions", "SYSTEM", RGB(255, 100, 100), 1500, 0, 100);
+                return;
+            }
+            SafeReadMemory(xAddr1, &x1, sizeof(double));
+            SafeReadMemory(yAddr1, &y1, sizeof(double));
+            SafeReadMemory(xAddr2, &x2, sizeof(double));
+            SafeReadMemory(yAddr2, &y2, sizeof(double));
+            SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, x2, y2);
+            SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, x1, y1);
+            DirectDrawHook::AddMessage("Positions Swapped", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
+            break;
+        }
+    }
+    CharacterSettings::TickCharacterEnforcements(base, displayData);
+}
 
 extern void ResetFrameCounter();
 
@@ -206,22 +271,24 @@ bool IsDIKeyPressed(BYTE* keyboardState, DWORD dikCode) {
     return (keyboardState[dikCode] & 0x80) != 0;
 }
 
-bool IsKeyPressed(int vKey, bool checkState) {
+static bool IsKeyHeld(int vKey) {
     if (!XInputShim::IsPollingActive()) return false;
-    SHORT keyState;
-    if (checkState) {
-        keyState = GetKeyState(vKey);
-        if ((keyState & 0x8000) != 0) {
-            return true;
-        }
-        
-        keyState = GetAsyncKeyState(vKey);
-        return ((keyState & 0x8000) != 0);
-    } else {
-        // Check for key press since last call (bit 0)
-        keyState = GetAsyncKeyState(vKey);
-        return ((keyState & 0x0001) != 0);
+    return (GetKeyState(vKey) & 0x8000) != 0 || (GetAsyncKeyState(vKey) & 0x8000) != 0;
+}
+
+// Reads key state only. Runs on every monitor pass so a press made while hotkeys
+// are not live can never fire later. Returns whether any tracked key is held.
+static bool SampleHotkeyEdges(ConfigPolicy::HotkeyEdges& edges, const int* keys, std::size_t count, bool live) {
+    edges.BeginPoll();
+    bool anyDown = false;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (keys[i] <= 0) continue;
+        const SHORT state = GetAsyncKeyState(keys[i]);
+        const bool down = (state & 0x8000) != 0;
+        edges.Sample(keys[i], down, (state & 0x0001) != 0, live);
+        anyDown = anyDown || down;
     }
+    return anyDown;
 }
 
 std::atomic<bool> keyMonitorRunning(false);
@@ -245,12 +312,11 @@ void MonitorKeys() {
         LogOut("[KEYBINDS] Menu key: " + GetKeyName(cfg0.configMenuKey), true);
     }
 
-    static DWORD s_nextIniRetryTick = GetTickCount() + 60000;
+    // key.ini only changes in EFZ's own key config, outside a match.
+    bool bindingsRead = ReadKeyMappingsFromIni();
+    DWORD nextIniRetryTick = GetTickCount() + 60000;
 
-    const double centerX = 320.0;
-    const double leftX = 43.6548, rightX = 595.425, teleportY = 0.0;
-    const double p1StartX = 240.0, p2StartX = 400.0, startY = 0.0;
-
+    ConfigPolicy::HotkeyEdges edges; // Fresh per thread: the first sample of each key flushes stale state.
     XINPUT_STATE prevPads[4]{};
     DWORD lastConnScanTick = 0;
     unsigned connectedMask = 0; // bit i => pad i connected
@@ -270,33 +336,52 @@ void MonitorKeys() {
             nextWindowStateRefreshTick = nowTick + 100;
         }
 
-    if (GetTickCount() >= s_nextIniRetryTick) {
-        if (!detectedBindings.attacksDetected || detectedBindings.dButton == 0) {
-            if (ReadKeyMappingsFromIni()) {
-                LogOut("[KEYBINDS] Loaded EFZ key bindings from key.ini on retry", true);
-                s_nextIniRetryTick = GetTickCount() + 60000;
-            } else {
-                s_nextIniRetryTick = GetTickCount() + 10000;
-            }
-        } else {
-            s_nextIniRetryTick = GetTickCount() + 60000;
-        }
+    if (!bindingsRead && GetTickCount() >= nextIniRetryTick) {
+        bindingsRead = ReadKeyMappingsFromIni();
+        nextIniRetryTick = GetTickCount() + 60000;
+        if (bindingsRead) LogOut("[KEYBINDS] Loaded EFZ key bindings from key.ini on retry", true);
     }
     const Config::Settings& cfg = Config::GetSettings();
-    int teleportKey = (cfg.teleportKey > 0) ? cfg.teleportKey : '1';
-    int recordKey = (cfg.recordKey > 0) ? cfg.recordKey : '2';
-    int configMenuKey = (cfg.configMenuKey > 0) ? cfg.configMenuKey : VK_ESCAPE;
-    int toggleTitleKey = cfg.toggleTitleKey;
-    int resetFrameCounterKey = cfg.resetFrameCounterKey;
-    int savestateSaveKey = (cfg.savestateSaveKey > 0) ? cfg.savestateSaveKey : 'U';
-    int savestateLoadKey = (cfg.savestateLoadKey > 0) ? cfg.savestateLoadKey : 'J';
+    const int teleportKey = Config::ResolveHotkey(cfg.teleportKey, '1');
+    const int recordKey = Config::ResolveHotkey(cfg.recordKey, '2');
+    const int configMenuKey = (cfg.configMenuKey > 0) ? cfg.configMenuKey : VK_ESCAPE;
+    const int toggleTitleKey = Config::ResolveHotkey(cfg.toggleTitleKey, 0);
+    const int resetFrameCounterKey = Config::ResolveHotkey(cfg.resetFrameCounterKey, 0);
+    const int savestateSaveKey = Config::ResolveHotkey(cfg.savestateSaveKey, 'U');
+    const int savestateLoadKey = Config::ResolveHotkey(cfg.savestateLoadKey, 'J');
+    const int switchPlayersKey = Config::ResolveHotkey(cfg.switchPlayersKey, 'L');
+    const int macroRecordKey = Config::ResolveHotkey(cfg.macroRecordKey, 'I');
+    const int macroPlayKey = Config::ResolveHotkey(cfg.macroPlayKey, 'O');
+    const int macroSlotKey = Config::ResolveHotkey(cfg.macroSlotKey, 'K');
+    const int framestepPauseKey = Config::ResolveHotkey(cfg.framestepPauseKey, VK_SPACE);
+    const int framestepStepKey = Config::ResolveHotkey(cfg.framestepStepKey, 'P');
+    const int swapKey = Config::ResolveHotkey(cfg.swapCustomKey, 0);
     XINPUT_STATE currentPad{};
 
     bool windowActive = g_efzWindowActive.load();
     bool guiActive = g_guiActive.load();
 
-    // Demo mode owns P1's poll; only Escape and the configured Menu action may cancel it.
     static bool s_demoEscWasDown = false;
+    const bool recorderMenuHandoff =
+        Mission::Engine::Recorder::IsMenuInputHandoffActive() &&
+        !Mission::PauseMenu::IsOpen();
+    const bool contextualPauseOwnsInput =
+        Mission::TutorialSession::IsActive() ||
+        recorderMenuHandoff ||
+        (Mission::PauseMenu::IsOpen() && !ImGuiImpl::IsVisible());
+
+    const int trackedKeys[] = {
+        configMenuKey, teleportKey, recordKey, toggleTitleKey, resetFrameCounterKey,
+        savestateSaveKey, savestateLoadKey, switchPlayersKey, macroRecordKey, macroPlayKey,
+        macroSlotKey, framestepPauseKey, framestepStepKey, swapKey, '5', '6', VK_F9,
+    };
+    const bool hotkeysLive = windowActive && !guiActive && !s_demoEscWasDown &&
+        !Mission::Engine::Demo::IsActive() && !contextualPauseOwnsInput &&
+        !IsInCharacterSelectScreen() && !IsHotkeyCooldownActive();
+    const bool anyHotkeyHeld = SampleHotkeyEdges(
+        edges, trackedKeys, sizeof(trackedKeys) / sizeof(trackedKeys[0]), hotkeysLive);
+
+    // Demo mode owns P1's poll; only Escape and the configured Menu action may cancel it.
     if (windowActive && Mission::Engine::Demo::IsActive()) {
         const bool escDown = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
         if (escDown && !s_demoEscWasDown) Mission::Engine::Demo::Cancel();
@@ -332,7 +417,6 @@ void MonitorKeys() {
         // Do not let a held Escape become a fresh menu-open edge when restoration ends.
         if ((GetAsyncKeyState(VK_ESCAPE) & 0x8000) == 0) {
             s_demoEscWasDown = false;
-            (void)IsKeyPressed(configMenuKey, false); // flush the completed press
         }
         Sleep(8);
         continue;
@@ -340,13 +424,6 @@ void MonitorKeys() {
 
     // Tutorial/contextual pause menus own the hotkey router; only the Menu action stays alive.
     static bool s_contextMenuEscWasDown = true;
-    const bool recorderMenuHandoff =
-        Mission::Engine::Recorder::IsMenuInputHandoffActive() &&
-        !Mission::PauseMenu::IsOpen();
-    const bool contextualPauseOwnsInput =
-        Mission::TutorialSession::IsActive() ||
-        recorderMenuHandoff ||
-        (Mission::PauseMenu::IsOpen() && !ImGuiImpl::IsVisible());
     if (windowActive && contextualPauseOwnsInput) {
         const bool allowMenuToggle = !recorderMenuHandoff &&
             (Mission::TutorialSession::IsActive() ||
@@ -377,7 +454,7 @@ void MonitorKeys() {
             if (padSnapshot.CopyState(i, cached)) {
                 const bool menuNow = padBindingDown(cached, cfg.gpToggleMenuButton);
                 const bool menuWas = padBindingDown(prevPads[i], cfg.gpToggleMenuButton);
-                if (allowMenuToggle && menuNow && !menuWas) PostMenuCommand(&MenuOpenCommand);
+                if (allowMenuToggle && menuNow && !menuWas) PostGameCommand(&MenuOpenCommand);
                 prevPads[i] = cached;
             }
         }
@@ -387,9 +464,6 @@ void MonitorKeys() {
     s_contextMenuEscWasDown = true;
 
     if (windowActive && guiActive) {
-        // Flush queued menu toggle presses so they don't reopen immediately after exit
-        IsKeyPressed(configMenuKey, false);
-
         XInputShim::RefreshSnapshotOncePerFrame();
         XInputShim::Snapshot padSnapshot{};
         XInputShim::CopySnapshot(padSnapshot);
@@ -434,65 +508,13 @@ void MonitorKeys() {
                     return (cur.Gamepad.wButtons & wMask) && !(prev.Gamepad.wButtons & wMask);
                 };
 
-                auto savePositions = [&]() {
-                    uintptr_t base = GetEFZBase();
-                    if (base) {
-                        SavePlayerPositions(base);
-                        DirectDrawHook::AddMessage("Position Saved", "SYSTEM", RGB(255, 255, 100), 1500, 0, 100);
-                    }
-                };
-                auto reapplyCharacterLocks = [&](uintptr_t base) {
-                    CharacterSettings::TickCharacterEnforcements(base, displayData);
-                };
-                auto teleportOrLoad = [&]() {
-                    uintptr_t base = GetEFZBase();
-                    if (!base) return;
-                    
-                    // Cancel auto-actions and macros before any position change
-                    CancelAutoActionsAndMacros();
-                    
-                    if ((cur.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) && (cur.Gamepad.wButtons & XINPUT_GAMEPAD_A)) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, p1StartX, startY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, p2StartX, startY);
-                        DirectDrawHook::AddMessage("Round Start Position", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    } else if (cur.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, centerX, teleportY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, centerX, teleportY);
-                        DirectDrawHook::AddMessage("Players Centered", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    } else if (cur.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, leftX, teleportY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, leftX, teleportY);
-                        DirectDrawHook::AddMessage("Left Corner", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    } else if (cur.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, rightX, teleportY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, rightX, teleportY);
-                        DirectDrawHook::AddMessage("Right Corner", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    } else {
-                        LoadPlayerPositions(base);
-                        DirectDrawHook::AddMessage("Position Loaded", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    }
-                    reapplyCharacterLocks(base);
-                };
-                auto swapPositions = [&]() {
-                    uintptr_t base = GetEFZBase();
-                    if (!base) return;
-                    double x1=0,y1=0,x2=0,y2=0;
-                    uintptr_t xAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, XPOS_OFFSET);
-                    uintptr_t yAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, YPOS_OFFSET);
-                    uintptr_t xAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, XPOS_OFFSET);
-                    uintptr_t yAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, YPOS_OFFSET);
-                    if (xAddr1 && yAddr1 && xAddr2 && yAddr2) {
-                        SafeReadMemory(xAddr1, &x1, sizeof(double));
-                        SafeReadMemory(yAddr1, &y1, sizeof(double));
-                        SafeReadMemory(xAddr2, &x2, sizeof(double));
-                        SafeReadMemory(yAddr2, &y2, sizeof(double));
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, x2, y2);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, x1, y1);
-                        reapplyCharacterLocks(base);
-                        DirectDrawHook::AddMessage("Positions Swapped", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    } else {
-                        DirectDrawHook::AddMessage("Swap Failed: Can't read positions", "SYSTEM", RGB(255,100,100), 1500, 0, 100);
-                    }
+                const auto padTeleportAction = [&]() -> uintptr_t {
+                    const WORD held = cur.Gamepad.wButtons;
+                    if ((held & XINPUT_GAMEPAD_DPAD_DOWN) && (held & XINPUT_GAMEPAD_A)) return kPositionRoundStart;
+                    if (held & XINPUT_GAMEPAD_DPAD_DOWN) return kPositionCenter;
+                    if (held & XINPUT_GAMEPAD_DPAD_LEFT) return kPositionLeftCorner;
+                    if (held & XINPUT_GAMEPAD_DPAD_RIGHT) return kPositionRightCorner;
+                    return kPositionLoad;
                 };
 
                 const auto &cgp = cfg;
@@ -509,7 +531,7 @@ void MonitorKeys() {
                     recPhase == Mission::Engine::Recorder::Phase::Recording;
                 if (recorderOwnsHotkeys) {
                     if (gpWentDown(cgp.gpToggleMenuButton)) {
-                        PostMenuCommand(&MenuOpenIfHiddenCommand);
+                        PostGameCommand(&MenuOpenIfHiddenCommand);
                         handled = true;
                     } else if (gpWentDown(cgp.gpMacroRecordButton) &&
                                !Mission::PauseMenu::IsOpen()) {
@@ -520,17 +542,16 @@ void MonitorKeys() {
                     return handled;
                 }
                 if (!handled && gpWentDown(cgp.gpToggleMenuButton)) {
-                    PostMenuCommand(&MenuToggleCommand);
+                    PostGameCommand(&MenuToggleCommand);
                     handled = true;
                 } else if (!handled && gpWentDown(cgp.gpTeleportButton)) {
-                    CancelFrameAdvantageCalculation();
-                    teleportOrLoad();
+                    PostGameCommand(&PositionCommand, padTeleportAction());
                     handled = true;
                 } else if (!handled && gpWentDown(cgp.gpSavePositionButton)) {
-                    savePositions();
+                    PostGameCommand(&PositionCommand, kPositionSave);
                     handled = true;
                 } else if (!handled && gpWentDown(cgp.gpSwapPositionsButton)) {
-                    swapPositions();
+                    PostGameCommand(&PositionCommand, kPositionSwap);
                     handled = true;
                 } else if (!handled && gpWentDown(cgp.gpSwitchPlayersButton)) {
                     // No side swap during macro record/playback: the P2 poll override would drive the human's new side.
@@ -573,7 +594,7 @@ void MonitorKeys() {
                 } else if (!handled && gpWentDown(cgp.gpMacroSlotButton)) {
                     if (GetCurrentGamePhase() == GamePhase::Match && AreCharactersInitialized()) {
                         MacroController::NextSlot();
-                        DirectDrawHook::AddMessage((std::string("Macro: Slot ") + std::to_string(MacroController::GetCurrentSlot())).c_str(), "MACRO", RGB(230,230,120), 800, 0, 120);
+                        DirectDrawHook::AddMessage(I18n::TrFormat("Macro: Slot %d", MacroController::GetCurrentSlot()), "MACRO", RGB(230,230,120), 800, 0, 120);
                     } else {
                         DirectDrawHook::AddMessage("Macro controls available only during Match", "MACRO", RGB(255,180,120), 900, 0, 120);
                     }
@@ -586,7 +607,7 @@ void MonitorKeys() {
 
             // 1) Keyboard menu/overlay toggles first (avoids conflicts).
             // The battle-hotkey hook owns this key on the game thread when installed.
-            if (!AreFrontendControlHooksInstalled() && IsKeyPressed(configMenuKey, false)) {
+            if (!AreFrontendControlHooksInstalled() && edges.Pressed(configMenuKey)) {
                 if (!ImGuiImpl::IsVisible()) {
                     OpenMenu();
                 }
@@ -633,7 +654,7 @@ void MonitorKeys() {
                 recorderPhase == Mission::Engine::Recorder::Phase::Recording;
             if (!keyHandled && recorderOwnsHotkeys) {
                 if (!Mission::PauseMenu::IsOpen() &&
-                    IsKeyPressed(cfg.macroRecordKey > 0 ? cfg.macroRecordKey : 'I', false)) {
+                    edges.Pressed(macroRecordKey)) {
                     Mission::Engine::Recorder::Advance();
                     keyHandled = true;
                 } else {
@@ -648,42 +669,20 @@ void MonitorKeys() {
                 } else if (IsHotkeyCooldownActive()) {
                 } else {
                 {
-                    const bool swapEnabled = cfg.swapCustomEnabled;
-                    const int swapKey = cfg.swapCustomKey;
                     bool didSwap = false;
-                    auto doSwap = [&]() {
-                        uintptr_t base = GetEFZBase();
-                        if (!base) return;
-                        double x1=0,y1=0,x2=0,y2=0;
-                        uintptr_t xAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, XPOS_OFFSET);
-                        uintptr_t yAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, YPOS_OFFSET);
-                        uintptr_t xAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, XPOS_OFFSET);
-                        uintptr_t yAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, YPOS_OFFSET);
-                        if (xAddr1 && yAddr1 && xAddr2 && yAddr2) {
-                            SafeReadMemory(xAddr1, &x1, sizeof(double));
-                            SafeReadMemory(yAddr1, &y1, sizeof(double));
-                            SafeReadMemory(xAddr2, &x2, sizeof(double));
-                            SafeReadMemory(yAddr2, &y2, sizeof(double));
-                            SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, x2, y2);
-                            SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, x1, y1);
-                            DirectDrawHook::AddMessage("Positions Swapped", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                        } else {
-                            DirectDrawHook::AddMessage("Swap Failed: Can't read positions", "SYSTEM", RGB(255,100,100), 1500, 0, 100);
-                        }
-                    };
-                    if (swapEnabled && swapKey > 0 && IsKeyPressed(swapKey, false)) {
+                    if (cfg.swapCustomEnabled && edges.Pressed(swapKey)) {
                         if (GetCurrentGameMode() == GameMode::Practice) {
-                            doSwap(); didSwap = true; keyHandled = true;
+                            PostGameCommand(&PositionCommand, kPositionSwap);
                         } else {
                             DirectDrawHook::AddMessage("Swap available only in Practice", "SYSTEM", RGB(255,180,120), 1200, 0, 110);
-                            didSwap = true; keyHandled = true;
                         }
+                        didSwap = true; keyHandled = true;
                     }
                     if (didSwap) {
                         Sleep(80);
                     }
                 }
-                if (IsKeyPressed(cfg.switchPlayersKey > 0 ? cfg.switchPlayersKey : 'L', false)) {
+                if (edges.Pressed(switchPlayersKey)) {
                 auto st = MacroController::GetState();
                 if (Mission::Engine::Recorder::IsSessionActive() ||
                     st == MacroController::State::PreRecord || st == MacroController::State::Recording ||
@@ -694,7 +693,7 @@ void MonitorKeys() {
                     PostToggleLocalSide();
                     keyHandled = true;
                 }
-            } else if (IsKeyPressed(savestateSaveKey, false)) {
+            } else if (edges.Pressed(savestateSaveKey)) {
                 if (Mission::Engine::Runner::IsActive()) {
                     DirectDrawHook::AddMessage(
                         "Savestate save disabled while a mission owns its checkpoint",
@@ -709,7 +708,7 @@ void MonitorKeys() {
                     DirectDrawHook::AddMessage("Savestate save is available only during Practice Match", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
                 }
                 keyHandled = true;
-            } else if (IsKeyPressed(savestateLoadKey, false)) {
+            } else if (edges.Pressed(savestateLoadKey)) {
                 if (Mission::Engine::Runner::IsActive()) {
                     DirectDrawHook::AddMessage(
                         "Savestate load disabled while a mission owns its checkpoint",
@@ -724,143 +723,53 @@ void MonitorKeys() {
                     DirectDrawHook::AddMessage("Savestate load is available only during Practice Match", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
                 }
                 keyHandled = true;
-            } else if (IsKeyPressed(teleportKey, true)) {
-                // Cancel auto-actions and macros before any position change
-                CancelAutoActionsAndMacros();
-                
-                if (IsKeyPressed(VK_DOWN, true) && IsKeyPressed('A', true)) {
-                    uintptr_t base = GetEFZBase();
-                    if (base) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, p1StartX, startY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, p2StartX, startY);
-                        CharacterSettings::TickCharacterEnforcements(base, displayData);
-                        DirectDrawHook::AddMessage("Round Start Position", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    }
-                    keyHandled = true;
-                }
-                else if (IsKeyPressed(VK_DOWN, true)) {
-                    uintptr_t base = GetEFZBase();
-                    if (base) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, centerX, teleportY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, centerX, teleportY);
-                        CharacterSettings::TickCharacterEnforcements(base, displayData);
-                        DirectDrawHook::AddMessage("Players Centered", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    }
-                    keyHandled = true;
-                }
-                else if (IsKeyPressed(VK_LEFT, true)) {
-                    uintptr_t base = GetEFZBase();
-                    if (base) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, leftX, teleportY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, leftX, teleportY);
-                        CharacterSettings::TickCharacterEnforcements(base, displayData);
-                        DirectDrawHook::AddMessage("Left Corner", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    }
-                    keyHandled = true;
-                }
-                else if (IsKeyPressed(VK_RIGHT, true)) {
-                    uintptr_t base = GetEFZBase();
-                    if (base) {
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, rightX, teleportY);
-                        SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, rightX, teleportY);
-                        CharacterSettings::TickCharacterEnforcements(base, displayData);
-                        DirectDrawHook::AddMessage("Right Corner", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    }
-                    keyHandled = true;
-                }
-                else if (IsKeyPressed(detectedBindings.dButton != 0 ? detectedBindings.dButton : 'D', true)) {
-                    uintptr_t base = GetEFZBase();
-                    if (base) {
-                        double tempX1 = 0.0, tempY1 = 0.0;
-                        double tempX2 = 0.0, tempY2 = 0.0;
-                        
-                        uintptr_t xAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, XPOS_OFFSET);
-                        uintptr_t yAddr1 = ResolvePointer(base, EFZ_BASE_OFFSET_P1, YPOS_OFFSET);
-                        uintptr_t xAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, XPOS_OFFSET);
-                        uintptr_t yAddr2 = ResolvePointer(base, EFZ_BASE_OFFSET_P2, YPOS_OFFSET);
-                        
-                        if (xAddr1 && yAddr1 && xAddr2 && yAddr2) {
-                            SafeReadMemory(xAddr1, &tempX1, sizeof(double));
-                            SafeReadMemory(yAddr1, &tempY1, sizeof(double));
-                            SafeReadMemory(xAddr2, &tempX2, sizeof(double));
-                            SafeReadMemory(yAddr2, &tempY2, sizeof(double));
-                            
-                            SetPlayerPosition(base, EFZ_BASE_OFFSET_P1, tempX2, tempY2);
-                            SetPlayerPosition(base, EFZ_BASE_OFFSET_P2, tempX1, tempY1);
-                            CharacterSettings::TickCharacterEnforcements(base, displayData);
-                            DirectDrawHook::AddMessage("Positions Swapped", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                        } else {
-                            DirectDrawHook::AddMessage("Swap Failed: Can't read positions", "SYSTEM", RGB(255,100,100), 1500, 0, 100);
-                        }
-                    }
-                    keyHandled = true;
-                }
-                else {
-                    uintptr_t base = GetEFZBase();
-                    if (base) {
-                        LoadPlayerPositions(base);
-                        CharacterSettings::TickCharacterEnforcements(base, displayData);
-                        DirectDrawHook::AddMessage("Position Loaded", "SYSTEM", RGB(100, 255, 100), 1500, 0, 100);
-                    }
-                    keyHandled = true;
-                }
-            } else if (IsKeyPressed(cfg.recordKey, false)) {
-                uintptr_t base = GetEFZBase();
-                if (base) {
-                    SavePlayerPositions(base);
-                    DirectDrawHook::AddMessage("Position Saved", "SYSTEM", RGB(255, 255, 100), 1500, 0, 100);
-                }
+            } else if (edges.Pressed(teleportKey)) {
+                uintptr_t action = kPositionLoad;
+                if (IsKeyHeld(VK_DOWN) && IsKeyHeld('A')) action = kPositionRoundStart;
+                else if (IsKeyHeld(VK_DOWN)) action = kPositionCenter;
+                else if (IsKeyHeld(VK_LEFT)) action = kPositionLeftCorner;
+                else if (IsKeyHeld(VK_RIGHT)) action = kPositionRightCorner;
+                else if (IsKeyHeld(detectedBindings.dButton != 0 ? detectedBindings.dButton : 'D')) action = kPositionSwapTeleport;
+                PostGameCommand(&PositionCommand, action);
                 keyHandled = true;
-            } else if (IsKeyPressed('4', false) || (toggleTitleKey > 0 && IsKeyPressed(toggleTitleKey, true))) {
-                bool currentState = g_statsDisplayEnabled.load();
-                bool nextState = !currentState;
+            } else if (edges.Pressed(recordKey)) {
+                PostGameCommand(&PositionCommand, kPositionSave);
+                keyHandled = true;
+            } else if (edges.Pressed(toggleTitleKey)) {
+                const bool nextState = !g_statsDisplayEnabled.load();
                 g_statsDisplayEnabled.store(nextState);
                 if (nextState) g_statsPageIndex.store(0);
-
-                static bool s_comboOverlayWasEnabled = false;
-                if (nextState) {
-                    s_comboOverlayWasEnabled = cfg.showComboStatisticsOverlay;
-                    if (s_comboOverlayWasEnabled) {
-                        Config::SetSetting("General", "showComboStatisticsOverlay", "0");
-                    }
-                    LogOut("[STATS] Stats display enabled", true);
-                    DirectDrawHook::AddMessage("Stats Display Enabled", "SYSTEM", RGB(255, 255, 0), 1500, 20, 100);
-                } else {
-                    if (s_comboOverlayWasEnabled) {
-                        Config::SetSetting("General", "showComboStatisticsOverlay", "1");
-                    }
-                    LogOut("[STATS] Stats display disabled", true);
-                    DirectDrawHook::AddMessage("Stats Display Disabled", "SYSTEM", RGB(255, 255, 0), 1500, 20, 100);
-                }
+                LogOut(nextState ? "[STATS] Stats display enabled" : "[STATS] Stats display disabled", true);
+                DirectDrawHook::AddMessage(nextState ? "Stats Display Enabled" : "Stats Display Disabled", "SYSTEM", RGB(255, 255, 0), 1500, 20, 100);
                 keyHandled = true;
-            } else if (g_statsDisplayEnabled.load() && IsKeyPressed('5', false)) {
+            } else if (g_statsDisplayEnabled.load() && edges.Pressed('5')) {
                 int n = g_statsPageCount.load(); if (n < 1) n = 1;
                 int p = g_statsPageIndex.load();
                 g_statsPageIndex.store((p - 1 + n) % n);
                 keyHandled = true;
-            } else if (g_statsDisplayEnabled.load() && IsKeyPressed('6', false)) {
+            } else if (g_statsDisplayEnabled.load() && edges.Pressed('6')) {
                 int n = g_statsPageCount.load(); if (n < 1) n = 1;
                 int p = g_statsPageIndex.load();
                 g_statsPageIndex.store((p + 1) % n);
                 keyHandled = true;
-            } else if (resetFrameCounterKey > 0 && IsKeyPressed(resetFrameCounterKey, false)) {
+            } else if (edges.Pressed(resetFrameCounterKey)) {
                 ResetFrameCounter();
                 keyHandled = true;
-            } else if (cfg.framestepEnabled && IsKeyPressed(cfg.framestepPauseKey > 0 ? cfg.framestepPauseKey : VK_SPACE, false)) {
+            } else if (cfg.framestepEnabled && edges.Pressed(framestepPauseKey)) {
                 if (Framestep::IsEnabled()) {
                     (void)GameThread::Post(&FramestepTogglePauseCommand);
                     keyHandled = true;
                 }
-            } else if (cfg.framestepEnabled && IsKeyPressed(cfg.framestepStepKey > 0 ? cfg.framestepStepKey : 'P', false)) {
+            } else if (cfg.framestepEnabled && edges.Pressed(framestepStepKey)) {
                 if (Framestep::IsEnabled()) {
                     (void)GameThread::Post(&FramestepStepCommand);
                     keyHandled = true;
                 }
-            } else if (IsKeyPressed(VK_F9, false)) {
+            } else if (edges.Pressed(VK_F9)) {
                 autoJumpEnabled = !autoJumpEnabled;
                 DirectDrawHook::AddMessage(autoJumpEnabled ? "Auto-Jump: ON" : "Auto-Jump: OFF", "SYSTEM", RGB(255, 165, 0), 1500, 0, 100);
                 keyHandled = true;
-            } else if (IsKeyPressed(cfg.macroRecordKey > 0 ? cfg.macroRecordKey : 'I', false)) {
+            } else if (edges.Pressed(macroRecordKey)) {
                 if (GetCurrentGamePhase() == GamePhase::Match && AreCharactersInitialized()) {
                     if (Mission::Engine::Recorder::IsSessionActive()) {
                         Mission::Engine::Recorder::Advance();
@@ -872,7 +781,7 @@ void MonitorKeys() {
                     DirectDrawHook::AddMessage("Macro controls available only during Match", "MACRO", RGB(255, 180, 120), 900, 0, 120);
                 }
                 keyHandled = true;
-            } else if (IsKeyPressed(cfg.macroPlayKey > 0 ? cfg.macroPlayKey : 'O', false)) {
+            } else if (edges.Pressed(macroPlayKey)) {
                 if (GetCurrentGamePhase() == GamePhase::Match && AreCharactersInitialized()) {
                     if (Mission::Engine::Recorder::IsSessionActive()) {
                         DirectDrawHook::AddMessage("Macro playback is unavailable during mission authoring", "MISSION", RGB(255,200,120), 1200, 0, 120);
@@ -884,10 +793,10 @@ void MonitorKeys() {
                     DirectDrawHook::AddMessage("Macro controls available only during Match", "MACRO", RGB(255, 180, 120), 900, 0, 120);
                 }
                 keyHandled = true;
-            } else if (IsKeyPressed(cfg.macroSlotKey > 0 ? cfg.macroSlotKey : 'K', false)) {
+            } else if (edges.Pressed(macroSlotKey)) {
                 if (GetCurrentGamePhase() == GamePhase::Match && AreCharactersInitialized()) {
                     MacroController::NextSlot();
-                    DirectDrawHook::AddMessage((std::string("Macro: Slot ") + std::to_string(MacroController::GetCurrentSlot())).c_str(), "MACRO", RGB(230, 230, 120), 800, 0, 120);
+                    DirectDrawHook::AddMessage(I18n::TrFormat("Macro: Slot %d", MacroController::GetCurrentSlot()), "MACRO", RGB(230, 230, 120), 800, 0, 120);
                 } else {
                     DirectDrawHook::AddMessage("Macro controls available only during Match", "MACRO", RGB(255, 180, 120), 900, 0, 120);
                 }
@@ -897,37 +806,8 @@ void MonitorKeys() {
             }
 
             if (keyHandled) {
-                Sleep(100);
-          while (IsKeyPressed(teleportKey, true) || IsKeyPressed(recordKey, true) ||
-              (toggleTitleKey > 0 && IsKeyPressed(toggleTitleKey, true)) ||
-              (resetFrameCounterKey > 0 && IsKeyPressed(resetFrameCounterKey, true)) ||
-              IsKeyPressed(VK_F7, true) || IsKeyPressed(VK_F9, true) ||
-              IsKeyPressed(savestateSaveKey, true) || IsKeyPressed(savestateLoadKey, true) ||
-              IsKeyPressed(cfg.switchPlayersKey > 0 ? cfg.switchPlayersKey : 'L', true) ||
-              IsKeyPressed(cfg.macroRecordKey > 0 ? cfg.macroRecordKey : 'I', true) ||
-               IsKeyPressed(cfg.macroPlayKey > 0 ? cfg.macroPlayKey : 'O', true) ||
-              (cfg.framestepEnabled && IsKeyPressed(cfg.framestepPauseKey > 0 ? cfg.framestepPauseKey : VK_SPACE, true)) ||
-              (cfg.framestepEnabled && IsKeyPressed(cfg.framestepStepKey > 0 ? cfg.framestepStepKey : 'P', true))) {
-                    Sleep(10);
-                }
                 sleepMs = 16; idleLoops = 0;
             } else {
-                bool anyKbDown =
-                    ((GetAsyncKeyState(teleportKey) & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(recordKey) & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(configMenuKey) & 0x8000) != 0) ||
-                    (toggleTitleKey > 0 && ((GetAsyncKeyState(toggleTitleKey) & 0x8000) != 0)) ||
-                    (resetFrameCounterKey > 0 && ((GetAsyncKeyState(resetFrameCounterKey) & 0x8000) != 0)) ||
-                    ((GetAsyncKeyState(savestateSaveKey) & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(savestateLoadKey) & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(VK_F7) & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(VK_F9) & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(cfg.switchPlayersKey > 0 ? cfg.switchPlayersKey : 'L') & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(cfg.macroRecordKey > 0 ? cfg.macroRecordKey : 'I') & 0x8000) != 0) ||
-                    ((GetAsyncKeyState(cfg.macroPlayKey > 0 ? cfg.macroPlayKey : 'O') & 0x8000) != 0) ||
-                    (cfg.framestepEnabled && ((GetAsyncKeyState(cfg.framestepPauseKey > 0 ? cfg.framestepPauseKey : VK_SPACE) & 0x8000) != 0)) ||
-                    (cfg.framestepEnabled && ((GetAsyncKeyState(cfg.framestepStepKey > 0 ? cfg.framestepStepKey : 'P') & 0x8000) != 0)) ||
-                    ((GetAsyncKeyState(cfg.macroSlotKey > 0 ? cfg.macroSlotKey : 'K') & 0x8000) != 0);
                 auto anyControllerActive = [&]() -> bool {
                     unsigned mask = connectedMask;
                     if (mask == 0) return false;
@@ -944,7 +824,7 @@ void MonitorKeys() {
                 };
                 bool anyPadDown = anyControllerActive();
 
-                if (anyKbDown || anyPadDown) {
+                if (anyHotkeyHeld || anyPadDown) {
                     sleepMs = 16; idleLoops = 0;
                 } else {
                     if (++idleLoops > idleThreshold) {
@@ -1099,19 +979,27 @@ bool ReadKeyMappingsFromIni() {
             }
         }
     }
+    Config::SetEfzBoundVks(reservedVk);
     const Config::Settings& cfg = Config::GetSettings();
     struct NamedValue { const char* name; int value; };
     const NamedValue keyboardFunctions[] = {
-        {"Teleport", cfg.teleportKey}, {"Record Position", cfg.recordKey},
-        {"Savestate Save", cfg.savestateSaveKey},
-        {"Savestate Load", cfg.savestateLoadKey},
-        {"Switch Players", cfg.switchPlayersKey},
-        {"Macro Record", cfg.macroRecordKey},
-        {"Macro Play", cfg.macroPlayKey}, {"Macro Slot", cfg.macroSlotKey},
+        {"Menu", cfg.configMenuKey},
+        {"Teleport", Config::ResolveHotkey(cfg.teleportKey, '1')},
+        {"Record Position", Config::ResolveHotkey(cfg.recordKey, '2')},
+        {"Toggle Stats", Config::ResolveHotkey(cfg.toggleTitleKey, 0)},
+        {"Reset Frame Counter", Config::ResolveHotkey(cfg.resetFrameCounterKey, 0)},
+        {"Savestate Save", Config::ResolveHotkey(cfg.savestateSaveKey, 'U')},
+        {"Savestate Load", Config::ResolveHotkey(cfg.savestateLoadKey, 'J')},
+        {"Switch Players", Config::ResolveHotkey(cfg.switchPlayersKey, 'L')},
+        {"Macro Record", Config::ResolveHotkey(cfg.macroRecordKey, 'I')},
+        {"Macro Play", Config::ResolveHotkey(cfg.macroPlayKey, 'O')},
+        {"Macro Slot", Config::ResolveHotkey(cfg.macroSlotKey, 'K')},
         {"UI Accept", cfg.uiAcceptKey}, {"UI Refresh", cfg.uiRefreshKey},
         {"UI Exit", cfg.uiExitKey},
-        {"Framestep Pause", cfg.framestepPauseKey},
-        {"Framestep Step", cfg.framestepStepKey},
+        {"Framestep Pause", Config::ResolveHotkey(cfg.framestepPauseKey, VK_SPACE)},
+        {"Framestep Step", Config::ResolveHotkey(cfg.framestepStepKey, 'P')},
+        {"Swap Positions", cfg.swapCustomEnabled ? Config::ResolveHotkey(cfg.swapCustomKey, 0) : 0},
+        {"Stats Page Previous", '5'}, {"Stats Page Next", '6'}, {"Auto-Jump Toggle", VK_F9},
     };
     const NamedValue padFunctions[] = {
         {"Pad Teleport", cfg.gpTeleportButton},
@@ -1141,7 +1029,7 @@ bool ReadKeyMappingsFromIni() {
             appendConflict(std::string(keyboardFunctions[i].name) +
                            " uses EFZ key " + GetKeyName(value));
         }
-        if (value < 0) continue;
+        if (value <= 0) continue;
         for (std::size_t j = i + 1;
              j < sizeof(keyboardFunctions) / sizeof(keyboardFunctions[0]); ++j) {
             if (value == keyboardFunctions[j].value) {

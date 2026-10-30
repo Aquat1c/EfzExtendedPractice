@@ -148,6 +148,36 @@ void DrawSectionRule(ImDrawList* dl, float panelX, float y, float panelW, ImU32 
         col, 1.0f);
 }
 
+float TabBarWidth(const char* const* labels, int count) {
+    ImFont* bFont = BodyFont();
+    const float bPx = PxFromFont(bFont);
+    float totalW = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        totalW += MeasureTextW(bFont, bPx, labels[i]);
+        if (i + 1 < count) totalW += Scale::Get().tabGapX;
+    }
+    return totalW;
+}
+
+static float TabBarStartX(float x, float w, const char* const* labels, int count) {
+    const float startX = Scale::Snap(x + (w - TabBarWidth(labels, count)) * 0.5f);
+    return startX < x ? x : startX;
+}
+
+int TabBarIndexAt(float x, float w, const char* const* labels, int count, float pointX) {
+    if (!labels || count <= 0) return -1;
+    ImFont* bFont = BodyFont();
+    const float bPx = PxFromFont(bFont);
+    const float gap = Scale::Get().tabGapX;
+    float cursorX = TabBarStartX(x, w, labels, count);
+    for (int i = 0; i < count; ++i) {
+        const float tw = MeasureTextW(bFont, bPx, labels[i]);
+        if (pointX >= cursorX - gap * 0.5f && pointX < cursorX + tw + gap * 0.5f) return i;
+        cursorX = Scale::Snap(cursorX + tw + gap);
+    }
+    return -1;
+}
+
 void DrawTabBar(ImDrawList* dl, float x, float y, float w,
                 const char* const* labels, int count, int activeIdx,
                 int focusedIdx)
@@ -159,14 +189,7 @@ void DrawTabBar(ImDrawList* dl, float x, float y, float w,
     ImFont* bFont = BodyFont();
     const float bPx = PxFromFont(bFont);
 
-    float totalW = 0.0f;
-    for (int i = 0; i < count; ++i) {
-        totalW += MeasureTextW(bFont, bPx, labels[i]);
-        if (i + 1 < count) totalW += metrics.tabGapX;
-    }
-
-    float cursorX = Scale::Snap(x + (w - totalW) * 0.5f);
-    if (cursorX < x) cursorX = x;
+    float cursorX = TabBarStartX(x, w, labels, count);
 
     const float textY = CenterTextY(y, metrics.tabBarHeight, bPx);
 

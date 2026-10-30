@@ -4,18 +4,14 @@
 #include <dbghelp.h>
 #include <tlhelp32.h>
 
-#include <algorithm>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <eh.h>
 #include <exception>
-#include <fstream>
 #include <intrin.h>
 #include <stdlib.h>
-#include <string>
-#include <vector>
 
 #pragma intrinsic(_ReturnAddress)
 
@@ -23,32 +19,19 @@ namespace CrashHandler {
 
 namespace {
 
-using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE,
-                                          DWORD,
-                                          HANDLE,
-                                          MINIDUMP_TYPE,
-                                          PMINIDUMP_EXCEPTION_INFORMATION,
-                                          PMINIDUMP_USER_STREAM_INFORMATION,
-                                          PMINIDUMP_CALLBACK_INFORMATION);
-
 LONG g_installed = 0;
 LONG g_handlingCrash = 0;
+LONG g_firstChanceReporting = 0;
+LONG g_firstChanceReports = 0;
 HMODULE g_selfModule = nullptr;
 LPTOP_LEVEL_EXCEPTION_FILTER g_previousFilter = nullptr;
 PVOID g_vectoredHandler = nullptr;
 char g_debugLogPath[MAX_PATH] = {0};
 char g_crashLogPath[MAX_PATH] = {0};
 char g_dumpDirectory[MAX_PATH] = {0};
-LONG g_efzSymbolMapLoadState = 0;
 LONG g_dbgHelpSymbolState = 0;
 char g_dbgHelpSearchPath[2048] = {0};
 
-constexpr uintptr_t kEfzImageBase = 0x00400000;
-constexpr unsigned char kEfzSymbolPathXorKey = 0x5A;
-constexpr LONG kEfzSymbolMapStateNotStarted = 0;
-constexpr LONG kEfzSymbolMapStateLoading = 1;
-constexpr LONG kEfzSymbolMapStateReady = 2;
-constexpr LONG kEfzSymbolMapStateUnavailable = 3;
 constexpr LONG kDbgHelpStateNotStarted = 0;
 constexpr LONG kDbgHelpStateReady = 1;
 constexpr LONG kDbgHelpStateUnavailable = 2;
@@ -57,38 +40,19 @@ constexpr DWORD kSyntheticPureCallCode = 0xE0001002;
 constexpr DWORD kSyntheticTerminateCode = 0xE0001003;
 constexpr DWORD kSyntheticSignalBaseCode = 0xE0001100;
 constexpr const char* kFirstChanceCrashCaptureEnv = "EFZ_TM_CRASH_FIRST_CHANCE";
-constexpr const char* kSymbolWarmupEnv = "EFZ_TM_CRASH_SYMBOL_WARMUP";
 constexpr const char* kDetailedDumpEnv = "EFZ_TM_CRASH_DETAILED_DUMP";
 constexpr const char* kKeepAliveOnCrashEnv = "EFZ_TM_CRASH_KEEP_ALIVE";
 constexpr DWORD kCrashWatchdogTimeoutMs = 15000;
 constexpr DWORD kSyntheticWatchdogCode = 0xE0001004;
-const unsigned char kEfzSymbolMapPathBytes[] = {
-    0x3E, 0x60, 0x06, 0x3E, 0x3F, 0x2C, 0x06, 0x1F, 0x1C, 0x00, 0x05, 0x37,
-    0x35, 0x3E, 0x3E, 0x33, 0x34, 0x3D, 0x06, 0x37, 0x35, 0x3E, 0x05, 0x2A,
-    0x28, 0x35, 0x30, 0x3F, 0x39, 0x2E, 0x29, 0x06, 0x3F, 0x3C, 0x20, 0x77,
-    0x2E, 0x28, 0x3B, 0x33, 0x34, 0x33, 0x34, 0x3D, 0x77, 0x37, 0x35, 0x3E,
-    0x3F, 0x06, 0x3E, 0x3F, 0x39, 0x35, 0x37, 0x2A, 0x33, 0x36, 0x3B, 0x2E,
-    0x33, 0x35, 0x34, 0x29, 0x06, 0x3F, 0x3C, 0x20, 0x06, 0x3F, 0x3C, 0x20,
-    0x05, 0x37, 0x3F, 0x37, 0x35, 0x28, 0x33, 0x3B, 0x36, 0x05, 0x36, 0x3B,
-    0x2E, 0x3F, 0x29, 0x2E, 0x74, 0x39,
-};
-
-struct EfzFunctionEntry {
-    uintptr_t rva;
-    std::string name;
-};
-
-std::vector<EfzFunctionEntry> g_efzFunctionEntries;
+constexpr DWORD kCrashReportStartGraceMs = 2000;
+constexpr SIZE_T kCrashReportStackBytes = 1024 * 1024;
+constexpr LONG kMaxFirstChanceReports = 3;
 
 LONG WINAPI UnhandledCrashFilter(EXCEPTION_POINTERS* exceptionPointers);
 LONG CALLBACK VectoredCrashHandler(EXCEPTION_POINTERS* exceptionPointers);
 
-bool LoadEfzSymbolMapBestEffort();
-bool LookupEfzFunction(uintptr_t address, char* output, size_t outputSize);
 bool TryLookupDebugSymbol(uintptr_t address, char* output, size_t outputSize);
-bool DecodeEfzSymbolMapPath(char* output, size_t outputSize);
 bool IsEnvironmentFlagEnabled(const char* name);
-void EnsureEfzSymbolMapReadyForCrash();
 void FormatAddress(char* output, size_t outputSize, uintptr_t address);
 void WriteCrashReport(EXCEPTION_POINTERS* exceptionPointers, const char* source, const char* detail);
 void ReportSyntheticCrash(const char* source, DWORD code, uintptr_t preferredIp, const char* detail);
@@ -100,7 +64,6 @@ void __cdecl InvalidParameterCrashHandler(const wchar_t* expression,
 void __cdecl PureCallCrashHandler();
 void __cdecl TerminateCrashHandler();
 void __cdecl SignalCrashHandler(int signalNumber);
-DWORD WINAPI SymbolWarmupThreadProc(LPVOID param);
 DWORD WINAPI CrashWatchdogThreadProc(LPVOID param);
 void ArmCrashWatchdog(DWORD timeoutMs, DWORD exitCode);
 
@@ -407,41 +370,6 @@ bool FileExists(const char* path) {
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-bool CopyDirectoryName(char* output, size_t outputSize, const char* path) {
-    if (!output || outputSize == 0 || !path || !*path) {
-        return false;
-    }
-
-    output[0] = '\0';
-    _snprintf_s(output, outputSize, _TRUNCATE, "%s", path);
-    char* slash = output + lstrlenA(output);
-    while (slash > output && *slash != '\\' && *slash != '/') {
-        --slash;
-    }
-    if (*slash != '\\' && *slash != '/') {
-        output[0] = '\0';
-        return false;
-    }
-    *slash = '\0';
-    return output[0] != '\0';
-}
-
-bool CopyProjectRootFromEfzSymbolMap(char* output, size_t outputSize) {
-    char symbolPath[MAX_PATH] = {0};
-    char level1[MAX_PATH] = {0};
-    char level2[MAX_PATH] = {0};
-    char level3[MAX_PATH] = {0};
-    if (!DecodeEfzSymbolMapPath(symbolPath, sizeof(symbolPath))
-        || !CopyDirectoryName(level1, sizeof(level1), symbolPath)
-        || !CopyDirectoryName(level2, sizeof(level2), level1)
-        || !CopyDirectoryName(level3, sizeof(level3), level2)) {
-        return false;
-    }
-
-    _snprintf_s(output, outputSize, _TRUNCATE, "%s", level3);
-    return DirectoryExists(output);
-}
-
 void AppendSymbolSearchDirectory(char* searchPath, size_t searchPathSize, const char* candidate) {
     if (!searchPath || searchPathSize == 0 || !candidate || !*candidate || !DirectoryExists(candidate)) {
         return;
@@ -477,23 +405,6 @@ bool EnsureDbgHelpSymbolsReady() {
     char cwd[MAX_PATH] = {0};
     if (GetCurrentDirectoryA(MAX_PATH, cwd) != 0) {
         AppendSymbolSearchDirectory(searchPath, sizeof(searchPath), cwd);
-    }
-
-    char repoRoot[MAX_PATH] = {0};
-    if (CopyProjectRootFromEfzSymbolMap(repoRoot, sizeof(repoRoot))) {
-        char candidate[MAX_PATH] = {0};
-        _snprintf_s(candidate, sizeof(candidate), _TRUNCATE, "%s\\build_xp_win32", repoRoot);
-        AppendSymbolSearchDirectory(searchPath, sizeof(searchPath), candidate);
-        _snprintf_s(candidate, sizeof(candidate), _TRUNCATE, "%s\\build_xp_win32\\bin\\Release", repoRoot);
-        AppendSymbolSearchDirectory(searchPath, sizeof(searchPath), candidate);
-        _snprintf_s(candidate, sizeof(candidate), _TRUNCATE, "%s\\build_xp_win32\\Release", repoRoot);
-        AppendSymbolSearchDirectory(searchPath, sizeof(searchPath), candidate);
-        _snprintf_s(candidate, sizeof(candidate), _TRUNCATE, "%s\\build", repoRoot);
-        AppendSymbolSearchDirectory(searchPath, sizeof(searchPath), candidate);
-        _snprintf_s(candidate, sizeof(candidate), _TRUNCATE, "%s\\build\\bin\\Release", repoRoot);
-        AppendSymbolSearchDirectory(searchPath, sizeof(searchPath), candidate);
-        _snprintf_s(candidate, sizeof(candidate), _TRUNCATE, "%s\\build\\Release", repoRoot);
-        AppendSymbolSearchDirectory(searchPath, sizeof(searchPath), candidate);
     }
 
     SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_NO_PROMPTS);
@@ -565,304 +476,6 @@ bool TryLookupDebugSymbol(uintptr_t address, char* output, size_t outputSize) {
     }
 
     return true;
-}
-
-bool DecodeEfzSymbolMapPath(char* output, size_t outputSize) {
-    if (!output || outputSize <= sizeof(kEfzSymbolMapPathBytes)) {
-        return false;
-    }
-
-    for (size_t i = 0; i < sizeof(kEfzSymbolMapPathBytes); ++i) {
-        output[i] = static_cast<char>(kEfzSymbolMapPathBytes[i] ^ kEfzSymbolPathXorKey);
-    }
-    output[sizeof(kEfzSymbolMapPathBytes)] = '\0';
-    return true;
-}
-
-bool ParseHexAddressLine(const std::string& line, uintptr_t* addressOut) {
-    if (!addressOut) {
-        return false;
-    }
-
-    const size_t open = line.find('(');
-    const size_t close = line.find(')', open == std::string::npos ? 0 : open + 1);
-    if (open == std::string::npos || close == std::string::npos || close <= open + 1) {
-        return false;
-    }
-
-    const std::string token = line.substr(open + 1, close - open - 1);
-    if (token.empty()) {
-        return false;
-    }
-
-    char* end = nullptr;
-    const unsigned long parsed = std::strtoul(token.c_str(), &end, 16);
-    if (!end || *end != '\0') {
-        return false;
-    }
-
-    *addressOut = static_cast<uintptr_t>(parsed);
-    return true;
-}
-
-bool ExtractCommentLabel(const std::string& line, const char* prefix, std::string* out) {
-    if (!prefix || !out) {
-        return false;
-    }
-
-    const size_t position = line.find(prefix);
-    if (position == std::string::npos) {
-        return false;
-    }
-
-    std::string value = line.substr(position + std::strlen(prefix));
-    while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) {
-        value.pop_back();
-    }
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-        value.erase(value.begin());
-    }
-    if (value.empty()) {
-        return false;
-    }
-
-    *out = value;
-    return true;
-}
-
-bool IsGenericFunctionName(const std::string& value) {
-    return value.rfind("sub_", 0) == 0
-        || value.rfind("nullsub_", 0) == 0
-        || value == "StartAddress";
-}
-
-std::string ExtractSignatureFunctionName(const std::string& line) {
-    if (line.empty() || line[0] == ' ' || line[0] == '\t' || line[0] == '/' || line[0] == '*' || line[0] == '#') {
-        return std::string();
-    }
-
-    if (line.find(';') != std::string::npos || line.find('=') != std::string::npos) {
-        return std::string();
-    }
-
-    const size_t openParen = line.find('(');
-    if (openParen == std::string::npos || openParen == 0) {
-        return std::string();
-    }
-
-    const std::string leadingToken = line.substr(0, openParen);
-    if (leadingToken == "if " || leadingToken == "while " || leadingToken == "switch " || leadingToken == "for ") {
-        return std::string();
-    }
-
-    size_t nameEnd = openParen;
-    while (nameEnd > 0 && (line[nameEnd - 1] == ' ' || line[nameEnd - 1] == '\t' || line[nameEnd - 1] == '*')) {
-        --nameEnd;
-    }
-    if (nameEnd == 0) {
-        return std::string();
-    }
-
-    size_t nameStart = nameEnd;
-    while (nameStart > 0) {
-        const char ch = line[nameStart - 1];
-        const bool valid = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
-        if (!valid) {
-            break;
-        }
-        --nameStart;
-    }
-    if (nameStart == nameEnd) {
-        return std::string();
-    }
-
-    return line.substr(nameStart, nameEnd - nameStart);
-}
-
-void MaybeUpdateBestFunctionName(std::string* bestName, int* bestPriority, const std::string& candidate, int priority) {
-    if (!bestName || !bestPriority || candidate.empty()) {
-        return;
-    }
-
-    if (priority > *bestPriority) {
-        *bestName = candidate;
-        *bestPriority = priority;
-    }
-}
-
-bool LoadEfzFunctionMapFromFile(const char* path) {
-    if (!path || !*path) {
-        return false;
-    }
-
-    std::ifstream input(path);
-    if (!input.is_open()) {
-        return false;
-    }
-
-    std::vector<EfzFunctionEntry> parsedEntries;
-    parsedEntries.reserve(1536);
-
-    uintptr_t currentAddress = 0;
-    std::string bestName;
-    int bestPriority = 0;
-    bool hasCurrentAddress = false;
-
-    auto finalizeCurrent = [&]() {
-        if (!hasCurrentAddress || currentAddress < kEfzImageBase) {
-            hasCurrentAddress = false;
-            currentAddress = 0;
-            bestName.clear();
-            bestPriority = 0;
-            return;
-        }
-
-        if (bestName.empty()) {
-            char fallback[32] = {0};
-            _snprintf_s(fallback, sizeof(fallback), _TRUNCATE, "sub_%08lX", static_cast<unsigned long>(currentAddress));
-            bestName = fallback;
-        }
-
-        parsedEntries.push_back({currentAddress - kEfzImageBase, bestName});
-        hasCurrentAddress = false;
-        currentAddress = 0;
-        bestName.clear();
-        bestPriority = 0;
-    };
-
-    std::string line;
-    while (std::getline(input, line)) {
-        uintptr_t parsedAddress = 0;
-        if (line.rfind("//----- (", 0) == 0 && ParseHexAddressLine(line, &parsedAddress)) {
-            finalizeCurrent();
-            hasCurrentAddress = true;
-            currentAddress = parsedAddress;
-
-            std::string inlineComment;
-            if (ExtractCommentLabel(line, "// Original name:", &inlineComment)
-                || ExtractCommentLabel(line, "// Function name:", &inlineComment)
-                || ExtractCommentLabel(line, "// New name:", &inlineComment)
-                || ExtractCommentLabel(line, "// Old name:", &inlineComment)) {
-                const int priority = IsGenericFunctionName(inlineComment) ? 1 : 3;
-                MaybeUpdateBestFunctionName(&bestName, &bestPriority, inlineComment, priority);
-            }
-            continue;
-        }
-
-        if (!hasCurrentAddress) {
-            continue;
-        }
-
-        std::string commentName;
-        if (ExtractCommentLabel(line, "// New name:", &commentName) || ExtractCommentLabel(line, "// Old name:", &commentName)) {
-            MaybeUpdateBestFunctionName(&bestName, &bestPriority, commentName, 4);
-            continue;
-        }
-        if (ExtractCommentLabel(line, "// Function name:", &commentName) || ExtractCommentLabel(line, "// Original name:", &commentName)) {
-            const int priority = IsGenericFunctionName(commentName) ? 1 : 2;
-            MaybeUpdateBestFunctionName(&bestName, &bestPriority, commentName, priority);
-            continue;
-        }
-
-        const std::string signatureName = ExtractSignatureFunctionName(line);
-        if (!signatureName.empty()) {
-            const int priority = IsGenericFunctionName(signatureName) ? 1 : 5;
-            MaybeUpdateBestFunctionName(&bestName, &bestPriority, signatureName, priority);
-        }
-    }
-
-    finalizeCurrent();
-
-    if (parsedEntries.empty()) {
-        return false;
-    }
-
-    std::sort(parsedEntries.begin(), parsedEntries.end(), [](const EfzFunctionEntry& left, const EfzFunctionEntry& right) {
-        return left.rva < right.rva;
-    });
-
-    g_efzFunctionEntries.swap(parsedEntries);
-    return true;
-}
-
-bool LoadEfzSymbolMapBestEffort() {
-    bool loaded = false;
-    char resolvedPath[MAX_PATH] = {0};
-    const bool decoded = DecodeEfzSymbolMapPath(resolvedPath, sizeof(resolvedPath));
-    const bool present = decoded && FileExists(resolvedPath);
-    AppendFormat("[CRASH] Symbol map probe: path=%s present=%s",
-                 decoded ? resolvedPath : "<decode-failed>",
-                 present ? "yes" : "no");
-    if (present) {
-        loaded = LoadEfzFunctionMapFromFile(resolvedPath);
-    }
-
-    if (loaded) {
-        AppendFormat("[CRASH] Loaded EFZ symbol map (%lu entries)",
-                     static_cast<unsigned long>(g_efzFunctionEntries.size()));
-    } else {
-        AppendLine("[CRASH] EFZ symbol map unavailable; crash logs will use module+offset only");
-    }
-    return loaded;
-}
-
-void EnsureEfzSymbolMapReadyForCrash() {
-    // Never parse the symbol map synchronously mid-crash; the warmup thread owns the load.
-    const LONG state = InterlockedCompareExchange(&g_efzSymbolMapLoadState, 0, 0);
-    if (state == kEfzSymbolMapStateNotStarted || state == kEfzSymbolMapStateLoading) {
-        InterlockedCompareExchange(&g_efzSymbolMapLoadState,
-                                   kEfzSymbolMapStateUnavailable,
-                                   state);
-    }
-}
-
-bool LookupEfzFunction(uintptr_t address, char* output, size_t outputSize) {
-    if (!output || outputSize == 0) {
-        return false;
-    }
-
-    output[0] = '\0';
-    if (InterlockedCompareExchange(&g_efzSymbolMapLoadState, 0, 0) != kEfzSymbolMapStateReady || g_efzFunctionEntries.empty()) {
-        return false;
-    }
-
-    HMODULE exeModule = GetModuleHandleA(nullptr);
-    if (!exeModule) {
-        return false;
-    }
-
-    const uintptr_t exeBase = reinterpret_cast<uintptr_t>(exeModule);
-    if (address < exeBase) {
-        return false;
-    }
-
-    const uintptr_t rva = address - exeBase;
-    auto it = std::upper_bound(g_efzFunctionEntries.begin(), g_efzFunctionEntries.end(), rva,
-                               [](uintptr_t value, const EfzFunctionEntry& entry) {
-                                   return value < entry.rva;
-                               });
-    if (it == g_efzFunctionEntries.begin()) {
-        return false;
-    }
-
-    --it;
-    const uintptr_t delta = rva - it->rva;
-    if (delta == 0) {
-        _snprintf_s(output, outputSize, _TRUNCATE, "%s", it->name.c_str());
-    } else {
-        _snprintf_s(output, outputSize, _TRUNCATE, "%s+0x%08lX", it->name.c_str(), static_cast<unsigned long>(delta));
-    }
-    return true;
-}
-
-DWORD WINAPI SymbolWarmupThreadProc(LPVOID param) {
-    (void)param;
-
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
-    const bool loaded = LoadEfzSymbolMapBestEffort();
-    InterlockedExchange(&g_efzSymbolMapLoadState,
-                        loaded ? kEfzSymbolMapStateReady : kEfzSymbolMapStateUnavailable);
-    return 0;
 }
 
 struct CrashWatchdogParams {
@@ -975,7 +588,11 @@ bool IsWindowsSystemPath(const char* path) {
     if (!path || !*path) {
         return false;
     }
-    return _strnicmp(path, "C:\\Windows\\", 11) == 0;
+    char windowsDir[MAX_PATH] = {0};
+    const UINT length = GetSystemWindowsDirectoryA(windowsDir, MAX_PATH);
+    return length != 0 && length < MAX_PATH
+        && _strnicmp(path, windowsDir, length) == 0
+        && IsPathSeparator(path[length]);
 }
 
 const char* FaultTargetSummary(const MEMORY_BASIC_INFORMATION& mbi) {
@@ -1331,14 +948,11 @@ void FormatAddress(char* output, size_t outputSize, uintptr_t address) {
 
     const uintptr_t base = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
     char functionInfo[256] = {0};
-    const bool haveEfzFunction = mbi.AllocationBase == GetModuleHandleA(nullptr)
-        && LookupEfzFunction(address, functionInfo, sizeof(functionInfo));
-    const bool haveDebugSymbol = !haveEfzFunction
-        && TryLookupDebugSymbol(address, functionInfo, sizeof(functionInfo));
+    const bool haveDebugSymbol = TryLookupDebugSymbol(address, functionInfo, sizeof(functionInfo));
     _snprintf_s(output,
                 outputSize,
                 _TRUNCATE,
-                (haveEfzFunction || haveDebugSymbol)
+                haveDebugSymbol
                     ? "0x%08lX (%s+0x%08lX base=0x%08lX func=%s)"
                     : "0x%08lX (%s+0x%08lX base=0x%08lX)",
                 static_cast<unsigned long>(address),
@@ -1523,7 +1137,7 @@ void LogFrameChain(uintptr_t framePointer) {
     }
 }
 
-void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers) {
+void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers, DWORD faultThreadId) {
     if (!g_dumpDirectory[0]) {
         AppendLine("[CRASH] Minidump skipped because dump directory is unavailable");
         return;
@@ -1545,19 +1159,6 @@ void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers) {
                 static_cast<unsigned int>(st.wSecond),
                 static_cast<unsigned int>(st.wMilliseconds));
 
-    HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
-    if (!dbghelp) {
-        AppendFormat("[CRASH] Failed to load dbghelp.dll (error=%lu)", static_cast<unsigned long>(GetLastError()));
-        return;
-    }
-
-    auto miniDumpWriteDump = reinterpret_cast<MiniDumpWriteDumpFn>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
-    if (!miniDumpWriteDump) {
-        AppendLine("[CRASH] dbghelp.dll does not export MiniDumpWriteDump");
-        FreeLibrary(dbghelp);
-        return;
-    }
-
     HANDLE dumpFile = CreateFileA(dumpPath,
                                   GENERIC_WRITE,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -1569,12 +1170,11 @@ void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers) {
         AppendFormat("[CRASH] Failed to create minidump file %s (error=%lu)",
                      dumpPath,
                      static_cast<unsigned long>(GetLastError()));
-        FreeLibrary(dbghelp);
         return;
     }
 
     MINIDUMP_EXCEPTION_INFORMATION exceptionInfo = {};
-    exceptionInfo.ThreadId = GetCurrentThreadId();
+    exceptionInfo.ThreadId = faultThreadId;
     exceptionInfo.ExceptionPointers = exceptionPointers;
     exceptionInfo.ClientPointers = FALSE;
 
@@ -1596,7 +1196,7 @@ void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers) {
             MiniDumpWithUnloadedModules);
     }
 
-    BOOL ok = miniDumpWriteDump(GetCurrentProcess(),
+    BOOL ok = MiniDumpWriteDump(GetCurrentProcess(),
                                 GetCurrentProcessId(),
                                 dumpFile,
                                 detailedType,
@@ -1605,7 +1205,7 @@ void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers) {
                                 nullptr);
     DWORD lastError = ok ? ERROR_SUCCESS : GetLastError();
     if (!ok) {
-        ok = miniDumpWriteDump(GetCurrentProcess(),
+        ok = MiniDumpWriteDump(GetCurrentProcess(),
                                GetCurrentProcessId(),
                                dumpFile,
                                MiniDumpNormal,
@@ -1619,7 +1219,6 @@ void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers) {
         }
     }
     CloseHandle(dumpFile);
-    FreeLibrary(dbghelp);
 
     if (ok) {
         AppendFormat("[CRASH] Minidump written to %s", dumpPath);
@@ -1631,7 +1230,7 @@ void TryWriteMiniDump(EXCEPTION_POINTERS* exceptionPointers) {
     }
 }
 
-void WriteCrashReport(EXCEPTION_POINTERS* exceptionPointers, const char* source, const char* detail) {
+void RunCrashReport(EXCEPTION_POINTERS* exceptionPointers, const char* source, const char* detail, DWORD faultThreadId) {
     SYSTEMTIME st = {};
     GetLocalTime(&st);
     AppendLine("========================================");
@@ -1645,7 +1244,7 @@ void WriteCrashReport(EXCEPTION_POINTERS* exceptionPointers, const char* source,
                  static_cast<unsigned int>(st.wMilliseconds));
     AppendFormat("[CRASH] ProcessId=%lu ThreadId=%lu",
                  static_cast<unsigned long>(GetCurrentProcessId()),
-                 static_cast<unsigned long>(GetCurrentThreadId()));
+                 static_cast<unsigned long>(faultThreadId));
     AppendFormat("[CRASH] Source=%s", source && *source ? source : "UnhandledExceptionFilter");
     if (detail && *detail) {
         AppendFormat("[CRASH] Detail=%s", detail);
@@ -1659,7 +1258,15 @@ void WriteCrashReport(EXCEPTION_POINTERS* exceptionPointers, const char* source,
         return;
     }
 
-    EnsureEfzSymbolMapReadyForCrash();
+    if (exceptionPointers->ExceptionRecord) {
+        AppendFormat("[CRASH] Code=0x%08lX (%s) address=0x%08lX",
+                     static_cast<unsigned long>(exceptionPointers->ExceptionRecord->ExceptionCode),
+                     ExceptionCodeName(exceptionPointers->ExceptionRecord->ExceptionCode),
+                     static_cast<unsigned long>(reinterpret_cast<uintptr_t>(exceptionPointers->ExceptionRecord->ExceptionAddress)));
+    }
+
+    // Before any symbol work: symbol loading can stall until the watchdog fires.
+    TryWriteMiniDump(exceptionPointers, faultThreadId);
 
     LogCrashAnalysisSummary(exceptionPointers);
     LogExceptionRecord(exceptionPointers->ExceptionRecord);
@@ -1693,8 +1300,56 @@ void WriteCrashReport(EXCEPTION_POINTERS* exceptionPointers, const char* source,
 #endif
 
     LogLoadedModules();
-    TryWriteMiniDump(exceptionPointers);
     AppendLine("========================================");
+}
+
+// Static: the faulting thread may have no stack left. g_handlingCrash admits one request.
+struct CrashReportRequest {
+    EXCEPTION_POINTERS* pointers;
+    const char* source;
+    const char* detail;
+    DWORD faultThreadId;
+    LONG claimed;
+};
+CrashReportRequest g_reportRequest = {};
+
+DWORD WINAPI CrashReportThreadProc(LPVOID) {
+    if (InterlockedCompareExchange(&g_reportRequest.claimed, 1, 0) == 0) {
+        RunCrashReport(g_reportRequest.pointers,
+                       g_reportRequest.source,
+                       g_reportRequest.detail,
+                       g_reportRequest.faultThreadId);
+    }
+    return 0;
+}
+
+void WriteCrashReport(EXCEPTION_POINTERS* exceptionPointers, const char* source, const char* detail) {
+    const DWORD faultThreadId = GetCurrentThreadId();
+    g_reportRequest.pointers = exceptionPointers;
+    g_reportRequest.source = source;
+    g_reportRequest.detail = detail;
+    g_reportRequest.faultThreadId = faultThreadId;
+
+    HANDLE thread = CreateThread(nullptr,
+                                 kCrashReportStackBytes,
+                                 &CrashReportThreadProc,
+                                 nullptr,
+                                 STACK_SIZE_PARAM_IS_A_RESERVATION,
+                                 nullptr);
+    if (thread) {
+        // A new thread cannot start while this thread holds the loader lock; report inline then.
+        const bool finished = WaitForSingleObject(thread, kCrashReportStartGraceMs) == WAIT_OBJECT_0;
+        const bool helperOwnsReport = finished
+            || InterlockedCompareExchange(&g_reportRequest.claimed, 1, 0) != 0;
+        if (helperOwnsReport && !finished) {
+            WaitForSingleObject(thread, kCrashWatchdogTimeoutMs);
+        }
+        CloseHandle(thread);
+        if (helperOwnsReport) {
+            return;
+        }
+    }
+    RunCrashReport(exceptionPointers, source, detail, faultThreadId);
 }
 
 LONG CallPreviousFilter(EXCEPTION_POINTERS* exceptionPointers) {
@@ -1738,10 +1393,21 @@ LONG CALLBACK VectoredCrashHandler(EXCEPTION_POINTERS* exceptionPointers) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    if (InterlockedCompareExchange(&g_handlingCrash, 1, 0) == 0) {
-        WriteCrashReport(exceptionPointers,
-                         "VectoredExceptionHandler",
-                         "Fatal SEH candidate captured before the top-level filter; another layer may still intercept termination");
+    // The top-level filter reports overflows from its own stack; this one runs on the faulting stack.
+    if (exceptionPointers->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // Caught probes fault here too, so never latch g_handlingCrash. Faults from this report are skipped.
+    if (InterlockedCompareExchange(&g_handlingCrash, 0, 0) == 0
+        && InterlockedCompareExchange(&g_firstChanceReporting, 1, 0) == 0) {
+        if (InterlockedIncrement(&g_firstChanceReports) <= kMaxFirstChanceReports) {
+            RunCrashReport(exceptionPointers,
+                           "VectoredExceptionHandler",
+                           "First-chance fault; it may still be handled, so this does not mean the game crashed",
+                           GetCurrentThreadId());
+        }
+        InterlockedExchange(&g_firstChanceReporting, 0);
     }
 
     return EXCEPTION_CONTINUE_SEARCH;
@@ -1774,24 +1440,10 @@ void Install(HMODULE selfModule) {
     AppendDiagnosticFormat("[CRASH]   debugLog=%s", g_debugLogPath[0] ? g_debugLogPath : "<unavailable>");
     AppendDiagnosticFormat("[CRASH]   crashLog=%s", g_crashLogPath[0] ? g_crashLogPath : "<unavailable>");
     AppendDiagnosticFormat("[CRASH]   dumpDir=%s", g_dumpDirectory[0] ? g_dumpDirectory : "<unavailable>");
-    AppendDiagnosticFormat("[CRASH]   firstChanceVEH=%s symbolWarmup=%s detailedDump=%s keepAlive=%s",
+    AppendDiagnosticFormat("[CRASH]   firstChanceVEH=%s detailedDump=%s keepAlive=%s",
                            IsEnvironmentFlagEnabled(kFirstChanceCrashCaptureEnv) ? "on" : "off",
-                           IsEnvironmentFlagEnabled(kSymbolWarmupEnv) ? "on" : "off",
                            IsEnvironmentFlagEnabled(kDetailedDumpEnv) ? "on" : "off",
                            IsEnvironmentFlagEnabled(kKeepAliveOnCrashEnv) ? "on" : "off");
-
-    // Probe presence only; the decoded path must not leak into end-user logs.
-    char efzMapProbe[MAX_PATH] = {0};
-    if (DecodeEfzSymbolMapPath(efzMapProbe, sizeof(efzMapProbe))) {
-        const bool present = FileExists(efzMapProbe);
-        if (present) {
-            AppendDiagnosticLine("[CRASH]   efzSymbolMap=available (parsing deferred to warmup thread)");
-        } else {
-            InterlockedExchange(&g_efzSymbolMapLoadState, kEfzSymbolMapStateUnavailable);
-        }
-    } else {
-        InterlockedExchange(&g_efzSymbolMapLoadState, kEfzSymbolMapStateUnavailable);
-    }
 
     char selfDllPath[MAX_PATH] = {0};
     if (g_selfModule && GetModuleFileNameA(g_selfModule, selfDllPath, MAX_PATH)) {
@@ -1809,26 +1461,6 @@ void Install(HMODULE selfModule) {
                                selfPdbPath,
                                FileExists(selfPdbPath) ? "yes" : "no");
     }
-}
-
-void WarmupSymbolMaps() {
-    if (!IsEnvironmentFlagEnabled(kSymbolWarmupEnv)) {
-        return;
-    }
-
-    if (InterlockedCompareExchange(&g_efzSymbolMapLoadState,
-                                   kEfzSymbolMapStateLoading,
-                                   kEfzSymbolMapStateNotStarted) != kEfzSymbolMapStateNotStarted) {
-        return;
-    }
-
-    HANDLE thread = CreateThread(nullptr, 0, &SymbolWarmupThreadProc, nullptr, 0, nullptr);
-    if (!thread) {
-        InterlockedExchange(&g_efzSymbolMapLoadState, kEfzSymbolMapStateNotStarted);
-        return;
-    }
-
-    CloseHandle(thread);
 }
 
 } // namespace CrashHandler

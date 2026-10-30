@@ -64,8 +64,13 @@ std::vector<Practice::PatchDescriptor> QualifiedSites(const Practice::PatchModul
 }
 
 int ApplyFinalMemoryHPBypass() {
-    if (g_onlineModeActive.load()) return 0;
     std::lock_guard<std::mutex> lock(g_fmMutex);
+    // Gates under the mutex: an apply that loses it to ForceRestore must see the published boundary.
+    // Raw screen too: the debounced phase still reads Match just after a battle exit.
+    if (!g_featuresEnabled.load(std::memory_order_acquire) || !IsPracticeContext()
+        || GetCurrentGamePhase() != GamePhase::Match || !IsInGameplayState()) {
+        return 0;
+    }
     Practice::PatchModule module{};
     if (!Practice::GetQualifiedMemorialImage(module)) {
         static bool reported = false;

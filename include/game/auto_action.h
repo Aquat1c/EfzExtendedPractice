@@ -96,6 +96,11 @@ extern std::atomic<short> g_lastP2MoveID;
 void ProcessAutoControlRestore();
 void ClearAllAutoActionTriggers();
 void InvalidateAutoActionCharacterCaches(const char* reason);
+// Mod state only; false when the state lock is busy, so the caller retries.
+bool DropPrearmWorkAtPracticeBoundary();
+// P1 processCharacterInput, once per engine tick. Strict no-op outside a Practice
+// battle; only ever reads game state. Defined in frame_advantage.cpp.
+void OnEngineTick();
 
 // Cancels in-progress executions while preserving user-configured triggers.
 void CancelAutoActionsAndMacros();

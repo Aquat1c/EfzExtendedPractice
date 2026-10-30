@@ -63,6 +63,8 @@ namespace PauseIntegration {
     bool IsPracticePaused();
     bool IsGameSpeedFrozen();
     bool IsPausedOrFrozen();
+    // Published before the flag flips, so a snapshot on another thread can tell the menu's pause from a real one.
+    bool IsPracticePausedByMenu();
 
     // Practice step counter (+0xB0), incremented each native Revival step while paused; outCounter unchanged on failure.
     bool ReadStepCounter(uint32_t &outCounter);
@@ -84,11 +86,14 @@ namespace PauseIntegration {
 
     // Single owner of the 10 efz.exe visual-update sites NOPed by the vanilla
     // pause. Bytes are NOPed while any user holds them and restored to the
-    // known originals when the last user releases. Refuses to patch unless
-    // every site holds its known original bytes.
+    // known originals when the last user releases. Refuses to patch outside
+    // Practice or unless every site holds its known original bytes.
     enum class VisualFreezeUser : uint8_t {
         Menu = 1u << 0,
         Framestep = 1u << 1,
     };
     bool SetVisualFreeze(VisualFreezeUser user, bool freeze);
+    // Practice boundary: drops every user and writes the originals back. Code
+    // bytes only, so it is safe after netplay is published.
+    void RestoreVisualSitesAtBoundary(const char* reason);
 }

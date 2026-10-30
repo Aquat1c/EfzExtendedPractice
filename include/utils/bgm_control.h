@@ -26,7 +26,6 @@ void LogBGMState(uintptr_t gameStatePtr);
 // Suppression/toggle interfaces are ABI stubs only.
 void SetBGMSuppressed(bool suppress); // no-op
 bool IsBGMSuppressed();               // always false
-bool InstallBGMHook(uintptr_t efzBase);
 
 // Last logical track observed at playBackgroundMusic; 0xFFFF = none observed.
 unsigned short GetLastBgmTrack();

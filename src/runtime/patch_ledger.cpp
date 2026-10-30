@@ -6,6 +6,10 @@
 namespace Practice {
 namespace {
 constexpr uint32_t kExecutableWritable = 0x40; // PAGE_EXECUTE_READWRITE
+// An image page reads back as EXECUTE_WRITECOPY (0x80) until its first write.
+bool IsExecutableWritable(uint32_t protection) {
+    return protection == kExecutableWritable || protection == 0x80;
+}
 bool SameModuleIdentity(const PatchModule& a, const PatchModule& b) {
     return a.base == b.base && a.incarnation == b.incarnation;
 }
@@ -53,7 +57,8 @@ bool PatchLedger::PreparePages(Site& site) {
             if (found->second.original.size != region.size ||
                 found->second.original.allocationBase != region.allocationBase ||
                 found->second.protectionPending ||
-                found->second.original.protection != region.protection) {
+                (found->second.original.protection != region.protection &&
+                 !IsExecutableWritable(region.protection))) {
                 site.error = PatchError::PendingRestoration;
                 return false;
             }
@@ -78,9 +83,9 @@ bool PatchLedger::MakeWritable(Site& site) {
             site.error = PatchError::RegionUnavailable;
             return false;
         }
-        const uint32_t expected = page.protectionPending
-            ? kExecutableWritable : page.original.protection;
-        if (observed.protection != expected) {
+        // A peer may leave the page executable-writable; callers already verified our bytes.
+        if (!IsExecutableWritable(observed.protection) &&
+            (page.protectionPending || observed.protection != page.original.protection)) {
             site.error = PatchError::ProtectionFailed;
             return false;
         }
@@ -107,7 +112,7 @@ bool PatchLedger::RestoreProtections(Site& site) {
         if (!backend_.QueryRegion(address, observed) ||
             observed.allocationBase != page.original.allocationBase ||
             observed.size != page.original.size ||
-            observed.protection != kExecutableWritable ||
+            !IsExecutableWritable(observed.protection) ||
             !backend_.Protect(page.original, page.original.protection, previous)) {
             site.error = PatchError::ProtectionFailed;
             ok = false;

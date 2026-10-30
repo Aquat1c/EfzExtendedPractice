@@ -1,4 +1,5 @@
 #include "utils/minhook_utils.h"
+#include "../include/game/game_state.h"
 #include "../../include/game/practice_hotkey_gate.h"
 #include "../../include/game/practice_offsets.h"
 #include "../../include/game/efzrevival_addrs.h" // version-aware RVAs
@@ -64,7 +65,7 @@ namespace {
     uintptr_t __fastcall HookedHotkeyEval(void* self, void* edxValue, int a2) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedHotkeyEval>());
     if (!hookExecution.Admitted()) return oHotkeyEval ? oHotkeyEval(self, edxValue, a2) : 0;
-        if (IsNetplaySuspendActive()) {
+        if (!PracticeBattleHooksOpen()) {
             // Netplay calls this on a Practice object it is about to delete; never gate it.
             return oHotkeyEval ? oHotkeyEval(self, edxValue, a2) : 0;
         }

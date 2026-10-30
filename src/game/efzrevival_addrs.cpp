@@ -129,7 +129,8 @@ uintptr_t EFZ_RVA_RefreshMappingBlock() {
         EfzRevivalVersion v = GetEfzRevivalVersion();
         if (IsFSubframe()) r = 0x0075370; // 1.02f subframe (ctx -> Practice)
         else if (IsFClassic()) r = 0x0075130; // 1.02f classic (ctx -> Practice)
-        else if (IsE()) r = 0x0075100;  // e/g
+        else if (v == EfzRevivalVersion::Revival102g) r = 0x00753A0; // 1.02g sub_100753A0
+        else if (IsE()) r = 0x0075100;  // 1.02e
         else if (IsI()) r = 0x00760F0;  // 1.02i (ctx -> Practice)
         else if (IsH()) r = 0x0075B50;  // 1.02h (ctx -> Practice)
     LogAddrOnce("RefreshMappingBlock", r);

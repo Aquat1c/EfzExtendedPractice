@@ -16,6 +16,11 @@ void Require(bool value, const char* message) {
 int main() {
     using namespace GenericPadAxisPolicy;
 
+    Require(UsesZRzRightStick(0x054C, 0x09CC) && UsesZRzRightStick(0x054C, 0x0CE6),
+            "DS4/DualSense not recognized as Z/Rz right stick pads");
+    Require(!UsesZRzRightStick(0x054C, 0x0268) && !UsesZRzRightStick(0x045E, 0x09CC),
+            "unknown pad took the Sony axis layout");
+
     AxisPairCalibration parked;
     Require(!ObserveNeutral(parked, -32768, -32768),
             "parked endpoint was accepted as an idle stick centre");

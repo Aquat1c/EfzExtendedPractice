@@ -3,10 +3,10 @@
 // Cross-mod overlay rendering ABI.
 //
 // The host (EfzExtendedPractice) owns the single Direct3D9 EndScene hook. Each frame,
-// on the game's 640x480 render target and after its own ImGui pass, it invokes every
-// registered renderer, then calls the original EndScene. Other mods register a
-// callback here instead of hooking EndScene themselves, so only one mod owns the
-// device hook (avoids two mods hooking each other's EndScene).
+// on the game's 640x480 render target, it invokes every registered renderer before its
+// own ImGui pass, so the host's overlays and menu draw on top; the original EndScene
+// runs last. Other mods register a callback here instead of hooking EndScene themselves,
+// so only one mod owns the device hook (avoids two mods hooking each other's EndScene).
 //
 // The device is passed as void* (cast to IDirect3DDevice9*). Callbacks run on the
 // render thread inside EndScene: keep them fast and self-contained, and save/restore

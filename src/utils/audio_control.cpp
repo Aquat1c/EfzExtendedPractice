@@ -9,7 +9,7 @@
 #include "../include/core/memory.h"
 #include "../include/utils/debug_log.h"
 #include "../include/utils/utilities.h"
-#include "../3rdparty/minhook/include/MinHook.h"
+#include "../include/utils/minhook_utils.h"
 
 #include <algorithm>
 #include <array>
@@ -48,6 +48,14 @@ constexpr std::array<uint8_t, 6> kVanillaPlaySoundBufferPrologue = {
 constexpr std::array<uint8_t, 7> kVanillaSetSoundVolumePrologue = {
     0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC,
 };
+// playBackgroundMusic, loadSoundEffects and loadCharacterSounds share this frame setup.
+constexpr std::array<uint8_t, 6> kVanillaBgmAndLoadPrologue = {
+    0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x34,
+};
+constexpr std::array<uint8_t, 6> kVanillaFadeWithSoundPrologue = {
+    0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14,
+};
+constexpr char kAudioHookOwner[] = "[AUDIO][HOOK]";
 
 constexpr uintptr_t kSoundManagerOffset = 0x8;
 constexpr uintptr_t kDirectSoundObjectOffset = 0xC;
@@ -142,6 +150,9 @@ DWORD g_vanillaHostCandidateSince = 0;
 std::string g_vanillaHostCandidateParent;
 
 constexpr DWORD kVanillaHostStabilityMs = 2000;
+// A launcher's identity does not change, and each probe is a Toolhelp snapshot.
+constexpr DWORD kVanillaHostUnprovenLimitMs = 60000;
+DWORD g_vanillaHostUnprovenSince = 0;
 
 void ApplyBgmVolumeToGameSystem(uintptr_t gameSystemPtr, const AudioSettingsView& view);
 void ApplyCommonSeVolumeToGameSystem(uintptr_t gameSystemPtr, const AudioSettingsView& view);
@@ -491,6 +502,12 @@ void ResetVanillaHostCandidate() {
     g_vanillaHostCandidateParent.clear();
 }
 
+void NoteVanillaHostUnproven() {
+    if (!g_vanillaHostUnprovenSince) {
+        g_vanillaHostUnprovenSince = GetTickCount();
+    }
+}
+
 bool IsKnownStandaloneParent(const std::string& imageName) {
     constexpr const char* kStandaloneParents[] = {
         "explorer.exe",
@@ -528,16 +545,19 @@ bool CanFinalizeVanillaAudioOwnership(std::string& reason) {
     std::string parentImage;
     if (!QueryParentProcessImageName(parentImage)) {
         ResetVanillaHostCandidate();
+        NoteVanillaHostUnproven();
         reason = "the parent process could not be identified, so standalone ownership is unproven";
         return false;
     }
     if (_stricmp(parentImage.c_str(), "EfzRevival.exe") == 0) {
         ResetVanillaHostCandidate();
+        NoteVanillaHostUnproven();
         reason = "efz.exe was launched by EfzRevival.exe";
         return false;
     }
     if (!IsKnownStandaloneParent(parentImage)) {
         ResetVanillaHostCandidate();
+        NoteVanillaHostUnproven();
         reason = "the parent process is not a recognized standalone launcher (parent="
             + parentImage + ")";
         return false;
@@ -1159,110 +1179,71 @@ void** OriginalStorage(T* storage) {
     return reinterpret_cast<void**>(storage);
 }
 
-bool RemoveAudioHookAndClearOriginal(PendingAudioHook& hook, const char* operation) {
+// The registry keeps a retained trampoline callable until it is drained; its original pointer must stay set.
+bool RetireAudioHook(PendingAudioHook& hook) {
     if (!hook.target) {
         return hook.original == nullptr || *hook.original == nullptr;
     }
-
-    const MH_STATUS disableStatus = MH_DisableHook(hook.target);
-    if (disableStatus != MH_OK
-        && disableStatus != MH_ERROR_DISABLED
-        && disableStatus != MH_ERROR_NOT_CREATED) {
-        std::ostringstream oss;
-        oss << "[AUDIO][HOOK] " << (operation ? operation : "cleanup")
-            << " disable failed at " << (hook.name ? hook.name : "<unnamed>")
-            << " target=0x" << std::hex << reinterpret_cast<uintptr_t>(hook.target)
-            << " status=" << std::dec << static_cast<int>(disableStatus)
-            << "; attempting removal while retaining the original pointer";
-        LogOut(oss.str(), true);
-    }
-
-    const MH_STATUS removeStatus = MH_RemoveHook(hook.target);
-    if (removeStatus != MH_OK && removeStatus != MH_ERROR_NOT_CREATED) {
-        std::ostringstream oss;
-        oss << "[AUDIO][HOOK] " << (operation ? operation : "cleanup")
-            << " remove failed at " << (hook.name ? hook.name : "<unnamed>")
-            << " target=0x" << std::hex << reinterpret_cast<uintptr_t>(hook.target)
-            << " status=" << std::dec << static_cast<int>(removeStatus)
-            << "; original trampoline pointer retained";
-        LogOut(oss.str(), true);
+    if (!MinHookUtils::RemoveHook(hook.target, kAudioHookOwner, hook.name)) {
         return false;
     }
-
-    // MH_RemoveHook owns and frees the trampoline.  Clear our callable copy
-    // only after MinHook confirms that the hook was removed (or was already
-    // absent).  If removal fails, the detour may still execute and must retain
-    // its forwarding pointer.
     if (hook.original) {
         *hook.original = nullptr;
     }
     return true;
 }
 
-bool RollBackHookGroup(PendingAudioHook* hooks, size_t createdCount) {
-    for (size_t i = 0; i < createdCount; ++i) {
-        MH_QueueDisableHook(hooks[i].target);
-    }
-    MH_ApplyQueued();
-
-    bool complete = true;
-    for (size_t i = 0; i < createdCount; ++i) {
-        complete = RemoveAudioHookAndClearOriginal(hooks[i], "transaction rollback")
-            && complete;
-    }
-    return complete;
-}
-
-bool InstallHookGroupTransactional(const char* groupName,
-                                   PendingAudioHook* hooks,
-                                   size_t hookCount) {
+// A failed group leaves its records in the registry: created ones stay unreachable,
+// and enabled ones keep forwarding through their originals.
+bool InstallHookGroup(const char* groupName, PendingAudioHook* hooks, size_t hookCount) {
     if (!hooks || hookCount == 0) {
         return false;
     }
 
-    size_t createdCount = 0;
-    for (; createdCount < hookCount; ++createdCount) {
-        PendingAudioHook& hook = hooks[createdCount];
-        const MH_STATUS status = MH_CreateHook(hook.target, hook.detour, hook.original);
-        if (status != MH_OK) {
+    for (size_t i = 0; i < hookCount; ++i) {
+        PendingAudioHook& hook = hooks[i];
+        if (!MinHookUtils::CreateHook(hook.target, hook.detour, hook.original, kAudioHookOwner, hook.name)) {
             std::ostringstream oss;
             oss << "[AUDIO][HOOK] " << groupName << " create failed at "
                 << (hook.name ? hook.name : "<unnamed>")
-                << " target=0x" << std::hex << reinterpret_cast<uintptr_t>(hook.target)
-                << " status=" << std::dec << static_cast<int>(status);
+                << " target=0x" << std::hex << reinterpret_cast<uintptr_t>(hook.target);
             LogOut(oss.str(), true);
-            RollBackHookGroup(hooks, createdCount);
             return false;
         }
     }
 
     for (size_t i = 0; i < hookCount; ++i) {
-        const MH_STATUS status = MH_QueueEnableHook(hooks[i].target);
-        if (status != MH_OK) {
-            std::ostringstream oss;
-            oss << "[AUDIO][HOOK] " << groupName << " queue-enable failed at "
-                << (hooks[i].name ? hooks[i].name : "<unnamed>")
-                << " status=" << static_cast<int>(status);
-            LogOut(oss.str(), true);
-            RollBackHookGroup(hooks, createdCount);
+        if (!MinHookUtils::EnableHook(hooks[i].target, kAudioHookOwner, hooks[i].name)) {
+            LogOut(std::string("[AUDIO][HOOK] ") + groupName + " enable failed at "
+                   + (hooks[i].name ? hooks[i].name : "<unnamed>"), true);
             return false;
         }
     }
 
-    const MH_STATUS applyStatus = MH_ApplyQueued();
-    if (applyStatus != MH_OK) {
-        LogOut(std::string("[AUDIO][HOOK] ") + groupName
-               + " apply failed status=" + std::to_string(static_cast<int>(applyStatus)), true);
-        RollBackHookGroup(hooks, createdCount);
-        return false;
-    }
-
     LogOut(std::string("[AUDIO][HOOK] ") + groupName
-           + " installed transactionally (" + std::to_string(hookCount) + " hooks)", true);
+           + " installed (" + std::to_string(hookCount) + " hooks)", true);
     return true;
 }
 
+// E9 is a peer detour already chained at the entry; anything else is an unknown build.
+template <size_t N>
+bool CommonAudioEntryAcceptable(const char* name, uintptr_t entry, const std::array<uint8_t, N>& prologue) {
+    std::array<uint8_t, 1> first{};
+    if (BytesMatch(entry, prologue) || (ReadBytes(entry, first) && first[0] == 0xE9)) {
+        return true;
+    }
+    LogOut(std::string("[AUDIO][HOOK] rejected ") + name + ": unexpected entry bytes "
+           + FormatBytes(entry, N), true);
+    return false;
+}
+
 bool InstallCommonAudioHooks(uintptr_t efzBase) {
+    if (!CommonAudioEntryAcceptable("playBackgroundMusic", efzBase + kPlayBackgroundMusicRva, kVanillaBgmAndLoadPrologue)
+        || !CommonAudioEntryAcceptable("fadeWithSoundAdjustment", efzBase + kFadeWithSoundAdjustmentRva, kVanillaFadeWithSoundPrologue)
+        || !CommonAudioEntryAcceptable("loadSoundEffects", efzBase + kLoadSoundEffectsRva, kVanillaBgmAndLoadPrologue)
+        || !CommonAudioEntryAcceptable("loadCharacterSounds", efzBase + kLoadCharacterSoundsRva, kVanillaBgmAndLoadPrologue)) {
+        return false;
+    }
     PendingAudioHook hooks[] = {
         {"playBackgroundMusic",
          reinterpret_cast<void*>(efzBase + kPlayBackgroundMusicRva),
@@ -1281,7 +1262,7 @@ bool InstallCommonAudioHooks(uintptr_t efzBase) {
          reinterpret_cast<void*>(&HookedLoadCharacterSounds),
          OriginalStorage(&g_originalLoadCharacterSounds)},
     };
-    return InstallHookGroupTransactional("common audio hook group", hooks, std::size(hooks));
+    return InstallHookGroup("common audio hook group", hooks, std::size(hooks));
 }
 
 bool InstallVanillaContestedAudioHooks(uintptr_t efzBase) {
@@ -1295,7 +1276,7 @@ bool InstallVanillaContestedAudioHooks(uintptr_t efzBase) {
          reinterpret_cast<void*>(&HookedSetSoundVolume),
          OriginalStorage(&g_originalSetSoundVolume)},
     };
-    return InstallHookGroupTransactional("vanilla contested audio hook group", hooks, std::size(hooks));
+    return InstallHookGroup("vanilla contested audio hook group", hooks, std::size(hooks));
 }
 
 bool InstallRevivalAudioCallbackHooks(HMODULE revivalModule,
@@ -1332,7 +1313,7 @@ bool InstallRevivalAudioCallbackHooks(HMODULE revivalModule,
          OriginalStorage(&g_originalRevivalSetVolumeCallback)},
     };
 
-    const bool ok = InstallHookGroupTransactional(
+    const bool ok = InstallHookGroup(
         "stable Revival audio callback group",
         hooks,
         std::size(hooks));
@@ -1340,7 +1321,7 @@ bool InstallRevivalAudioCallbackHooks(HMODULE revivalModule,
         || g_originalRevivalSetVolumeCallback != nullptr;
     if (ok || rollbackLeftHookState) {
         // Keep the image pinned while any detour/trampoline can reference it;
-        // dropping it after a partial rollback is an executable-address use-after-free.
+        // dropping it after a partial install is an executable-address use-after-free.
         g_pinnedRevivalModule = pinnedModule;
         g_revivalPlayCallbackTarget = playInfo.callback;
         g_revivalSetVolumeCallbackTarget = setVolumeInfo.callback;
@@ -1359,7 +1340,7 @@ bool InstallRevivalAudioCallbackHooks(HMODULE revivalModule,
         LogOut(oss.str(), true);
     }
     if (!ok && rollbackLeftHookState) {
-        LogOut("[AUDIO][HOOK] Revival callback transaction rollback was incomplete;"
+        LogOut("[AUDIO][HOOK] Revival callback install was incomplete;"
                " callback module pin and original trampoline pointer retained", true);
     }
     return ok;
@@ -1688,10 +1669,10 @@ void ShutdownHooks(bool releaseRevivalModuleReference) {
     };
 
     const bool playRemoved = g_revivalPlayCallbackTarget
-        ? RemoveAudioHookAndClearOriginal(playHook, "shutdown")
+        ? RetireAudioHook(playHook)
         : g_originalRevivalPlaySoundCallback == nullptr;
     const bool setVolumeRemoved = g_revivalSetVolumeCallbackTarget
-        ? RemoveAudioHookAndClearOriginal(setVolumeHook, "shutdown")
+        ? RetireAudioHook(setVolumeHook)
         : g_originalRevivalSetVolumeCallback == nullptr;
 
     if (playRemoved) {
@@ -1741,7 +1722,7 @@ HookInstallResult InstallHooks(uintptr_t efzBase, HookInstallPhase phase) {
         if (!InstallCommonAudioHooks(efzBase)) {
             g_commonHookState = HookGroupState::Failed;
             if (!g_audioHookIncompleteLogged.exchange(true, std::memory_order_acq_rel)) {
-                LogOut("[AUDIO] common audio hook install failed transactionally", true);
+                LogOut("[AUDIO] common audio hook install failed", true);
             }
             return HookInstallResult::Failed;
         }
@@ -1814,7 +1795,7 @@ HookInstallResult InstallHooks(uintptr_t efzBase, HookInstallPhase phase) {
         if (!InstallRevivalAudioCallbackHooks(revivalModule, playInfo, setVolumeInfo)) {
             g_contestedHookState = HookGroupState::Failed;
             if (!g_audioHookIncompleteLogged.exchange(true, std::memory_order_acq_rel)) {
-                LogOut("[AUDIO] Revival audio callback hook install failed transactionally", true);
+                LogOut("[AUDIO] Revival audio callback hook install failed", true);
             }
             return HookInstallResult::Failed;
         }
@@ -1826,6 +1807,14 @@ HookInstallResult InstallHooks(uintptr_t efzBase, HookInstallPhase phase) {
 
     std::string hostResolutionReason;
     if (!CanFinalizeVanillaAudioOwnership(hostResolutionReason)) {
+        if (g_vanillaHostUnprovenSince
+            && GetTickCount() - g_vanillaHostUnprovenSince >= kVanillaHostUnprovenLimitMs) {
+            // Stay unowned: claiming an unproven entry could break a late Revival.
+            g_contestedHookState = HookGroupState::Failed;
+            LogOut(std::string("[AUDIO][HOOK] contested vanilla entrypoints left unowned; no longer retrying: ")
+                   + hostResolutionReason, true);
+            return HookInstallResult::Failed;
+        }
         g_contestedHookState = HookGroupState::Deferred;
         if (!g_audioHostDeferredLogged.exchange(true, std::memory_order_acq_rel)) {
             LogOut(std::string("[AUDIO][HOOK] contested vanilla entrypoints remain unowned: ")
@@ -1874,7 +1863,7 @@ HookInstallResult InstallHooks(uintptr_t efzBase, HookInstallPhase phase) {
     if (!InstallVanillaContestedAudioHooks(efzBase)) {
         g_contestedHookState = HookGroupState::Failed;
         if (!g_audioHookIncompleteLogged.exchange(true, std::memory_order_acq_rel)) {
-            LogOut("[AUDIO] vanilla contested audio hook install failed transactionally", true);
+            LogOut("[AUDIO] vanilla contested audio hook install failed", true);
         }
         return HookInstallResult::Failed;
     }

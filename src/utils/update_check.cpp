@@ -272,7 +272,7 @@ cleanup:
 }
 
 DWORD WINAPI WorkerThreadProc(LPVOID) {
-    // MANDATORY: escaped exceptions reach CrashHandler's TerminateProcess (crash_handler.cpp:1305) and kill EFZ.
+    // MANDATORY: escaped exceptions reach CrashHandler's TerminateCrashHandler and kill EFZ.
     try {
         const std::string simulated = Policy::NormalizeTag(ReadStateValue(kStateKeySimulate));
         if (!simulated.empty() && Policy::IsSafeTag(simulated)) {

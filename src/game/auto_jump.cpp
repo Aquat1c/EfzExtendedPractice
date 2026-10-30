@@ -3,6 +3,7 @@
 #include "../include/core/constants.h"
 #include "../include/utils/utilities.h"
 #include "../include/utils/network.h"
+#include "../include/game/frame_advantage.h"
 #include "../include/game/game_state.h"
 #include "../include/game/validation_metrics.h" // validation metrics instrumentation
 
@@ -150,14 +151,22 @@ bool IsAutoActionActiveForPlayer(int playerNum) {
 void MonitorAutoJump() {
     if (GetCurrentGameMode() != GameMode::Practice) return;
     if (IsNetplaySuspendActive()) return;
-    
+
+    // One visual frame, so the engine's next burst actually polls the neutral.
+    constexpr int kLandingNeutralTicks = 3;
     using clock = std::chrono::steady_clock;
     static clock::time_point holdUntil[3] = { clock::time_point(), clock::time_point(), clock::time_point() };
     static clock::time_point nextApplyAt[3] = { clock::time_point(), clock::time_point(), clock::time_point() };
 
     // Landing-edge handling: we must present a neutral frame between jumps so the game sees a new UP press.
     static bool s_wasGrounded[3] = { true, true, true };
-    static int  s_forceNeutralFrames[3] = { 0, 0, 0 };
+    static int  s_neutralUntilTick[3] = { 0, 0, 0 };
+    static int  s_prevTarget = 0;
+    const int tickNow = GetEngineTick();
+    // The clock restarts each Practice battle.
+    for (int p = 1; p <= 2; ++p) {
+        if (s_neutralUntilTick[p] > tickNow + kLandingNeutralTicks) s_neutralUntilTick[p] = 0;
+    }
 
     auto isGrounded = [](int p) -> bool {
         static uintptr_t s_cachedBase = 0;
@@ -180,7 +189,7 @@ void MonitorAutoJump() {
         if (p >= 1 && p <= 2 && s_yAddr[p]) {
             SafeReadMemory(s_yAddr[p], &y, sizeof(double));
         }
-        return (y <= 0.1); // grounded when very close to 0
+        return (y >= -0.1); // world Y is zero on the floor and negative above it
     };
 
     auto releaseIfOurJump = [](int p) {
@@ -212,6 +221,13 @@ void MonitorAutoJump() {
     int targetPlayer = jumpTarget.load();
     int direction = jumpDirection.load();
 
+    // A side dropped from the target must not keep holding UP.
+    if (targetPlayer != s_prevTarget) {
+        if (targetPlayer != 1 && targetPlayer != 3) releaseIfOurJump(1);
+        if (targetPlayer != 2 && targetPlayer != 3) releaseIfOurJump(2);
+        s_prevTarget = targetPlayer;
+    }
+
     const auto holdDuration = std::chrono::milliseconds(1000); // unused in continuous mode
     const auto reapplyInterval = std::chrono::milliseconds(1000); // unused in continuous mode
 
@@ -232,13 +248,12 @@ void MonitorAutoJump() {
             uint8_t curMask = ImmediateInput::GetCurrentDesired(1);
 
             if (landing) {
-                s_forceNeutralFrames[1] = 1;
+                s_neutralUntilTick[1] = tickNow + kLandingNeutralTicks;
                 if (ValidationMetricsEnabled()) { GetValidationMetrics().p1ForcedNeutralFrames++; }
             }
 
-            if (s_forceNeutralFrames[1] > 0) {
+            if (tickNow < s_neutralUntilTick[1]) {
                 ImmediateInput::Set(1, 0);
-                s_forceNeutralFrames[1]--;
             } else {
                 bool needApply = curMask != wantMask || curMask == 0;
                 if (needApply) {
@@ -266,13 +281,12 @@ void MonitorAutoJump() {
             uint8_t curMask = ImmediateInput::GetCurrentDesired(2);
 
             if (landing) {
-                s_forceNeutralFrames[2] = 1;
+                s_neutralUntilTick[2] = tickNow + kLandingNeutralTicks;
                 if (ValidationMetricsEnabled()) { GetValidationMetrics().p2ForcedNeutralFrames++; }
             }
 
-            if (s_forceNeutralFrames[2] > 0) {
+            if (tickNow < s_neutralUntilTick[2]) {
                 ImmediateInput::Set(2, 0);
-                s_forceNeutralFrames[2]--;
             } else {
                 bool needApply = curMask != wantMask || curMask == 0;
                 if (needApply) {

@@ -11,6 +11,11 @@ bool IsGameWindowActive();
 // as a rising edge on the first frame.
 void ResetEdges();
 
+// While suspended every keyboard, pad and mouse query reads as idle. Used while
+// the close animation plays.
+void SetSuspended(bool suspended);
+bool IsSuspended();
+
 // Edge-detected navigation queries: each returns true exactly once per
 // "press" (foreground-window-gated physical state sampled in input.cpp).
 // Safe to query multiple times per frame - internally cached.
@@ -51,6 +56,7 @@ int  TopTabNumberEdge();
 // PreNewFrameInputs).
 struct MousePos { float x, y; bool valid; };
 MousePos GetMouse();
+float MouseWheel();
 
 // Single-shot hit test helpers (rising-edge button queries).
 bool MouseHovering(float x, float y, float w, float h);

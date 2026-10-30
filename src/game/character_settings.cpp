@@ -11,6 +11,7 @@
 #pragma message("[build] compiling updated character_settings.cpp")
 
 #include <algorithm>
+#include <mutex>
 #include <cctype>
 #include <unordered_map>
 #include <thread>
@@ -53,6 +54,7 @@ namespace CharacterSettings {
     static bool s_prevP2AkikoFreeze = false;
     static int  s_p1AkikoFrozenCycle = 0;
     static int  s_p2AkikoFrozenCycle = 0;
+    static std::mutex s_enforcementMutex;
     static int p1LastFeatherCount = 0;
     static int p2LastFeatherCount = 0;
     static int p1LastMishioElem = -1;
@@ -98,6 +100,7 @@ namespace CharacterSettings {
     static PlayerCharPointers s_pointersP2;
 
     void InvalidateAllCharacterPointerCaches() {
+        std::lock_guard<std::mutex> enforcementLock(s_enforcementMutex);
         const uint32_t generation = GetRuntimeLifecycleGeneration();
         const bool hadPointerCache = (s_pointersP1.base != 0 || s_pointersP2.base != 0);
         const bool hadRuntimeState =
@@ -1278,23 +1281,22 @@ namespace CharacterSettings {
         auto ApplyNayukiB = [&](int pi){
             if ((pi==1 && data.p1CharID != CHAR_ID_NAYUKIB) || (pi==2 && data.p2CharID != CHAR_ID_NAYUKIB)) return;
             PlayerCharPointers &p = (pi==1)?s_pointersP1:s_pointersP2;
-            if (auto addr = p.nayukiSnowbunnyTimer) {
-                if (base && !addr) {
-                    const int off = (pi==1)?EFZ_BASE_OFFSET_P1:EFZ_BASE_OFFSET_P2;
-                    addr = p.nayukiSnowbunnyTimer = ResolvePointer(base, off, NAYUKIB_SNOWBUNNY_TIMER_OFFSET);
-                }
-                if (!addr) return;
-                int desired = (pi==1)?data.p1NayukiSnowbunnies:data.p2NayukiSnowbunnies;
-                bool wantInf = (pi==1)?data.p1NayukiInfiniteSnow:data.p2NayukiInfiniteSnow;
-                if (wantInf) desired = NAYUKIB_SNOWBUNNY_MAX;
-                desired = CLAMP(desired,0,NAYUKIB_SNOWBUNNY_MAX);
-                int cur=0; SafeReadMemory(addr,&cur,sizeof(int));
-                if (cur != desired) { SafeWriteMemory(addr,&desired,sizeof(int));
-                    LogOut(std::string("[CHAR][APPLY][NAYUKIB] ") + (pi==1?"P1":"P2") +
-                           " addr=" + PtrHex(addr) +
-                           " snowbunnies=" + std::to_string(desired),
-                           detailedLogging.load());
-                }
+            uintptr_t addr = p.nayukiSnowbunnyTimer;
+            if (base && !addr) {
+                const int off = (pi==1)?EFZ_BASE_OFFSET_P1:EFZ_BASE_OFFSET_P2;
+                addr = p.nayukiSnowbunnyTimer = ResolvePointer(base, off, NAYUKIB_SNOWBUNNY_TIMER_OFFSET);
+            }
+            if (!addr) return;
+            int desired = (pi==1)?data.p1NayukiSnowbunnies:data.p2NayukiSnowbunnies;
+            bool wantInf = (pi==1)?data.p1NayukiInfiniteSnow:data.p2NayukiInfiniteSnow;
+            if (wantInf) desired = NAYUKIB_SNOWBUNNY_MAX;
+            desired = CLAMP(desired,0,NAYUKIB_SNOWBUNNY_MAX);
+            int cur=0; SafeReadMemory(addr,&cur,sizeof(int));
+            if (cur != desired) { SafeWriteMemory(addr,&desired,sizeof(int));
+                LogOut(std::string("[CHAR][APPLY][NAYUKIB] ") + (pi==1?"P1":"P2") +
+                       " addr=" + PtrHex(addr) +
+                       " snowbunnies=" + std::to_string(desired),
+                       detailedLogging.load());
             }
         }; ApplyNayukiB(1); ApplyNayukiB(2);
 
@@ -1443,6 +1445,11 @@ namespace CharacterSettings {
             return;
         }
 
+        // Monitor thread, and the game thread after a load: the enforcement statics are not atomic.
+        // try_lock: skipping is safe (the other thread is enforcing), and SEH callers do not unwind a held guard.
+        std::unique_lock<std::mutex> enforcementLock(s_enforcementMutex, std::try_to_lock);
+        if (!enforcementLock.owns_lock()) return;
+
         bool didWriteThisTick = false;
 
         if (localData.infiniteBloodMode) {
@@ -1495,23 +1502,6 @@ namespace CharacterSettings {
             auto keepFeathers = [&](int pi){
                 if ((pi==1 && localData.p1CharID != CHAR_ID_MISUZU) || (pi==2 && localData.p2CharID != CHAR_ID_MISUZU)) return;
                 const int off = (pi==1)?EFZ_BASE_OFFSET_P1:EFZ_BASE_OFFSET_P2;
-
-                // Detect supers that consume a feather and replenish by +1 (up to max)
-                short mv = 0;
-                if (auto mvAddr = ResolvePointer(base, off, MOVE_ID_OFFSET)) {
-                    SafeReadMemory(mvAddr, &mv, sizeof(short));
-                    if (mv == 313 || mv == 314 || mv == 315) {
-                        if (auto addr = ResolvePointer(base, off, MISUZU_FEATHER_OFFSET)) {
-                            int cur = 0; SafeReadMemory(addr, &cur, sizeof(int));
-                            int next = cur + 1;
-                            if (next > MISUZU_FEATHER_MAX) next = MISUZU_FEATHER_MAX;
-                            if (next != cur) {
-                                SafeWriteMemory(addr, &next, sizeof(int));
-                                didWriteThisTick = true;
-                            }
-                        }
-                    }
-                }
 
                 if (auto addr = ResolvePointer(base, off, MISUZU_FEATHER_OFFSET)) {
                     int cur=0; SafeReadMemory(addr,&cur,sizeof(int));

@@ -198,7 +198,8 @@ inline int ChooseUniqueKey(int preferred,
                            std::array<int, 32>& used,
                            std::size_t& usedCount) {
     constexpr int candidates[] = {
-        '1','2','3','4','5','6','7','8','9','0',
+        // 5 and 6 are the stats page keys, which stay hardwired.
+        '1','2','3','4','7','8','9','0',
         'U','J','L','I','O','K','E','R','Q','P','T','Y','G','H','N','M','V','B','F','D','S','W',
         0xBC,0xBE,0x20,0x24,0x23,0x2D,0x2E,
     };

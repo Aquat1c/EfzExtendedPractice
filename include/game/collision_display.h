@@ -27,6 +27,7 @@ struct OverlayBox {
     uint32_t fillArgb = 0;
     uint32_t outlineArgb = 0;
     uint8_t shape = ShapeRectangle;
+    bool dottedOutline = false;
 };
 
 void Initialize();
@@ -43,6 +44,9 @@ bool GetOverlayBox(std::size_t index, OverlayBox* outBox);
 // Called from the Revival Practice hotkey dispatcher gate; true when the key
 // was consumed by our replacement display and must not reach Revival.
 bool ShouldSuppressRevivalHotkey(void* practiceController, int key);
+// efz.exe's battle hotkeys or a key in EfzRevival.ini's [Practice] section. False for this
+// mod's stock keys, some of which sit on Revival's on purpose. Reads the ini once.
+bool IsGameHotkeyVk(int vk);
 
 // Final render camera from EFZ's active battle-screen context. Fighter world
 // coordinates remain IEEE-754 doubles; these two values are the game's native
