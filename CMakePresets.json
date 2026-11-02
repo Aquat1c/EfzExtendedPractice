@@ -1,0 +1,71 @@
+{
+    "version": 4,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 23,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "vs-base-win32",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build",
+            "architecture": "Win32",
+            "cacheVariables": {
+                "EFZ_XP_COMPAT": "OFF"
+            }
+        },
+        {
+            "name": "vs18-win32",
+            "inherits": "vs-base-win32",
+            "generator": "Visual Studio 18 2026"
+        },
+        {
+            "name": "vs17-win32",
+            "inherits": "vs-base-win32",
+            "generator": "Visual Studio 17 2022"
+        },
+        {
+            "name": "vs18-xp-win32",
+            "inherits": "vs-base-win32",
+            "binaryDir": "${sourceDir}/build_xp_win32",
+            "generator": "Visual Studio 18 2026",
+            "toolset": "v141_xp",
+            "cacheVariables": {
+                "EFZ_XP_COMPAT": "ON"
+            }
+        },
+        {
+            "name": "vs17-xp-win32",
+            "inherits": "vs-base-win32",
+            "binaryDir": "${sourceDir}/build_xp_win32_vs17",
+            "generator": "Visual Studio 17 2022",
+            "toolset": "v141_xp",
+            "cacheVariables": {
+                "EFZ_XP_COMPAT": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "vs18-release",
+            "configurePreset": "vs18-win32",
+            "configuration": "Release"
+        },
+        {
+            "name": "vs17-release",
+            "configurePreset": "vs17-win32",
+            "configuration": "Release"
+        },
+        {
+            "name": "vs18-xp-release",
+            "configurePreset": "vs18-xp-win32",
+            "configuration": "Release"
+        },
+        {
+            "name": "vs17-xp-release",
+            "configurePreset": "vs17-xp-win32",
+            "configuration": "Release"
+        }
+    ]
+}

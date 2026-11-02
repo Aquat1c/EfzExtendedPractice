@@ -1,0 +1,674 @@
+{
+ "format": 1,
+ "id": "efz.core_tutorial",
+ "name": "EFZ Core Tutorial",
+ "author": "EfzExtendedPractice",
+ "description": "The 53-lesson core course: fundamentals, offense and meters, defense, system interactions, and battle strategy.",
+ "curriculumRevision": 6,
+ "categories": [
+  {
+   "id": "fundamentals",
+   "label": "FUNDAMENTALS",
+   "description": "Controls, screen, movement, attacks, and basic defense.",
+   "order": 10
+  },
+  {
+   "id": "offense",
+   "label": "OFFENSE & METERS",
+   "description": "Cancel routes, Special/Super inputs, combo rules, SP/RF, IC, FIC, and juggle time.",
+   "order": 20
+  },
+  {
+   "id": "defense",
+   "label": "DEFENSE",
+   "description": "Guard Gauge, RG/RC, and air-recovery choices.",
+   "order": 30
+  },
+  {
+   "id": "systems",
+   "label": "SYSTEM INTERACTIONS",
+   "description": "Armor, Guard Attacks, special knockdown, wakeup, counters.",
+   "order": 40
+  },
+  {
+   "id": "strategy",
+   "label": "BATTLE STRATEGY",
+   "description": "Applying the universal mechanics to match decisions.",
+   "order": 50
+  }
+ ],
+ "scenarios": [
+  {
+   "name": "Controls & Direction Notation",
+   "file": "00_notation.json",
+   "description": "Learn EFZ's four buttons and the direction shorthand used in guides.",
+   "id": "efz.controls.notation",
+   "order": 10,
+   "difficulty": 1,
+   "next": "efz.fundamentals.combo_notation"
+  },
+  {
+   "name": "Reading Move and Combo Notation",
+   "file": "01_combo_notation.json",
+   "description": "Read the shorthand used by guides, Trials, and combo lists.",
+   "id": "efz.fundamentals.combo_notation",
+   "order": 20,
+   "difficulty": 1,
+   "next": "efz.fundamentals.screen",
+   "recommendedAfter": [
+    "efz.controls.notation"
+   ]
+  },
+  {
+   "name": "Reading the Screen",
+   "file": "02_screen.json",
+   "description": "Find Life, RF, SP, combo Power, and the juggle gauge.",
+   "id": "efz.fundamentals.screen",
+   "order": 30,
+   "difficulty": 1,
+   "next": "efz.fundamentals.walk_crouch",
+   "recommendedAfter": [
+    "efz.fundamentals.combo_notation"
+   ]
+  },
+  {
+   "name": "Walking and Crouching",
+   "file": "03_walk_crouch.json",
+   "description": "Control distance without committing to a dash.",
+   "id": "efz.fundamentals.walk_crouch",
+   "order": 40,
+   "difficulty": 1,
+   "next": "efz.fundamentals.jumps",
+   "recommendedAfter": [
+    "efz.fundamentals.screen"
+   ]
+  },
+  {
+   "name": "Jumps",
+   "file": "04_jumps.json",
+   "description": "Jump straight up, toward, and away.",
+   "id": "efz.fundamentals.jumps",
+   "order": 50,
+   "difficulty": 1,
+   "next": "efz.fundamentals.double_jumps",
+   "recommendedAfter": [
+    "efz.fundamentals.walk_crouch"
+   ]
+  },
+  {
+   "name": "Double Jumps",
+   "file": "05_double_jumps.json",
+   "description": "Change direction once more while airborne.",
+   "id": "efz.fundamentals.double_jumps",
+   "order": 60,
+   "difficulty": 1,
+   "next": "efz.fundamentals.ground_dash",
+   "recommendedAfter": [
+    "efz.fundamentals.jumps"
+   ]
+  },
+  {
+   "name": "Ground Dash, Backdash, and Dash Momentum",
+   "file": "06_ground_dash.json",
+   "description": "Cover ground quickly and learn when a dash commits you.",
+   "id": "efz.fundamentals.ground_dash",
+   "order": 70,
+   "difficulty": 1,
+   "next": "efz.fundamentals.hover_dash",
+   "recommendedAfter": [
+    "efz.fundamentals.double_jumps"
+   ]
+  },
+  {
+   "name": "Hover Dash (Misuzu)",
+   "file": "07_hover_dash.json",
+   "description": "Turn a ground dash into an airborne approach.",
+   "id": "efz.fundamentals.hover_dash",
+   "order": 80,
+   "difficulty": 2,
+   "next": "efz.fundamentals.air_dash",
+   "recommendedAfter": [
+    "efz.fundamentals.ground_dash"
+   ]
+  },
+  {
+   "name": "Air Dash",
+   "file": "08_air_dash.json",
+   "description": "Air dash forward and backward at useful heights.",
+   "id": "efz.fundamentals.air_dash",
+   "order": 90,
+   "difficulty": 2,
+   "next": "efz.fundamentals.normals",
+   "recommendedAfter": [
+    "efz.fundamentals.hover_dash"
+   ]
+  },
+  {
+   "name": "Normal Attacks",
+   "file": "09_normals.json",
+   "description": "Compare standing and crouching Light, Medium, and Strong attacks.",
+   "id": "efz.fundamentals.normals",
+   "order": 100,
+   "difficulty": 1,
+   "next": "efz.fundamentals.guard",
+   "recommendedAfter": [
+    "efz.fundamentals.air_dash"
+   ]
+  },
+  {
+   "name": "Standing, Crouching, and Air Guard",
+   "file": "10_guard.json",
+   "description": "Guard an overhead, a low, and an air-blockable attack.",
+   "id": "efz.fundamentals.guard",
+   "order": 110,
+   "difficulty": 1,
+   "next": "efz.fundamentals.ground_throws",
+   "recommendedAfter": [
+    "efz.fundamentals.normals"
+   ]
+  },
+  {
+   "name": "Ground Throws",
+   "file": "11_ground_throws.json",
+   "description": "Throw a guarding opponent and learn when a throw can connect.",
+   "id": "efz.fundamentals.ground_throws",
+   "order": 120,
+   "difficulty": 1,
+   "next": "efz.fundamentals.air_throw",
+   "recommendedAfter": [
+    "efz.fundamentals.guard"
+   ]
+  },
+  {
+   "name": "Air Throw",
+   "file": "12_air_throw.json",
+   "description": "Catch an airborne opponent with {input:6C}.",
+   "id": "efz.fundamentals.air_throw",
+   "order": 130,
+   "difficulty": 2,
+   "next": "efz.fundamentals.air_recovery",
+   "recommendedAfter": [
+    "efz.fundamentals.ground_throws"
+   ]
+  },
+  {
+   "name": "Air Recovery: When Not to Recover",
+   "file": "13_air_recovery.json",
+   "description": "Recover in the air - and learn why doing it near the opponent is risky.",
+   "id": "efz.fundamentals.air_recovery",
+   "order": 140,
+   "difficulty": 2,
+   "next": "efz.offense.cancel_routes",
+   "recommendedAfter": [
+    "efz.fundamentals.air_throw"
+   ]
+  },
+  {
+   "name": "Cancels and Normal Routes",
+   "file": "14_cancel_routes.json",
+   "description": "Build Nayuki's normal route, then finish a dash normal with a Special.",
+   "id": "efz.offense.cancel_routes",
+   "order": 150,
+   "difficulty": 2,
+   "next": "efz.offense.jump_cancels",
+   "recommendedAfter": [
+    "efz.fundamentals.air_recovery"
+   ]
+  },
+  {
+   "name": "Jump and Air-Movement Cancels",
+   "file": "15_jump_cancels.json",
+   "description": "Cancel a connected attack into a jump, then continue in the air.",
+   "id": "efz.offense.jump_cancels",
+   "order": 160,
+   "difficulty": 2,
+   "next": "efz.offense.specials",
+   "recommendedAfter": [
+    "efz.offense.cancel_routes"
+   ]
+  },
+  {
+   "name": "Special Inputs, Part 1 (Shiori)",
+   "file": "16_specials.json",
+   "description": "Perform every basic Special motion.",
+   "id": "efz.offense.specials",
+   "order": 170,
+   "difficulty": 2,
+   "next": "efz.offense.specials_2",
+   "recommendedAfter": [
+    "efz.offense.jump_cancels"
+   ]
+  },
+  {
+   "name": "Special Inputs, Part 2 (Sayuri)",
+   "file": "17_specials_2.json",
+   "description": "Learn the Special motions Shiori doesn't have.",
+   "id": "efz.offense.specials_2",
+   "order": 175,
+   "difficulty": 2,
+   "next": "efz.offense.s_button",
+   "recommendedAfter": [
+    "efz.offense.specials"
+   ]
+  },
+  {
+   "name": "The S Button (Shiori)",
+   "file": "18_s_button.json",
+   "description": "Use Shiori's character-specific S shield.",
+   "id": "efz.offense.s_button",
+   "order": 180,
+   "difficulty": 2,
+   "next": "efz.offense.sp_supers",
+   "recommendedAfter": [
+    "efz.offense.specials_2"
+   ]
+  },
+  {
+   "name": "SP Gauge and Supers",
+   "file": "19_sp_supers.json",
+   "description": "Build one SP level and spend it on a Level 1 Super.",
+   "id": "efz.offense.sp_supers",
+   "order": 190,
+   "difficulty": 2,
+   "next": "efz.offense.super_inputs",
+   "recommendedAfter": [
+    "efz.offense.s_button"
+   ]
+  },
+  {
+   "name": "Super Inputs, Part 1 (Shiori)",
+   "file": "20_super_inputs.json",
+   "description": "Perform Shiori's three Super motions.",
+   "id": "efz.offense.super_inputs",
+   "order": 192,
+   "difficulty": 2,
+   "next": "efz.offense.super_inputs_2",
+   "recommendedAfter": [
+    "efz.offense.sp_supers"
+   ]
+  },
+  {
+   "name": "Super Inputs, Part 2 (Sayuri)",
+   "file": "21_super_inputs_2.json",
+   "description": "Learn the Super motions Shiori doesn't have.",
+   "id": "efz.offense.super_inputs_2",
+   "order": 195,
+   "difficulty": 2,
+   "next": "efz.offense.rf_gauge",
+   "recommendedAfter": [
+    "efz.offense.super_inputs"
+   ]
+  },
+  {
+   "name": "The RF Gauge",
+   "file": "22_rf_gauge.json",
+   "description": "Reach Red RF, then see why blocking builds it faster.",
+   "id": "efz.offense.rf_gauge",
+   "order": 200,
+   "difficulty": 2,
+   "next": "efz.offense.red_ic",
+   "recommendedAfter": [
+    "efz.offense.super_inputs_2"
+   ]
+  },
+  {
+   "name": "Instant Charge (Red IC)",
+   "file": "23_red_ic.json",
+   "description": "IC Nayuki's {input:5C}, then catch its pushback with sliding {input:2C}.",
+   "id": "efz.offense.red_ic",
+   "order": 210,
+   "difficulty": 2,
+   "next": "efz.offense.power_scaling",
+   "recommendedAfter": [
+    "efz.offense.rf_gauge"
+   ]
+  },
+  {
+   "name": "Power, Guts, and Damage Scaling",
+   "file": "24_power_scaling.json",
+   "description": "See why later combo hits deal less - and why low-life opponents take less damage.",
+   "id": "efz.offense.power_scaling",
+   "order": 220,
+   "difficulty": 2,
+   "next": "efz.offense.juggle_gauge",
+   "recommendedAfter": [
+    "efz.offense.red_ic"
+   ]
+  },
+  {
+   "name": "Juggle Gauge and Combo Time",
+   "file": "25_juggle_gauge.json",
+   "description": "Read how long an air combo can continue.",
+   "id": "efz.offense.juggle_gauge",
+   "order": 230,
+   "difficulty": 2,
+   "next": "efz.offense.blue_ic",
+   "recommendedAfter": [
+    "efz.offense.power_scaling"
+   ]
+  },
+  {
+   "name": "Blue IC",
+   "file": "26_blue_ic.json",
+   "description": "Use Blue IC to extend a combo with restored Power.",
+   "id": "efz.offense.blue_ic",
+   "order": 240,
+   "difficulty": 3,
+   "next": "efz.offense.rf_attacks",
+   "recommendedAfter": [
+    "efz.offense.juggle_gauge"
+   ]
+  },
+  {
+   "name": "RF Attacks and BIC Safety",
+   "file": "27_rf_attacks.json",
+   "description": "Use an RF version, see its fallback, then make a risky one safe.",
+   "id": "efz.offense.rf_attacks",
+   "order": 250,
+   "difficulty": 3,
+   "next": "efz.offense.flicker_ic",
+   "recommendedAfter": [
+    "efz.offense.blue_ic"
+   ]
+  },
+  {
+   "name": "Flicker Instant Charge (FIC)",
+   "file": "27b_flicker_ic.json",
+   "description": "Cancel a projectile move during its brief built-in FIC window.",
+   "id": "efz.offense.flicker_ic",
+   "order": 255,
+   "difficulty": 3,
+   "next": "efz.offense.final_memory",
+   "recommendedAfter": [
+    "efz.offense.rf_attacks"
+   ]
+  },
+  {
+   "name": "Final Memory",
+   "file": "28_final_memory.json",
+   "description": "Use a character's last-resort Super.",
+   "id": "efz.offense.final_memory",
+   "order": 260,
+   "difficulty": 3,
+   "next": "efz.defense.guard_gauge",
+   "recommendedAfter": [
+    "efz.offense.flicker_ic"
+   ]
+  },
+  {
+   "name": "Guard Gauge",
+   "file": "29_guard_gauge.json",
+   "description": "Build Guard Gauge, then see how it changes the next juggle.",
+   "id": "efz.defense.guard_gauge",
+   "order": 270,
+   "difficulty": 3,
+   "next": "efz.defense.recoil_guard",
+   "recommendedAfter": [
+    "efz.offense.final_memory"
+   ]
+  },
+  {
+   "name": "Recoil Guard",
+   "file": "30_recoil_guard.json",
+   "description": "Tap guard just before impact to avoid the usual time stuck after guarding.",
+   "id": "efz.defense.recoil_guard",
+   "order": 280,
+   "difficulty": 3,
+   "next": "efz.defense.rg_response",
+   "recommendedAfter": [
+    "efz.defense.guard_gauge"
+   ]
+  },
+  {
+   "name": "Choosing a Response after RG",
+   "file": "31_rg_response.json",
+   "description": "RG a committed attack, then choose whether to challenge or block.",
+   "id": "efz.defense.rg_response",
+   "order": 290,
+   "difficulty": 3,
+   "next": "efz.defense.recoil_counter",
+   "recommendedAfter": [
+    "efz.defense.recoil_guard"
+   ]
+  },
+  {
+   "name": "Recoil Counter and RG Battles",
+   "file": "32_recoil_counter.json",
+   "description": "When your attack is RG'd, RG the defender's counterattack.",
+   "id": "efz.defense.recoil_counter",
+   "order": 300,
+   "difficulty": 4,
+   "next": "efz.defense.air_recovery_decisions",
+   "recommendedAfter": [
+    "efz.defense.rg_response"
+   ]
+  },
+  {
+   "name": "Air-Recovery Decisions",
+   "file": "33_air_recovery_decisions.json",
+   "description": "Do not recover near the opponent; recover when space is safe.",
+   "id": "efz.defense.air_recovery_decisions",
+   "order": 310,
+   "difficulty": 3,
+   "next": "efz.defense.air_recovery_punish",
+   "recommendedAfter": [
+    "efz.defense.recoil_counter"
+   ]
+  },
+  {
+   "name": "Punishing Air Recovery",
+   "file": "34_air_recovery_punish.json",
+   "description": "Punish an opponent's air recovery with {input:j.6C}.",
+   "id": "efz.defense.air_recovery_punish",
+   "order": 320,
+   "difficulty": 4,
+   "next": "efz.systems.recoil_armor",
+   "recommendedAfter": [
+    "efz.defense.air_recovery_decisions"
+   ]
+  },
+  {
+   "name": "Recoil Armor (Mizuka vs Rumi)",
+   "file": "35_recoil_armor.json",
+   "description": "Recognize armor, then practice three answers to it.",
+   "id": "efz.systems.recoil_armor",
+   "order": 330,
+   "difficulty": 3,
+   "next": "efz.systems.guard_attacks",
+   "recommendedAfter": [
+    "efz.defense.air_recovery_punish"
+   ]
+  },
+  {
+   "name": "Guard Attacks",
+   "file": "36_guard_attacks.json",
+   "description": "Use an attack that briefly blocks, then beat one with a low.",
+   "id": "efz.systems.guard_attacks",
+   "order": 340,
+   "difficulty": 3,
+   "next": "efz.systems.special_knockdown",
+   "recommendedAfter": [
+    "efz.systems.recoil_armor"
+   ]
+  },
+  {
+   "name": "Special Knockdown and OTG",
+   "file": "37_special_knockdown.json",
+   "description": "Cancel Mai's throw with Red IC, then hit the grounded opponent with 2C.",
+   "id": "efz.systems.special_knockdown",
+   "order": 350,
+   "difficulty": 3,
+   "next": "efz.systems.wakeup_vulnerability",
+   "recommendedAfter": [
+    "efz.systems.guard_attacks"
+   ]
+  },
+  {
+   "name": "Wakeup Vulnerability",
+   "file": "38_wakeup_vulnerability.json",
+   "description": "Find the first moment an opponent can be hit after wakeup.",
+   "id": "efz.systems.wakeup_vulnerability",
+   "order": 360,
+   "difficulty": 3,
+   "next": "efz.systems.character_counters",
+   "recommendedAfter": [
+    "efz.systems.special_knockdown"
+   ]
+  },
+  {
+   "name": "Character Counters and IC Exceptions",
+   "file": "39_character_counters.json",
+   "description": "Learn why counter moves stop cancels - and when IC can still help.",
+   "id": "efz.systems.character_counters",
+   "order": 370,
+   "difficulty": 4,
+   "next": "efz.strategy.useful_range",
+   "recommendedAfter": [
+    "efz.systems.wakeup_vulnerability"
+   ]
+  },
+  {
+   "name": "Control a Useful Range",
+   "file": "40_useful_range.json",
+   "description": "Make a long-reaching attack miss, then hit its recovery.",
+   "id": "efz.strategy.useful_range",
+   "order": 380,
+   "difficulty": 3,
+   "next": "efz.strategy.take_space",
+   "recommendedAfter": [
+    "efz.systems.character_counters"
+   ]
+  },
+  {
+   "name": "Take Space Safely",
+   "file": "41_take_space.json",
+   "description": "Choose walking, dashing, or jumping for the situation.",
+   "id": "efz.strategy.take_space",
+   "order": 390,
+   "difficulty": 3,
+   "next": "efz.strategy.anti_air",
+   "recommendedAfter": [
+    "efz.strategy.useful_range"
+   ]
+  },
+  {
+   "name": "Stop a Jump-In",
+   "file": "42_anti_air.json",
+   "description": "Stop an opponent's jumping attack.",
+   "id": "efz.strategy.anti_air",
+   "order": 400,
+   "difficulty": 3,
+   "next": "efz.strategy.hit_confirm",
+   "recommendedAfter": [
+    "efz.strategy.take_space"
+   ]
+  },
+  {
+   "name": "Confirm Hit or Block",
+   "file": "43_hit_confirm.json",
+   "description": "Continue on hit; stop before the unsafe follow-up on block.",
+   "id": "efz.strategy.hit_confirm",
+   "order": 410,
+   "difficulty": 3,
+   "next": "efz.strategy.stable_combo",
+   "recommendedAfter": [
+    "efz.strategy.anti_air"
+   ]
+  },
+  {
+   "name": "Choose a Stable Combo",
+   "file": "44_stable_combo.json",
+   "description": "Finish reliably when Power, height, or distance changes.",
+   "id": "efz.strategy.stable_combo",
+   "order": 420,
+   "difficulty": 4,
+   "next": "efz.strategy.end_with_advantage",
+   "recommendedAfter": [
+    "efz.strategy.hit_confirm"
+   ]
+  },
+  {
+   "name": "End with Advantage",
+   "file": "45_end_with_advantage.json",
+   "description": "Choose the combo ender that gives the result you want.",
+   "id": "efz.strategy.end_with_advantage",
+   "order": 430,
+   "difficulty": 4,
+   "next": "efz.strategy.open_guard",
+   "recommendedAfter": [
+    "efz.strategy.stable_combo"
+   ]
+  },
+  {
+   "name": "Open a Guard",
+   "file": "46_open_guard.json",
+   "description": "Use low, overhead, and delayed throw against the right defense.",
+   "id": "efz.strategy.open_guard",
+   "order": 440,
+   "difficulty": 3,
+   "next": "efz.strategy.wakeup_offense",
+   "recommendedAfter": [
+    "efz.strategy.end_with_advantage"
+   ]
+  },
+  {
+   "name": "Run Wakeup Offense",
+   "file": "47_wakeup_offense.json",
+   "description": "Score a knockdown, cover wakeup, throw a blocker, then safely wait out an invincible attack.",
+   "id": "efz.strategy.wakeup_offense",
+   "order": 450,
+   "difficulty": 4,
+   "next": "efz.strategy.survive_pressure",
+   "recommendedAfter": [
+    "efz.strategy.open_guard"
+   ]
+  },
+  {
+   "name": "Survive Pressure",
+   "file": "48_survive_pressure.json",
+   "description": "Block the string with no gap, then escape the version that leaves one.",
+   "id": "efz.strategy.survive_pressure",
+   "order": 460,
+   "difficulty": 4,
+   "next": "efz.strategy.choose_rg",
+   "recommendedAfter": [
+    "efz.strategy.wakeup_offense"
+   ]
+  },
+  {
+   "name": "Choose When to Recoil Guard",
+   "file": "49_choose_rg.json",
+   "description": "RG committed attacks; block when RG would add risk.",
+   "id": "efz.strategy.choose_rg",
+   "order": 470,
+   "difficulty": 4,
+   "next": "efz.strategy.attack_into_rg",
+   "recommendedAfter": [
+    "efz.strategy.survive_pressure"
+   ]
+  },
+  {
+   "name": "Attack into Recoil Guard",
+   "file": "50_attack_into_rg.json",
+   "description": "Choose a fast follow-up, Recoil Counter, or disciplined block.",
+   "id": "efz.strategy.attack_into_rg",
+   "order": 480,
+   "difficulty": 5,
+   "next": "efz.strategy.spend_rf",
+   "recommendedAfter": [
+    "efz.strategy.choose_rg"
+   ]
+  },
+  {
+   "name": "Spend RF with a Purpose",
+   "file": "51_spend_rf.json",
+   "description": "Spend Red RF now, or wait for Light Blue RF when it gives more value.",
+   "id": "efz.strategy.spend_rf",
+   "order": 490,
+   "difficulty": 4,
+   "recommendedAfter": [
+    "efz.strategy.attack_into_rg"
+   ]
+  }
+ ]
+}

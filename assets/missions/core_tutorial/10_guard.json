@@ -1,0 +1,144 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.fundamentals.guard",
+  "revision": 4,
+  "category": "fundamentals",
+  "order": 110,
+  "difficulty": 1,
+  "name": "Standing, Crouching, and Air Guard",
+  "summary": "Guard an overhead, a low, and an air-blockable attack.",
+  "description": "Guard an overhead, a low, and an air-blockable attack.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "nagamori",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "dummy_script",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Three Ways to Guard",
+        "text": "Hold away to stand guard. Hold down-away to crouch guard. A low attack must be crouch-guarded; an overhead must be stand-guarded; many other attacks can be guarded either way. Air guard works only against attacks that allow it. Blocking special moves may deal chip damage, but chip cannot KO."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "stand_guard",
+        "kind": "combat",
+        "label": "Stand-block the dummy's attack",
+        "moveIds": [
+          151
+        ],
+        "req": "move",
+        "script": "ep_stand"
+      },
+      {
+        "id": "crouch_guard",
+        "kind": "combat",
+        "label": "Crouch-block the dummy's low",
+        "moveIds": [
+          153
+        ],
+        "req": "move",
+        "script": "ep_low"
+      },
+      {
+        "id": "air_guard",
+        "kind": "combat",
+        "label": "Jump and air-block the dummy's jump-in",
+        "moveIds": [
+          156
+        ],
+        "req": "move",
+        "script": "ep_air"
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_stand",
+          "ownerTask": "stand_guard",
+          "kind": "macro",
+          "action": "6B",
+          "approach": "dash",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Stand-block the attack",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_low",
+          "ownerTask": "crouch_guard",
+          "kind": "macro",
+          "action": "2A",
+          "approach": "dash",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Crouch-block the low",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_air",
+          "ownerTask": "air_guard",
+          "kind": "macro",
+          "action": "j.C",
+          "approach": "dash",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Jump and air-block",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180"
+  ],
+  "next": {
+    "lessonId": "efz.fundamentals.ground_throws"
+  },
+  "recommendedAfter": [
+    "efz.fundamentals.normals"
+  ]
+}

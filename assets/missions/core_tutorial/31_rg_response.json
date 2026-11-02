@@ -1,0 +1,225 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.defense.rg_response",
+  "revision": 8,
+  "category": "defense",
+  "order": 290,
+  "difficulty": 3,
+  "name": "Choosing a Response after RG",
+  "summary": "RG a big attack, then decide: swing back or keep blocking.",
+  "description": "RG a committed attack, then choose whether to challenge or block.",
+  "player": {
+    "character": "sayuri",
+    "pos": {
+      "x": 40.0,
+      "y": 0.0
+    },
+    "rf": 1000,
+    "blueIC": 0,
+    "rfLock": true
+  },
+  "dummy": {
+    "character": "makoto",
+    "pos": {
+      "x": 160.0,
+      "y": 0.0
+    },
+    "rf": 1000,
+    "blueIC": 0,
+    "rfLock": true
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "direct_contact_state",
+    "dummy_script",
+    "dummy_state",
+    "episode_script",
+    "episode_telegraph",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "rf_lock",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "No Guaranteed Punish",
+        "text": "RG buys you a chance to act - it does NOT guarantee a punish. The attacker can still cancel, or Recoil Counter you, while their original move recovers. Fast Light normals are usually bad places to challenge: their next cancel can win the race."
+      },
+      {
+        "id": "p1",
+        "title": "Better Targets",
+        "text": "Big dash normals and Specials are much juicier targets - they have real recovery and few safe cancels. And if the attacker goes for a risky follow-up, plain blocking can beat another RG: your later punish no longer hands them a Recoil Counter."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "rg_challenge",
+        "kind": "combat",
+        "label": "Stand-RG Makoto {input:66B}, then punish",
+        "prompt": "Makoto charges with {input:66B} and does NOT cancel it. Recoil Guard the charge (tap {dir:4} as it lands), then punish her recovery with {input:5A}.",
+        "script": "ep_66b_solo",
+        "sequence": [
+          {
+            "id": "rg_it",
+            "notation": "RG",
+            "moveIds": [
+              168,
+              169,
+              170
+            ],
+            "req": "move",
+            "dummyState": [
+              231
+            ]
+          },
+          {
+            "id": "punish",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "land",
+            "maxGap": 150,
+            "dummyState": [
+              231
+            ],
+            "contact": {
+              "attacker": "learner",
+              "target": "dummy",
+              "source": "direct",
+              "result": "hit",
+              "moveIds": [
+                200
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "rg_block",
+        "kind": "combat",
+        "label": "She cancels into {input:623C} - stay guarding",
+        "prompt": "Same charge, but this time she CANCELS into {input:623C}. RG the {input:66B} as before, then keep guarding the follow-up before you even think about punishing.",
+        "script": "ep_66b_cancel",
+        "sequence": [
+          {
+            "id": "rg_first",
+            "notation": "RG",
+            "moveIds": [
+              168,
+              169,
+              170
+            ],
+            "req": "move",
+            "dummyState": [
+              231
+            ]
+          },
+          {
+            "id": "guard_fu",
+            "notation": "guard",
+            "moveIds": [
+              151,
+              153
+            ],
+            "req": "move",
+            "maxGap": 150,
+            "dummyState": [
+              258
+            ]
+          },
+          {
+            "id": "punish2",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "land",
+            "maxGap": 150,
+            "dummyState": [
+              258
+            ],
+            "contact": {
+              "attacker": "learner",
+              "target": "dummy",
+              "source": "direct",
+              "result": "hit",
+              "moveIds": [
+                200
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_66b_solo",
+          "ownerTask": "rg_challenge",
+          "kind": "macro",
+          "action": "66B",
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "She hops first - RG the charge, then punish.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        },
+        {
+          "id": "ep_66b_cancel",
+          "ownerTask": "rg_block",
+          "kind": "macro",
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "script": [
+            {
+              "action": "66B"
+            },
+            {
+              "action": "623C",
+              "cancel": true,
+              "waitTicks": 8
+            }
+          ],
+          "cue": {
+            "text": "Hop, then charge into uppercut - RG, keep guarding.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 210
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572"
+  ],
+  "next": {
+    "lessonId": "efz.defense.recoil_counter"
+  },
+  "recommendedAfter": [
+    "efz.defense.recoil_guard"
+  ]
+}

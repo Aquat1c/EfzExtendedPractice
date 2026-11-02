@@ -1,0 +1,365 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.hit_confirm",
+  "revision": 10,
+  "category": "strategy",
+  "order": 410,
+  "difficulty": 3,
+  "name": "Confirm Hit or Block",
+  "summary": "Read one c.5B: finish the route on hit, stop on block.",
+  "description": "Read one c.5B: finish the route on hit, stop on block.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 190.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 60.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "branch_on_outcome",
+    "cancel_transition",
+    "dummy_script",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Press Safe, Confirm Big",
+        "text": "Strong pressure uses cheap, low-commitment A and B normals - they are hard to punish even when Recoil Guarded. The damage comes later: only when you SEE the hit connect do you commit to the expensive part of the combo."
+      },
+      {
+        "id": "p1",
+        "title": "The Decision",
+        "text": "That moment of recognition is the hit confirm. On HIT you continue into the full route; on BLOCK you stop before the unsafe commitment. Stopping avoids handing over a free punish - it does not automatically guarantee that your turn continues."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Five rounds. Each time, poke with {input:5A} > {input:5B} - the dummy randomly blocks or gets hit. Finish the combo ONLY on hit; hold your ground on block. Guessing is losing: react to what you see."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "learn_hit",
+        "kind": "combat",
+        "label": "Guaranteed HIT: {input:c.5B} > {input:f.5B} > {input:5C} > {input:236A}",
+        "prompt": "This c.5B will hit. As soon as you see the hit, finish the displayed route.",
+        "script": "ep_learn_hit",
+        "branch": {
+          "starterMoveIds": [
+            201
+          ],
+          "onHit": [
+            {
+              "id": "f5b",
+              "notation": "f.5B",
+              "moveIds": [
+                202
+              ],
+              "fromMoveIds": [
+                201
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "5c",
+              "notation": "5C",
+              "moveIds": [
+                203
+              ],
+              "fromMoveIds": [
+                202
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "236a",
+              "notation": "236A",
+              "moveIds": [
+                253
+              ],
+              "fromMoveIds": [
+                203
+              ],
+              "req": "land",
+              "maxGap": 180
+            }
+          ],
+          "onBlockHoldTicks": 90
+        },
+        "feedback": {
+          "success": "You saw the hit and completed the confirm.",
+          "failure": "On hit, cancel c.5B into f.5B, then 5C and 236A."
+        }
+      },
+      {
+        "id": "learn_block",
+        "kind": "combat",
+        "label": "Guaranteed BLOCK: stop after {input:c.5B}",
+        "prompt": "This c.5B will be blocked. Do not press f.5B or another attack after you see the guard.",
+        "script": "ep_learn_block",
+        "branch": {
+          "starterMoveIds": [
+            201
+          ],
+          "onHit": [
+            {
+              "id": "f5b",
+              "notation": "f.5B",
+              "moveIds": [
+                202
+              ],
+              "fromMoveIds": [
+                201
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "5c",
+              "notation": "5C",
+              "moveIds": [
+                203
+              ],
+              "fromMoveIds": [
+                202
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "236a",
+              "notation": "236A",
+              "moveIds": [
+                253
+              ],
+              "fromMoveIds": [
+                203
+              ],
+              "req": "land",
+              "maxGap": 180
+            }
+          ],
+          "onBlockHoldTicks": 90
+        },
+        "feedback": {
+          "success": "You saw the block and stopped safely.",
+          "failure": "The c.5B was blocked. Stop there instead of continuing the route."
+        }
+      },
+      {
+        "id": "mixed_1",
+        "kind": "combat",
+        "label": "Hidden result 1 of 2: confirm HIT, stop on BLOCK",
+        "prompt": "Use c.5B and read what happened. On hit, finish f.5B > 5C > 236A. On block, press nothing else.",
+        "script": "ep_mixed_1",
+        "branch": {
+          "starterMoveIds": [
+            201
+          ],
+          "onHit": [
+            {
+              "id": "f5b",
+              "notation": "f.5B",
+              "moveIds": [
+                202
+              ],
+              "fromMoveIds": [
+                201
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "5c",
+              "notation": "5C",
+              "moveIds": [
+                203
+              ],
+              "fromMoveIds": [
+                202
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "236a",
+              "notation": "236A",
+              "moveIds": [
+                253
+              ],
+              "fromMoveIds": [
+                203
+              ],
+              "req": "land",
+              "maxGap": 180
+            }
+          ],
+          "onBlockHoldTicks": 90
+        },
+        "feedback": {
+          "success": "Right call - you read it, not guessed it.",
+          "failure": "Read c.5B first: finish only when it hits."
+        }
+      },
+      {
+        "id": "mixed_2",
+        "kind": "combat",
+        "label": "Hidden result 2 of 2: confirm HIT, stop on BLOCK",
+        "prompt": "One more: c.5B, then react. Complete f.5B > 5C > 236A only if c.5B hit.",
+        "script": "ep_mixed_2",
+        "branch": {
+          "starterMoveIds": [
+            201
+          ],
+          "onHit": [
+            {
+              "id": "f5b",
+              "notation": "f.5B",
+              "moveIds": [
+                202
+              ],
+              "fromMoveIds": [
+                201
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "5c",
+              "notation": "5C",
+              "moveIds": [
+                203
+              ],
+              "fromMoveIds": [
+                202
+              ],
+              "req": "land",
+              "maxGap": 120
+            },
+            {
+              "id": "236a",
+              "notation": "236A",
+              "moveIds": [
+                253
+              ],
+              "fromMoveIds": [
+                203
+              ],
+              "req": "land",
+              "maxGap": 180
+            }
+          ],
+          "onBlockHoldTicks": 90
+        },
+        "feedback": {
+          "success": "Right call - you read it, not guessed it.",
+          "failure": "Read c.5B first: finish only when it hits."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_learn_hit",
+          "ownerTask": "learn_hit",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Guaranteed HIT - complete the route.",
+            "lead": 0
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_learn_block",
+          "ownerTask": "learn_block",
+          "kind": "block",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Guaranteed BLOCK - stop after c.5B.",
+            "lead": 0
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_mixed_1",
+          "ownerTask": "mixed_1",
+          "kind": "idle",
+          "variants": [
+            "idle",
+            "block"
+          ],
+          "variantGroup": "mixed_confirm",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Result hidden - read c.5B.",
+            "lead": 0
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_mixed_2",
+          "ownerTask": "mixed_2",
+          "kind": "idle",
+          "variants": [
+            "idle",
+            "block"
+          ],
+          "variantGroup": "mixed_confirm",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Result hidden - read c.5B.",
+            "lead": 0
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.stable_combo"
+  },
+  "recommendedAfter": [
+    "efz.strategy.anti_air"
+  ]
+}

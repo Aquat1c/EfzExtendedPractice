@@ -1,0 +1,130 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.s_button",
+ "revision": 4,
+ "category": "offense",
+ "order": 180,
+ "difficulty": 2,
+ "name": "The S Button (Shiori)",
+ "summary": "Use Shiori's character-specific S shield.",
+ "description": "Use Shiori's character-specific S shield.",
+ "player": {
+  "character": "shiori",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "sayuri",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "dummy_script",
+  "pages",
+  "projectile_interception",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "The S Button",
+    "text": "S is the character-specific button - depending on who you play, it defends, changes stance, manages a resource, or does something else entirely. Shiori's 5S raises a short shield that stops an incoming projectile. Press {input:5S} as each fireball comes in to block it, then raise it again for the next one."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "raise_shield",
+    "kind": "combat",
+    "label": "Raise the shield with {input:5S}",
+    "moveIds": [
+     309
+    ],
+    "req": "move",
+    "script": "ep_fire"
+   },
+   {
+    "id": "shield_projectile",
+    "kind": "combat",
+    "label": "Stop a Sayuri fireball with the shield",
+    "moveIds": [
+     309
+    ],
+    "req": "projectileInterception",
+    "projectileInterception": {
+     "incomingPattern": 401,
+     "guardPattern": 423
+    },
+    "continuity": "continue",
+    "script": "ep_fire_intercept",
+    "feedback": {
+     "success": "Blocked it! Keep raising 5S as each fireball arrives.",
+     "failure": "Time it - the shield has to be up when the fireball reaches you."
+    }
+   }
+  ],
+  "dummyScript": {
+   "episodes": [
+    {
+     "id": "ep_fire",
+     "ownerTask": "raise_shield",
+     "kind": "macro",
+     "action": "236A",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "Fireballs incoming - shield up!",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    },
+    {
+     "id": "ep_fire_intercept",
+     "ownerTask": "shield_projectile",
+     "kind": "macro",
+     "action": "236A",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "Fireball incoming - shield up!",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    }
+   ]
+  }
+ },
+ "sourceRefs": [
+  "local:assets/movedata/shiori.json",
+  "local:assets/movedata/sayuri.json",
+  "local:shared_documentation/TUTORIAL_MODE_DESIGN.md::2-4 The S Button (Shiori)"
+ ],
+ "next": {
+  "lessonId": "efz.offense.sp_supers"
+ },
+ "recommendedAfter": [
+  "efz.offense.specials_2"
+ ]
+}

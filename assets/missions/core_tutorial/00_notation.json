@@ -1,0 +1,142 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.controls.notation",
+ "revision": 4,
+ "category": "fundamentals",
+ "order": 10,
+ "difficulty": 1,
+ "name": "Controls & Direction Notation",
+ "summary": "Learn EFZ's four buttons and the direction shorthand used in guides.",
+ "description": "Learn EFZ's four buttons and the direction shorthand used in guides.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "input_edges",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Number-Pad Notation",
+    "text": "Fighting-game guides and combo lists often use number-pad notation. Imagine the numbers laid over the directions: {dir:6} is toward the opponent, {dir:4} is away, {dir:2} is down, {dir:8} is up, and {dir:5} is neutral. The corner numbers are diagonals: {dir:3} is down-toward, {dir:1} is down-away, {dir:9} is up-toward, and {dir:7} is up-away."
+   },
+   {
+    "id": "p1",
+    "title": "Directions Follow Facing",
+    "text": "Directions follow the way your character faces. After you cross sides, {dir:6} still means toward the opponent and {dir:4} still means away."
+   },
+   {
+    "id": "p2",
+    "title": "The Four Buttons",
+    "text": "EFZ uses {btn:A} A (Light), {btn:B} B (Medium), {btn:C} C (Strong), and {btn:S} S (Special). S has a different use depending on the character; most of the characters don't use it at all."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "walk_toward",
+    "kind": "combat",
+    "label": "Walk toward the opponent (hold {dir:6})",
+    "moveIds": [
+     1
+    ],
+    "req": "move",
+    "prompt": "Hold toward and walk forward."
+   },
+   {
+    "id": "walk_away",
+    "kind": "combat",
+    "label": "Walk away (hold {dir:4})",
+    "moveIds": [
+     2
+    ],
+    "req": "move"
+   },
+   {
+    "id": "crouch",
+    "kind": "combat",
+    "label": "Crouch (hold {dir:2})",
+    "moveIds": [
+     3
+    ],
+    "req": "move"
+   },
+   {
+    "id": "jump_up",
+    "kind": "combat",
+    "label": "Jump straight up ({dir:8})",
+    "moveIds": [
+     4
+    ],
+    "req": "move"
+   },
+   {
+    "id": "press_a",
+    "kind": "combat",
+    "label": "Press {btn:A}",
+    "moveIds": [
+     200
+    ],
+    "req": "move"
+   },
+   {
+    "id": "press_b",
+    "kind": "combat",
+    "label": "Press {btn:B}",
+    "moveIds": [
+     201,
+     202
+    ],
+    "req": "move"
+   },
+   {
+    "id": "press_c",
+    "kind": "combat",
+    "label": "Press {btn:C}",
+    "moveIds": [
+     203
+    ],
+    "req": "move"
+   },
+   {
+    "id": "press_s",
+    "kind": "combat",
+    "label": "Press {btn:S}",
+    "inputMask": 128,
+    "req": "input",
+    "prompt": "Tap {btn:S}. Nayuki has no universal S move, so don't expect anything flashy - just show us the button press."
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:controls@342179"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.combo_notation"
+ }
+}

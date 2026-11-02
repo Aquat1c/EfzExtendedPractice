@@ -1,0 +1,128 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.juggle_gauge",
+ "revision": 8,
+ "category": "offense",
+ "order": 230,
+ "difficulty": 2,
+ "name": "Juggle Gauge and Combo Time",
+ "summary": "Read how long an air combo can continue.",
+ "description": "Read how long an air combo can continue.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_absence",
+  "dummy_script",
+  "juggle_state",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "The Juggle Gauge",
+    "showHud": "juggle",
+    "text": "The {tone:juggle|cyan Juggle Gauge} under a launched opponent shows how long they remain unable to recover. Power usually gives the next hit more time, but the previous move, height, and character also matter."
+   },
+   {
+    "id": "p1",
+    "title": "Running Low",
+    "showHud": "juggle_yellow",
+    "text": "At {tone:juggle_yellow|20 visual frames or less}, the gauge turns yellow. Stored Guard Gauge can hold this countdown; the Defense section shows that interaction."
+   },
+   {
+    "id": "p2",
+    "title": "Almost Empty",
+    "showHud": "juggle_red",
+    "text": "At {tone:juggle_red|10 visual frames or less}, the gauge turns red. When it empties, ordinary juggle hits stop connecting and air recovery becomes available."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "read_gauge",
+    "kind": "combat",
+    "label": "Hit the jumping Misaki and make the gauge appear",
+    "prompt": "Misaki will keep jumping toward you. Hit her out of the air - {input:j.A} works - and look for the gauge that appears beneath her.",
+    "script": "ep_jump_in",
+    "goalState": {
+     "field": "untech",
+     "player": 2,
+     "op": "gt",
+     "value": 0
+    },
+    "feedback": {
+     "success": "The gauge is running - that is her remaining juggle time."
+    }
+   },
+   {
+    "id": "time_out",
+    "kind": "combat",
+    "continuity": "continue",
+    "label": "Let the gauge empty and watch the recovery",
+    "prompt": "Now hold your attacks. Watch the gauge drain to nothing and watch Misaki become free to act again.",
+    "absence": {
+     "forbid": "attack",
+     "start": "dummyUntech",
+     "end": "dummyUntechEmpty"
+    },
+    "feedback": {
+     "success": "The gauge emptied - past that point ordinary juggle hits stop working.",
+     "failure": "Do not attack during the countdown. If Misaki lands first, hit the next jump higher so the gauge can empty in the air."
+    }
+   }
+  ],
+  "dummyScript": {
+   "episodes": [
+    {
+     "id": "ep_jump_in",
+     "ownerTask": "read_gauge",
+     "kind": "macro",
+     "action": "jump",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "Misaki's jumping in - hit her airborne!",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 120
+     }
+    }
+   ]
+  }
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180"
+ ],
+ "next": {
+  "lessonId": "efz.offense.blue_ic"
+ },
+ "recommendedAfter": [
+  "efz.offense.power_scaling"
+ ]
+}

@@ -1,0 +1,254 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.open_guard",
+  "revision": 13,
+  "category": "strategy",
+  "order": 440,
+  "difficulty": 3,
+  "name": "Open a Guard",
+  "summary": "Use low, overhead, and delayed throw against the right defense.",
+  "description": "Use low, overhead, and delayed throw against the right defense.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 190.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 60.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "block_state",
+    "cancel_transition",
+    "dummy_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "No Guard Is Complete",
+        "text": "EFZ has no absolute guard. A STANDING guard loses to lows. A CROUCHING guard loses to overheads. And NO guard stops a throw. Every defensive stance leaves one door open - your job is to find which."
+      },
+      {
+        "id": "p1",
+        "title": "The Drill",
+        "text": "The dummy will hold one fixed guard at a time. Open the standing guard with your low, strike the crouching guard high, and when it just blocks everything - walk up and THROW. Watch which of your options each stance is helpless against."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "open_low",
+        "kind": "combat",
+        "label": "Open the standing guard",
+        "sequence": [
+          {
+            "id": "chain_c5b",
+            "notation": "c.5B (blocked)",
+            "moveIds": [
+              201
+            ],
+            "req": "block"
+          },
+          {
+            "id": "chain_f5b",
+            "notation": "f.5B (blocked)",
+            "moveIds": [
+              202
+            ],
+            "req": "block",
+            "fromMoveIds": [
+              201
+            ],
+            "maxGap": 120
+          },
+          {
+            "id": "low",
+            "notation": "2C (low)",
+            "moveIds": [
+              206
+            ],
+            "req": "land",
+            "fromMoveIds": [
+              202
+            ],
+            "maxGap": 120
+          }
+        ],
+        "pos": {
+          "x": 190.0,
+          "y": 0.0
+        },
+        "script": "ep_guard_stand",
+        "prompt": "The dummy holds standing guard. Chain {input:c.5B} > {input:f.5B} into it - both get blocked - then cancel into low {input:2C} to open it.",
+        "feedback": {
+          "success": "The low opened standing guard.",
+          "failure": "Keep c.5B > f.5B blocked, then cancel straight into 2C - the low goes under a standing guard."
+        }
+      },
+      {
+        "id": "open_high",
+        "kind": "combat",
+        "label": "Open the crouching guard",
+        "sequence": [
+          {
+            "id": "chain_c5b",
+            "notation": "c.5B (blocked)",
+            "moveIds": [
+              201
+            ],
+            "req": "block"
+          },
+          {
+            "id": "chain_f5b",
+            "notation": "f.5B (blocked)",
+            "moveIds": [
+              202
+            ],
+            "req": "block",
+            "fromMoveIds": [
+              201
+            ],
+            "maxGap": 120
+          },
+          {
+            "id": "high",
+            "notation": "236C (overhead)",
+            "moveIds": [
+              255
+            ],
+            "req": "land",
+            "fromMoveIds": [
+              202
+            ],
+            "maxGap": 180
+          }
+        ],
+        "pos": {
+          "x": 190.0,
+          "y": 0.0
+        },
+        "script": "ep_guard_crouch",
+        "prompt": "Now it holds crouching guard. Chain {input:c.5B} > {input:f.5B} - both blocked - then cancel into overhead {input:236C} to open it.",
+        "feedback": {
+          "success": "The overhead opened crouching guard.",
+          "failure": "Keep c.5B > f.5B blocked, then cancel into 236C - the overhead beats a crouching guard."
+        }
+      },
+      {
+        "id": "open_throw",
+        "kind": "combat",
+        "label": "Poke, walk in, then throw",
+        "sequence": [
+          {
+            "id": "poke",
+            "notation": "5A / 66A (blocked)",
+            "moveIds": [
+              200,
+              230
+            ],
+            "req": "block"
+          },
+          {
+            "id": "throw",
+            "notation": "~ 6C / 4C",
+            "moveIds": [
+              221
+            ],
+            "req": "move",
+            "minGap": 30,
+            "maxGap": 720
+          }
+        ],
+        "pos": {
+          "x": 190.0,
+          "y": 0.0
+        },
+        "script": "ep_guard_throw",
+        "prompt": "The dummy auto-blocks everything. Get a poke blocked - {input:5A} or {input:66A}, either works - then walk in and grab with 6C or 4C the moment blockstun runs out.",
+        "feedback": {
+          "success": "The delayed walk-up throw opened the guard.",
+          "failure": "After the blocked poke, walk closer and throw once their blockstun ends - no guard stops a throw."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_guard_stand",
+          "ownerTask": "open_low",
+          "kind": "guard",
+          "clip": "stand",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Standing guard - hit LOW.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_guard_crouch",
+          "ownerTask": "open_high",
+          "kind": "guard",
+          "clip": "crouch",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Crouching guard - strike HIGH.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_guard_throw",
+          "ownerTask": "open_throw",
+          "kind": "block",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Poke the auto-block, walk in, then throw.",
+            "lead": 0
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html",
+    "local:docs/info/primer/EFZ Primer _ efzrevival.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.wakeup_offense"
+  },
+  "recommendedAfter": [
+    "efz.strategy.end_with_advantage"
+  ]
+}

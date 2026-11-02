@@ -1,0 +1,215 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.offense.jump_cancels",
+  "revision": 7,
+  "category": "offense",
+  "order": 160,
+  "difficulty": 2,
+  "name": "Jump and Air-Movement Cancels",
+  "summary": "Cancel a connected attack into a jump, then continue in the air.",
+  "description": "Cancel a connected attack into a jump, then continue in the air.",
+  "player": {
+    "character": "shiori",
+    "pos": {
+      "x": 290.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 350.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "cancel_transition",
+    "dummy_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Jump Cancels",
+        "text": "Some attacks can cancel into a jump when they connect. That's how you chase a launched opponent or stay glued to them during pressure. Whether it works on hit, on block, or both depends on the move."
+      },
+      {
+        "id": "p1",
+        "title": "Air Cancels",
+        "text": "In the air, certain attacks can cancel into a double jump or air dash - as long as you still have that air option left. A whiffed attack normally can't cancel like this - the move has to actually touch the opponent first."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "ground_jc",
+        "kind": "combat",
+        "label": "Shiori {input:c.5B} > {dir:9} > {input:j.B}",
+        "prompt": "Land c.5B, cancel it into a forward jump, then hit them with j.B.",
+        "script": "ep_ground_jc_idle",
+        "continuity": "sameCombo",
+        "sequence": [
+          {
+            "id": "c5b",
+            "notation": "c.5B",
+            "moveIds": [
+              201
+            ],
+            "req": "land"
+          },
+          {
+            "id": "jump9",
+            "notation": "9",
+            "moveIds": [
+              5
+            ],
+            "fromMoveIds": [
+              201
+            ],
+            "req": "move",
+            "maxGap": 120
+          },
+          {
+            "id": "jb",
+            "notation": "j.B",
+            "moveIds": [
+              208
+            ],
+            "fromMoveIds": [
+              5
+            ],
+            "req": "land",
+            "maxGap": 180
+          }
+        ],
+        "feedback": {
+          "success": "Nice - you jumped straight out of c.5B and j.B kept the combo alive.",
+          "failure": "Make c.5B connect first, then jump during its cancel window and press j.B."
+        }
+      },
+      {
+        "id": "air_string",
+        "kind": "combat",
+        "label": "{input:j.A} > {input:dj.9} > {input:j.B} > {input:j.66} > {input:j.B}",
+        "prompt": "Catch the jumping Misaki with j.A, then run every air cancel as one combo.",
+        "script": "ep_air_string_jump",
+        "continuity": "sameCombo",
+        "sequence": [
+          {
+            "id": "ja",
+            "notation": "j.A",
+            "moveIds": [
+              207
+            ],
+            "req": "land"
+          },
+          {
+            "id": "dj9",
+            "notation": "dj.9",
+            "moveIds": [
+              15
+            ],
+            "fromMoveIds": [
+              207
+            ],
+            "req": "move",
+            "maxGap": 120
+          },
+          {
+            "id": "jb1",
+            "notation": "j.B",
+            "moveIds": [
+              208
+            ],
+            "fromMoveIds": [
+              15
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "j66",
+            "notation": "j.66",
+            "moveIds": [
+              165
+            ],
+            "fromMoveIds": [
+              208
+            ],
+            "req": "move",
+            "maxGap": 120
+          },
+          {
+            "id": "jb2",
+            "notation": "j.B",
+            "moveIds": [
+              208
+            ],
+            "fromMoveIds": [
+              165
+            ],
+            "req": "land",
+            "maxGap": 180
+          }
+        ],
+        "feedback": {
+          "success": "Beautiful - both air-movement cancels stayed inside the connected string.",
+          "failure": "A whiffed air attack can't cancel on contact. Start lower and keep every hit connected."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_ground_jc_idle",
+          "ownerTask": "ground_jc",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "c.5B, jump-cancel, then j.B",
+            "lead": 0
+          }
+        },
+        {
+          "id": "ep_air_string_jump",
+          "ownerTask": "air_string",
+          "kind": "macro",
+          "action": "jump",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Misaki jumps in - catch her with j.A",
+            "lead": 0
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180#Jump_Cancelling"
+  ],
+  "next": {
+    "lessonId": "efz.offense.specials"
+  },
+  "recommendedAfter": [
+    "efz.offense.cancel_routes"
+  ]
+}

@@ -1,0 +1,242 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.survive_pressure",
+  "revision": 11,
+  "category": "strategy",
+  "order": 460,
+  "difficulty": 4,
+  "name": "Survive Pressure",
+  "summary": "Block the string with no gap, then escape the version that leaves one.",
+  "description": "Block the string with no gap, then escape the version that leaves one.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 40.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 160.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_absence",
+    "action_events",
+    "block_state",
+    "dummy_script",
+    "dummy_state",
+    "episode_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Defense Is Not Passive",
+        "text": "While you block and Recoil Guard, your RF Gauge builds at DOUBLE speed - good defense literally pays you. But there is no absolute guard: letting go of block at the wrong moment gets you hit even inside a blockstring."
+      },
+      {
+        "id": "p1",
+        "title": "Find the Real Gap",
+        "text": "Pressure strings are not seamless - most have a gap where the attacker's turn briefly ends. THAT is where you escape or challenge. Mashing anywhere else is exactly what the attacker is fishing for."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Misaki loops a fixed string with one real gap in the middle and a heavy ender. First just survive it. Then jump out through the gap. Then Recoil Guard the ender. Three answers to the same string - learn all three."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "block_all",
+        "kind": "combat",
+        "label": "Survive the whole string - just block",
+        "prompt": "Misaki runs a fixed pressure string: {input:5A} > {input:5B} > {input:5C}. Hold {dir:4} and BLOCK it all - do not press anything.",
+        "script": "ep_pressure_a",
+        "absence": {
+          "forbid": "attack",
+          "start": "taskArmed",
+          "end": "episodeCycleEnd",
+          "failOnHit": true,
+          "minBlocks": 3
+        }
+      },
+      {
+        "id": "escape_gap",
+        "kind": "combat",
+        "label": "Jump out through the marked GAP",
+        "prompt": "The pause in the middle is a real GAP - her turn briefly ends there. Block the start, then JUMP out the moment the gap opens.",
+        "script": "ep_pressure_b",
+        "sequence": [
+          {
+            "id": "block_opening",
+            "notation": "block",
+            "moveIds": [
+              150,
+              151,
+              152,
+              153,
+              154,
+              155
+            ],
+            "req": "move",
+            "dummyState": [
+              200,
+              201
+            ]
+          },
+          {
+            "id": "jump_gap",
+            "notation": "jump",
+            "moveIds": [
+              4,
+              5,
+              6
+            ],
+            "req": "move",
+            "duringGap": true,
+            "maxGap": 360
+          }
+        ]
+      },
+      {
+        "id": "rg_marked",
+        "kind": "combat",
+        "label": "Recoil Guard the heavy ender",
+        "prompt": "One more time - this run, Recoil Guard the heavy {input:5C} ender (tap {dir:4} right as it strikes).",
+        "script": "ep_pressure_c",
+        "moveIds": [
+          168,
+          169,
+          170
+        ],
+        "req": "move",
+        "dummyState": [
+          203
+        ]
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_pressure_a",
+          "ownerTask": "block_all",
+          "kind": "macro",
+          "start": "taskArmed",
+          "approach": "dash",
+          "script": [
+            {
+              "action": "5A"
+            },
+            {
+              "action": "5B",
+              "cancel": true,
+              "waitTicks": 8
+            },
+            {
+              "action": "5C",
+              "cancel": true,
+              "waitTicks": 8
+            }
+          ],
+          "cue": {
+            "text": "Block everything.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 240
+          }
+        },
+        {
+          "id": "ep_pressure_b",
+          "ownerTask": "escape_gap",
+          "kind": "macro",
+          "start": "taskArmed",
+          "approach": "dash",
+          "script": [
+            {
+              "action": "5A"
+            },
+            {
+              "action": "5B",
+              "cancel": true,
+              "waitTicks": 8
+            },
+            {
+              "gapTicks": 150
+            },
+            {
+              "action": "5C"
+            }
+          ],
+          "cue": {
+            "text": "Jump out in the gap.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 240
+          }
+        },
+        {
+          "id": "ep_pressure_c",
+          "ownerTask": "rg_marked",
+          "kind": "macro",
+          "start": "taskArmed",
+          "approach": "dash",
+          "script": [
+            {
+              "action": "5A"
+            },
+            {
+              "action": "5B",
+              "cancel": true,
+              "waitTicks": 8
+            },
+            {
+              "gapTicks": 150
+            },
+            {
+              "action": "5C"
+            }
+          ],
+          "cue": {
+            "text": "RG the heavy ender.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 240
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572#Practical_Applications_for_the_Defender",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.choose_rg"
+  },
+  "recommendedAfter": [
+    "efz.strategy.wakeup_offense"
+  ]
+}

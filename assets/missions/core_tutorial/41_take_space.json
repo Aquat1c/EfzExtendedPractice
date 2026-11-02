@@ -1,0 +1,256 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.take_space",
+  "revision": 9,
+  "category": "strategy",
+  "order": 390,
+  "difficulty": 3,
+  "name": "Take Space Safely",
+  "summary": "Choose walking, dashing, or jumping for the situation.",
+  "description": "Choose walking, dashing, or jumping for the situation.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "coherent_state",
+    "dummy_script",
+    "dummy_state",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks",
+    "whiff_window"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Momentum Wins Games",
+        "text": "EFZ is a momentum game: there is no absolute guard and mixups are brutal, so the player who controls space usually controls the match. Taking ground safely - without walking into a poke - is a skill of its own."
+      },
+      {
+        "id": "p1",
+        "title": "How to Walk Forward",
+        "text": "Advance in small steps BEHIND your own threat range. When the opponent pokes, either block it and keep your ground, or make it whiff and take the space it just gave up. Never walk in a straight line into an active poke."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Close the distance on Misaki step by step: walk in and block her poke, dash in to punish a miss, then use a low attack's recovery to jump forward. Each exchange should leave you closer than before."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "walk_close",
+        "kind": "combat",
+        "label": "Walk in until you are at striking distance",
+        "goalState": {
+          "field": "distance",
+          "player": 1,
+          "op": "le",
+          "value": 60
+        },
+        "pos": {
+          "x": 250.0,
+          "y": 0.0
+        },
+        "feedback": {
+          "success": "Close enough to threaten an attack.",
+          "failure": "Hold forward and walk toward the dummy."
+        }
+      },
+      {
+        "id": "walk_guard",
+        "kind": "combat",
+        "label": "Walk forward and block the repeating poke",
+        "sequence": [
+          {
+            "id": "advance",
+            "notation": "walk forward",
+            "moveIds": [
+              1
+            ],
+            "req": "move"
+          },
+          {
+            "id": "guard_poke",
+            "notation": "block",
+            "moveIds": [
+              150,
+              151,
+              152,
+              153,
+              154,
+              155
+            ],
+            "req": "move",
+            "maxGap": 240,
+            "dummyState": [
+              203
+            ]
+          }
+        ],
+        "script": "ep_walk_poke",
+        "pos": {
+          "x": 250.0,
+          "y": 0.0
+        },
+        "feedback": {
+          "success": "You advanced, then stopped in time to block the poke.",
+          "failure": "Walk forward first, then switch to {dir:4} before the poke reaches you."
+        }
+      },
+      {
+        "id": "dash_whiff",
+        "kind": "combat",
+        "label": "Let the poke whiff, then dash in and punish",
+        "sequence": [
+          {
+            "id": "dash_after_whiff",
+            "notation": "66",
+            "moveIds": [
+              163
+            ],
+            "req": "move",
+            "withinWhiffWindow": {
+              "maxTicks": 120
+            }
+          },
+          {
+            "id": "punish_recovery",
+            "notation": "normal",
+            "moveIds": [
+              200,
+              201,
+              202,
+              203,
+              230,
+              231,
+              232
+            ],
+            "req": "land",
+            "maxGap": 120,
+            "withinWhiffWindow": {
+              "maxTicks": 120
+            }
+          }
+        ],
+        "script": "ep_dash_poke",
+        "pos": {
+          "x": 250.0,
+          "y": 0.0
+        },
+        "feedback": {
+          "success": "You dashed in while the dummy was still recovering from the miss.",
+          "failure": "Stay outside the poke's reach. The moment it misses, dash {dir:6}{dir:6} and attack."
+        }
+      },
+      {
+        "id": "jump_low",
+        "kind": "combat",
+        "label": "After the low whiffs, jump forward to take space",
+        "moveIds": [
+          5
+        ],
+        "req": "move",
+        "withinWhiffWindow": {
+          "maxTicks": 100
+        },
+        "script": "ep_low",
+        "pos": {
+          "x": 290.0,
+          "y": 0.0
+        },
+        "feedback": {
+          "success": "You used the low's recovery to move forward safely.",
+          "failure": "Wait for the crouching attack to miss, then jump forward before the next one starts."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_walk_poke",
+          "ownerTask": "walk_guard",
+          "kind": "macro",
+          "action": "5C",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Walk forward with guard ready - block when the poke reaches you.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_dash_poke",
+          "ownerTask": "dash_whiff",
+          "kind": "macro",
+          "action": "5C",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Stay just outside the poke. When it misses, dash in and punish.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        },
+        {
+          "id": "ep_low",
+          "ownerTask": "jump_low",
+          "kind": "macro",
+          "action": "2B",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Let the crouching attack miss, then jump forward.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html",
+    "local:docs/info/primer/EFZ Primer _ efzrevival.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.anti_air"
+  },
+  "recommendedAfter": [
+    "efz.strategy.useful_range"
+  ]
+}

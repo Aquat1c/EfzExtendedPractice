@@ -1,0 +1,113 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+
+// Owner state for one overlay backend and one pending device reset; hold Access for every backend
+// operation. Try-acquire refuses reentrancy rather than waiting inside D3D9 Reset's message dispatch.
+class EfzOverlayResetGate {
+public:
+    enum class Result { Ok, InvalidArgument, WrongThread, Busy };
+
+    class Access {
+    public:
+        explicit Access(EfzOverlayResetGate& gate)
+            : gate_(gate), acquired_(!gate_.lock_.test_and_set(std::memory_order_acquire)) {}
+        ~Access() { Release(); }
+        Access(const Access&) = delete;
+        Access& operator=(const Access&) = delete;
+        bool Acquired() const { return acquired_; }
+        void Release() {
+            if (acquired_) {
+                acquired_ = false;
+                gate_.lock_.clear(std::memory_order_release);
+            }
+        }
+    private:
+        EfzOverlayResetGate& gate_;
+        bool acquired_;
+    };
+
+    bool CanRender(void* device, uint32_t thread) const {
+        return device && thread && !(pending_ && resetDevice_ == device)
+            && (!boundDevice_ || ownerThread_ == thread);
+    }
+
+    bool BindBackend(void* device, uint32_t thread) {
+        if (!CanRender(device, thread)) return false;
+        boundDevice_ = device;
+        ownerThread_ = thread;
+        invalidated_ = false;
+        return true;
+    }
+
+    void UnbindBackend() {
+        boundDevice_ = nullptr;
+        ownerThread_ = 0;
+        invalidated_ = false;
+        // A menu/online suspension must not clear the game-device reset gate.
+    }
+
+    void* BoundDevice() const { return boundDevice_; }
+    uint32_t OwnerThread() const { return ownerThread_; }
+    bool PendingFor(void* device) const { return pending_ && resetDevice_ == device; }
+    bool BackendInvalidatedFor(void* device) const {
+        return PendingFor(device) && boundDevice_ == device && invalidated_;
+    }
+
+    Result BeforeReset(void* device, uint32_t epoch, uint32_t thread,
+                       bool& invalidate) {
+        invalidate = false;
+        if (!device || !epoch || !thread) return Result::InvalidArgument;
+        if (boundDevice_ == device && ownerThread_ != thread) return Result::WrongThread;
+        if (pending_) {
+            if (resetDevice_ != device) return Result::Busy;
+            if (resetThread_ != thread) return Result::WrongThread;
+            // Accept epoch forward progress (incl. wrap); never let a stale
+            // BeforeReset authorize a stale completion.
+            if (epoch != epoch_ && uint32_t(epoch - epoch_) > 0x7fffffffu)
+                return Result::InvalidArgument;
+        }
+        pending_ = true;
+        resetDevice_ = device;
+        resetThread_ = thread;
+        epoch_ = epoch;
+        invalidate = boundDevice_ == device && !invalidated_;
+        return Result::Ok;
+    }
+
+    void DidInvalidateBackend() {
+        if (pending_ && boundDevice_ == resetDevice_) invalidated_ = true;
+    }
+
+    Result AfterReset(void* device, uint32_t epoch, uint32_t thread,
+                      uint32_t ready) {
+        if (!device || !epoch || !thread || ready > 1 || !pending_
+            || resetDevice_ != device || epoch_ != epoch)
+            return Result::InvalidArgument;
+        if (resetThread_ != thread
+            || (boundDevice_ == device && ownerThread_ != thread))
+            return Result::WrongThread;
+        if (ready && boundDevice_ == device && !invalidated_)
+            return Result::Busy;
+        if (ready) {
+            pending_ = false;
+            resetDevice_ = nullptr;
+            resetThread_ = 0;
+            epoch_ = 0;
+            // The owner must recreate its objects before committing ready.
+            invalidated_ = false;
+        }
+        return Result::Ok;
+    }
+
+private:
+    std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+    void* boundDevice_ = nullptr;
+    uint32_t ownerThread_ = 0;
+    void* resetDevice_ = nullptr;
+    uint32_t resetThread_ = 0;
+    uint32_t epoch_ = 0;
+    bool pending_ = false;
+    bool invalidated_ = false;
+};

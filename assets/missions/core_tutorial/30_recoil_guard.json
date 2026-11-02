@@ -1,0 +1,204 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.defense.recoil_guard",
+  "revision": 7,
+  "category": "defense",
+  "order": 280,
+  "difficulty": 3,
+  "name": "Recoil Guard",
+  "summary": "Tap guard just before impact to avoid the usual time stuck after guarding.",
+  "description": "Tap guard just before impact to avoid the usual time stuck after guarding.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 290.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 350.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "dummy_script",
+    "episode_telegraph",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "RG",
+        "text": "Release guard, then tap away - or down-away against a low - just before the hit. Nail it and you skip the usual time stuck after guarding (blockstun), plus the pushback, chip, and Guard Gauge gain. Hold guard too early and you just get a normal block. Miss the window and RG goes on a short cooldown, so don't try to mash it."
+      },
+      {
+        "id": "p1",
+        "title": "RG Recovery",
+        "text": "After the freeze you land in RG recovery. No walking, jumping, dashing, or ordinary throws - but you CAN keep blocking or cancel straight into an attack. Character-specific command throws still work too."
+      },
+      {
+        "id": "p2",
+        "title": "RG Cooldown",
+        "text": "On the ground you can't RG every single hit in a row. So in the final drill: RG the first hit, block the second normally to let the cooldown recover, then RG the low third hit."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "rg_stand",
+        "kind": "combat",
+        "label": "RG Misaki's {input:66A}",
+        "moveIds": [
+          168
+        ],
+        "req": "move",
+        "script": "ep_rg_stand",
+        "feedback": {
+          "success": "That was a standing Recoil Guard.",
+          "failure": "Release guard, then tap away just before 66A connects."
+        }
+      },
+      {
+        "id": "rg_low",
+        "kind": "combat",
+        "label": "RG Misaki's low {input:662A}",
+        "moveIds": [
+          169
+        ],
+        "req": "move",
+        "script": "ep_rg_low",
+        "feedback": {
+          "success": "That was a crouching Recoil Guard.",
+          "failure": "Release guard, then tap down-away just before 662A connects."
+        }
+      },
+      {
+        "id": "rg_pattern",
+        "kind": "combat",
+        "label": "In the corner, RG {input:5A} > block {input:5B} > RG {input:2C}",
+        "prompt": "Misaki comes at you with 5A > 5B > 2C. RG the 5A, hold away early to block 5B normally, then tap down-away to RG the 2C.",
+        "script": "ep_rg_pattern",
+        "pos": {
+          "x": 20.0,
+          "y": 0.0
+        },
+        "dummyPos": {
+          "x": 80.0,
+          "y": 0.0
+        },
+        "sequence": [
+          {
+            "id": "first_rg",
+            "notation": "RG",
+            "moveIds": [
+              168
+            ],
+            "req": "move"
+          },
+          {
+            "id": "normal_block",
+            "notation": "normal block",
+            "moveIds": [
+              151
+            ],
+            "req": "move",
+            "maxGap": 90
+          },
+          {
+            "id": "second_rg",
+            "notation": "RG",
+            "moveIds": [
+              169
+            ],
+            "req": "move",
+            "maxGap": 90
+          }
+        ],
+        "feedback": {
+          "success": "Good - the normal block gave Recoil Guard time to recover before the low.",
+          "failure": "RG 5A, hold away through 5B for a normal block, then release and tap down-away for 2C."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_rg_stand",
+          "ownerTask": "rg_stand",
+          "kind": "macro",
+          "action": "66A",
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Watch the hop - 66A comes when she lands. Tap away late!",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_rg_low",
+          "ownerTask": "rg_low",
+          "kind": "macro",
+          "action": "662A",
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Hop, then a LOW 662A - tap down-away late!",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_rg_pattern",
+          "ownerTask": "rg_pattern",
+          "kind": "macro",
+          "action": "5A>5B>2C",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "RG 5A, block 5B, RG 2C!",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180",
+    "mizuumi:advanced-mechanics@457885"
+  ],
+  "next": {
+    "lessonId": "efz.defense.rg_response"
+  },
+  "recommendedAfter": [
+    "efz.defense.guard_gauge"
+  ]
+}

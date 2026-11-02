@@ -1,0 +1,102 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.air_dash",
+ "revision": 4,
+ "category": "fundamentals",
+ "order": 90,
+ "difficulty": 2,
+ "name": "Air Dash",
+ "summary": "Air dash forward and backward at useful heights.",
+ "description": "Air dash forward and backward at useful heights.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "coherent_state",
+  "ordered_actions",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Air Dashes",
+    "text": "Use {input:j.66} or {input:j.44}. A forward air dash needs more height; a backward air dash works much closer to the ground. You can't act during the opening part of an air dash, and most characters give up their unused double jump when they air dash. Air throws only become available after the dash finishes."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "airdash_fwd",
+    "kind": "combat",
+    "label": "Forward air dash ({input:j.66})",
+    "moveIds": [
+     165
+    ],
+    "req": "move"
+   },
+   {
+    "id": "airdash_back",
+    "kind": "combat",
+    "label": "Backward air dash ({input:j.44})",
+    "moveIds": [
+     166
+    ],
+    "req": "move"
+   },
+   {
+    "id": "airdash_low",
+    "kind": "combat",
+    "label": "Jump, then air dash forward soon after takeoff",
+    "sequence": [
+     {
+      "id": "low_jump",
+      "notation": "8/9/7",
+      "moveIds": [4, 5, 6],
+      "req": "move"
+     },
+     {
+      "id": "low_airdash",
+      "notation": "j.66",
+      "moveIds": [165],
+      "req": "move",
+      "maxGap": 96
+     }
+    ],
+    "prompt": "Air dash right after leaving the ground. Waited too long? Just jump and try again."
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.normals"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.hover_dash"
+ ]
+}

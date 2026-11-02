@@ -1,0 +1,151 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.hover_dash",
+ "revision": 5,
+ "category": "fundamentals",
+ "order": 80,
+ "difficulty": 2,
+ "name": "Hover Dash (Misuzu)",
+ "summary": "Turn a ground dash into an airborne approach.",
+ "description": "Turn a ground dash into an airborne approach.",
+ "player": {
+  "character": "misuzu",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "cancel_transition",
+  "ordered_actions",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Hover",
+    "text": "Misuzu's ground dash lifts her into the air. After the short rise, she can use an available air action: attack, jump, or air dash. Other hover-dash characters follow the same basic rule."
+   }
+  ],
+  "tasks": [
+   {
+   "id": "hover_attack",
+   "kind": "combat",
+    "label": "Hover forward, then attack from the hover",
+    "prompt": "Dash with {input:66}. Once Misuzu floats up and can act, hit A, B, or C before you land.",
+    "sequence": [
+     {
+      "id": "hover",
+      "notation": "66",
+      "moveIds": [163],
+      "req": "move"
+     },
+     {
+      "id": "air_attack",
+      "notation": "j.A / j.B / j.C",
+      "moveIds": [207, 208, 209],
+      "fromMoveIds": [163, 9],
+      "req": "move",
+      "maxGap": 240
+     }
+    ],
+    "feedback": {
+     "success": "Nice - that attack came straight out of the hover.",
+     "failure": "Stay in the hover until Misuzu can act, then press an attack button before landing."
+    }
+   },
+   {
+    "id": "hover_back",
+    "kind": "combat",
+    "label": "Hover backward with {input:44}",
+    "moveIds": [
+     166
+    ],
+    "req": "move"
+   },
+   {
+   "id": "hover_jump",
+   "kind": "combat",
+    "label": "Hover forward, then use an air jump",
+    "prompt": "Dash with {input:66}. Once you can act in the air, press a jump direction.",
+    "sequence": [
+     {
+      "id": "hover",
+      "notation": "66",
+      "moveIds": [163],
+      "req": "move"
+     },
+     {
+      "id": "air_jump",
+      "notation": "dj.7 / dj.8 / dj.9",
+      "moveIds": [14, 15, 16],
+      "fromMoveIds": [163, 9],
+      "req": "move",
+      "maxGap": 240
+     }
+    ],
+    "feedback": {
+     "success": "Nice - you spent the hover's air action on a jump.",
+     "failure": "Do the jump while the hover is still active, not after landing."
+    }
+   },
+   {
+   "id": "hover_airdash",
+   "kind": "combat",
+    "label": "Hover forward, then air dash",
+    "prompt": "Dash with {input:66}. Once you can act in the air, go for {input:j.66} or {input:j.44}.",
+    "sequence": [
+     {
+      "id": "hover",
+      "notation": "66",
+      "moveIds": [163],
+      "req": "move"
+     },
+     {
+      "id": "air_dash",
+      "notation": "j.66 / j.44",
+      "moveIds": [165, 166],
+      "fromMoveIds": [163, 9],
+      "req": "move",
+      "maxGap": 240
+     }
+    ],
+    "feedback": {
+     "success": "Nice - the air dash came straight out of the hover.",
+     "failure": "Wait until Misuzu can act, then air dash before the hover ends."
+    }
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180",
+  "local:shared_documentation/TUTORIAL_MODE_DESIGN.md::1-6 Hover Dash (Misuzu)"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.air_dash"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.ground_dash"
+ ]
+}

@@ -1,0 +1,311 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.spend_rf",
+  "revision": 13,
+  "category": "strategy",
+  "order": 490,
+  "difficulty": 4,
+  "name": "Spend RF with a Purpose",
+  "summary": "Spend Red RF now, or wait for Light Blue RF when it gives more value.",
+  "description": "Spend Red RF now, or wait for Light Blue RF when it gives more value.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "block_state",
+    "cancel_transition",
+    "dummy_script",
+    "input_commit_mapping",
+    "input_edges",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "task_state_seeds",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "The Math of Red vs Blue",
+        "showHud": "rf",
+        "text": "Red RF builds in about 9 seconds; a full Blue gauge takes 35. Per second spent building, Red IC combos pay roughly TWICE the damage of Blue ones - in the time you save up one Blue, you could have spent Red three times."
+      },
+      {
+        "id": "p1",
+        "title": "Blue Is Powerful but Volatile",
+        "showHud": "rf",
+        "text": "Blue RF DRAINS when you get hit - and most characters have routes built to maximize that drain. Hoarding Blue makes you a target. Blue earns its keep when the threshold arrives naturally mid-combo, or spent on an invincible RF reversal that Red could never cancel."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Three ways to spend: the Red IC combo (stable, cheap, repeatable), the Blue IC route when the gauge is already there, and the defensive Blue IC that buys your way out of a blocked reversal. Spend on purpose - never by accident."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "spend_red",
+        "kind": "combat",
+        "label": "Red route: {input:5C} > Red IC > {input:2C}",
+        "prompt": "At RED RF, spend the gauge offensively: connect {input:5C}, Red IC the hit, and slide into {input:2C} for the knockdown.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_rf_idle_a",
+        "seed": {
+          "player": {
+            "rf": 500,
+            "blueIC": 0
+          }
+        },
+        "continuity": "sameCombo",
+        "sequence": [
+          {
+            "id": "r203",
+            "notation": "5C",
+            "moveIds": [
+              203
+            ],
+            "req": "land"
+          },
+          {
+            "id": "r167",
+            "notation": "IC",
+            "moveIds": [
+              167
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "fromMoveIds": [
+              203
+            ],
+            "maxGap": 360
+          },
+          {
+            "id": "r206",
+            "notation": "2C",
+            "moveIds": [
+              206
+            ],
+            "req": "land",
+            "maxGap": 480
+          }
+        ]
+      },
+      {
+        "id": "spend_blue",
+        "kind": "combat",
+        "label": "Blue route: {input:66C} > BIC > {input:66B} > {input:66B} > super",
+        "prompt": "When the gauge crosses into BLUE, the IC also refunds momentum: run {input:66C} > BIC > {input:66B} > {input:66B} > {input:236236B}.",
+        "pos": {
+          "x": 20.0,
+          "y": 0.0
+        },
+        "dummyPos": {
+          "x": 160.0,
+          "y": 0.0
+        },
+        "script": "ep_rf_idle_b",
+        "seed": {
+          "player": {
+            "rf": 1000,
+            "blueIC": 1,
+            "meter": 2000
+          }
+        },
+        "continuity": "sameCombo",
+        "sequence": [
+          {
+            "id": "b232",
+            "notation": "66C",
+            "moveIds": [
+              232
+            ],
+            "req": "land"
+          },
+          {
+            "id": "b167",
+            "notation": "BIC",
+            "moveIds": [
+              167
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "fromMoveIds": [
+              232
+            ],
+            "maxGap": 120
+          },
+          {
+            "id": "b231a",
+            "notation": "66B",
+            "moveIds": [
+              231
+            ],
+            "req": "land",
+            "maxGap": 240
+          },
+          {
+            "id": "b231b",
+            "notation": "66B",
+            "moveIds": [
+              231
+            ],
+            "req": "land",
+            "minGap": 6,
+            "maxGap": 300
+          },
+          {
+            "id": "b304",
+            "notation": "236236B",
+            "moveIds": [
+              304
+            ],
+            "fromMoveIds": [
+              231
+            ],
+            "req": "land",
+            "maxGap": 180
+          }
+        ],
+        "feedback": {
+          "success": "Good - BIC restored enough Power for the delayed continuation to finish.",
+          "failure": "Use 22C for BIC immediately after 66C and keep the route connected. Don't worry - your RF, SP, and spacing come back fresh for every attempt."
+        }
+      },
+      {
+        "id": "defensive",
+        "kind": "combat",
+        "label": "Defensive spend: blocked {input:623C} > BIC > guard or jump away",
+        "prompt": "Your {input:623C} got BLOCKED - and it leaves you AIRBORNE. Spend the Blue gauge on an air IC ({input:22C}) to cut the recovery, then guard the answer or double-jump {dir:7} away.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_rf_answer",
+        "seed": {
+          "player": {
+            "rf": 900,
+            "blueIC": 1
+          }
+        },
+        "sequence": [
+          {
+            "id": "d252",
+            "notation": "623C",
+            "moveIds": [
+              252
+            ],
+            "inputMask": 64,
+            "req": "block"
+          },
+          {
+            "id": "d167",
+            "notation": "BIC",
+            "moveIds": [
+              167,
+              171
+            ],
+            "fromMoveIds": [
+              252
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "maxGap": 120
+          },
+          {
+            "id": "dguard",
+            "notation": "guard / back double jump",
+            "moveIds": [
+              150,
+              151,
+              152,
+              153,
+              154,
+              155,
+              156,
+              16
+            ],
+            "req": "move",
+            "maxGap": 600
+          }
+        ],
+        "feedback": {
+          "success": "BIC cut the recovery in time to guard or double-jump away from the answer.",
+          "failure": "BIC the blocked 623C with 22C, then guard or double-jump back instead of attacking again."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_rf_idle_a",
+          "ownerTask": "spend_red",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_rf_idle_b",
+          "ownerTask": "spend_blue",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_rf_answer",
+          "ownerTask": "defensive",
+          "kind": "block_answer",
+          "action": "5A",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Blocked - BIC out, then guard or jump away.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 150
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572#Understanding_Strategic_Value",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html",
+    "local:docs/info/primer/EFZ Primer _ efzrevival.html"
+  ],
+  "recommendedAfter": [
+    "efz.strategy.attack_into_rg"
+  ]
+}

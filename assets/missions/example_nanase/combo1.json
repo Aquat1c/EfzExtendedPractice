@@ -1,0 +1,45 @@
+{
+    "format": 1,
+    "type": "combo",
+    "name": "Basic BnB",
+    "description": "A simple bread-and-butter combo to demonstrate the format.",
+    "player": {
+        "character": "nanase",
+        "pos": { "x": -80.0, "y": 0.0 },
+        "palette": 0,
+        "rf": 0,
+        "meter": 3000
+    },
+    "dummy": {
+        "character": "misuzu",
+        "pos": { "x": 80.0, "y": 0.0 },
+        "palette": 0,
+        "crouch": false,
+        "airtech": "none"
+    },
+    "stage": -1,
+
+    "__comment_steps": "Each step: notation (display) + ids (any-of move-IDs that satisfy it) + req (land|move|hits). The ids below are PLACEHOLDERS - real per-character move-IDs are captured by the in-game recorder (hybrid authoring) in M2.",
+    "steps": [
+        { "notation": "5A",   "ids": [0], "req": "land" },
+        { "notation": "2B",   "ids": [0], "req": "land" },
+        { "notation": "5C",   "ids": [0], "req": "land" },
+        { "notation": "236B", "ids": [0], "req": "land" }
+    ],
+
+    "demo": "EFZMACRO 1 5x8 A 5x3 2 Bx3 5 Cx4 2 3 6 Bx6",
+    "failTimer": 60,
+
+    "__comment_score": "Tier 0 = base clear; later tiers = ranks earned within an attempt budget.",
+    "score": [
+        { "minHits": 4, "minDamage": 2000, "label": "Clear" },
+        { "maxAttempts": 5, "label": "Bronze" },
+        { "maxAttempts": 2, "label": "Silver" },
+        { "maxAttempts": 1, "label": "Gold" }
+    ],
+
+    "hint": [
+        "Link 2B slightly late after 5A.",
+        "Cancel 5C into 236B as early as possible."
+    ]
+}

@@ -1,0 +1,118 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.normals",
+ "revision": 3,
+ "category": "fundamentals",
+ "order": 100,
+ "difficulty": 1,
+ "name": "Normal Attacks",
+ "summary": "Compare standing and crouching Light, Medium, and Strong attacks.",
+ "description": "Compare standing and crouching Light, Medium, and Strong attacks.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Six Basic Attacks",
+    "text": "A, B, and C usually trade speed for reach and damage, but the heavier button is not always the better choice. Holding down gives a different attack. Try each one and watch where it reaches."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "land_5a",
+    "kind": "combat",
+    "label": "Land {input:5A}",
+    "moveIds": [
+     200
+    ],
+    "req": "land"
+   },
+   {
+    "id": "land_2a",
+    "kind": "combat",
+    "label": "Land {input:2A}",
+    "moveIds": [
+     204
+    ],
+    "req": "land"
+   },
+   {
+    "id": "land_5b",
+    "kind": "combat",
+    "label": "Land close or far {input:5B}",
+    "moveIds": [
+     201,
+     202
+    ],
+    "req": "land"
+   },
+   {
+    "id": "land_2b",
+    "kind": "combat",
+    "label": "Land {input:2B}",
+    "moveIds": [
+     205
+    ],
+    "req": "land"
+   },
+   {
+    "id": "land_5c",
+    "kind": "combat",
+    "label": "Land {input:5C}",
+    "moveIds": [
+     203
+    ],
+    "req": "land"
+   },
+   {
+    "id": "land_2c",
+    "kind": "combat",
+    "label": "Land {input:2C}",
+    "moveIds": [
+     206
+    ],
+    "req": "land"
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.guard"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.air_dash"
+ ]
+}

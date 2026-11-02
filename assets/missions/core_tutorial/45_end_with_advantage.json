@@ -1,0 +1,93 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.end_with_advantage",
+  "revision": 5,
+  "category": "strategy",
+  "order": 430,
+  "difficulty": 4,
+  "name": "End with Advantage",
+  "summary": "Choose the combo ender that gives the result you want.",
+  "description": "Choose the combo ender that gives the result you want.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "combo_lifecycle",
+    "dummy_script",
+    "pages",
+    "progress_store",
+    "result_comparison",
+    "task_checkpoints",
+    "tutorial_tasks",
+    "typed_contact"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "A Combo Is Not Just Damage",
+        "text": "How a combo ENDS decides what happens next. A knockdown ender gives you okizeme - free pressure on their wakeup. Letting them air-recover next to you for nothing hands the turn straight back."
+      },
+      {
+        "id": "p1",
+        "title": "RF While They Juggle",
+        "text": "A juggled opponent builds NO RF the whole ride - while yours keeps growing. Delaying juggle hits and ending with a tech trap stretches that free time out even further."
+      },
+      {
+        "id": "p2",
+        "title": "Two Good Endings",
+        "text": "This lesson drills both: the knockdown ender that starts your okizeme, and the tech-punish ender that catches an opponent who recovers into the air carelessly. Pick by what your opponent tends to do."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "kd_end",
+        "kind": "combat",
+        "label": "Follow the KNOCKDOWN END route",
+        "moveIds": [
+          0
+        ],
+        "req": "move"
+      },
+      {
+        "id": "punish_end",
+        "kind": "combat",
+        "label": "Follow the AIR-RECOVERY PUNISH route",
+        "moveIds": [
+          0
+        ],
+        "req": "move"
+      }
+    ]
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.open_guard"
+  },
+  "recommendedAfter": [
+    "efz.strategy.stable_combo"
+  ]
+}

@@ -1,0 +1,209 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.anti_air",
+  "revision": 11,
+  "category": "strategy",
+  "order": 400,
+  "difficulty": 3,
+  "name": "Stop a Jump-In",
+  "summary": "Stop an opponent's jumping attack.",
+  "description": "Stop an opponent's jumping attack.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "dummy_script",
+    "dummy_state",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "The Air Is Strong - Punish It Anyway",
+        "text": "EFZ has minimal crossup protection and strong air movement, so opponents WILL jump at you. The answer is a dedicated anti-air: a move whose hitbox and invulnerability are built to win that exchange."
+      },
+      {
+        "id": "p1",
+        "title": "Why the Dragon Punch",
+        "text": "Nayuki's {input:623B} has HIGH-area invulnerability from frame 1 - the jump-in simply cannot touch her upper body while it starts. That is what makes a dragon punch the cleanest anti-air answer: it wins even when the jump-in is already on top of you."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Misaki keeps jumping in. Catch her out of the air with {input:623B} or {input:623C} while she is still airborne. If you are trading or losing, you are pressing too late - the goal is to hit her BEFORE her attack comes down."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "anti_air_1",
+        "kind": "combat",
+        "label": "Anti-air the first jump-in",
+        "prompt": "Hit Misaki out of the air - the attack must connect while she is airborne.",
+        "script": "ep_jump_in_1",
+        "moveIds": [
+          251,
+          252
+        ],
+        "req": "land",
+        "dummyState": "airborne",
+        "feedback": {
+          "success": "Clean anti-air - she never got to land her attack.",
+          "failure": "Too late: she reached you or landed first. Start your attack while she is still rising or at the top of her arc."
+        }
+      },
+      {
+        "id": "anti_air_2",
+        "kind": "combat",
+        "label": "Anti-air the second jump-in",
+        "prompt": "Again - catch her in the air before the jump attack comes down.",
+        "script": "ep_jump_in_2",
+        "moveIds": [
+          251,
+          252
+        ],
+        "req": "land",
+        "dummyState": "airborne",
+        "feedback": {
+          "success": "Second one down.",
+          "failure": "The hit has to land while she is airborne - commit a little earlier."
+        }
+      },
+      {
+        "id": "anti_air_3",
+        "kind": "combat",
+        "label": "Anti-air the third jump-in",
+        "prompt": "One more - make stopping the jump-in feel automatic.",
+        "script": "ep_jump_in_3",
+        "moveIds": [
+          251,
+          252
+        ],
+        "req": "land",
+        "dummyState": "airborne",
+        "feedback": {
+          "success": "Three in a row - the air is yours.",
+          "failure": "Reset and watch the jump start; that is your cue to attack."
+        }
+      },
+      {
+        "id": "aa_convert",
+        "kind": "combat",
+        "label": "React to one final jump-in with your anti-air",
+        "prompt": "One more time - stop the jump-in clean with {input:623B} or {input:623C} while the dummy is still airborne.",
+        "script": "ep_jump_in_convert",
+        "req": "land",
+        "feedback": {
+          "success": "Clean interception - you recognized and stopped the jump-in again.",
+          "failure": "Catch her while she is still airborne."
+        },
+        "moveIds": [
+          251,
+          252
+        ],
+        "dummyState": "airborne"
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_jump_in_1",
+          "ownerTask": "anti_air_1",
+          "kind": "macro",
+          "action": "j.A",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Misaki is jumping in - hit her out of the air.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        },
+        {
+          "id": "ep_jump_in_2",
+          "ownerTask": "anti_air_2",
+          "kind": "macro",
+          "action": "j.A",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Another jump-in - meet her before it lands.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        },
+        {
+          "id": "ep_jump_in_3",
+          "ownerTask": "anti_air_3",
+          "kind": "macro",
+          "action": "j.A",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "She keeps coming - anti-air on reaction.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        },
+        {
+          "id": "ep_jump_in_convert",
+          "ownerTask": "aa_convert",
+          "kind": "macro",
+          "action": "j.A",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Last one - stop the jump-in cleanly.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.hit_confirm"
+  },
+  "recommendedAfter": [
+    "efz.strategy.take_space"
+  ]
+}

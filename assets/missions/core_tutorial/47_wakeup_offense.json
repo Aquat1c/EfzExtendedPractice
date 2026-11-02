@@ -1,0 +1,365 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.wakeup_offense",
+  "revision": 13,
+  "category": "strategy",
+  "order": 450,
+  "difficulty": 4,
+  "name": "Run Wakeup Offense",
+  "summary": "Score a knockdown, cover wakeup, throw a blocker, then safely wait out an invincible attack.",
+  "description": "Score a knockdown, cover wakeup, throw a blocker, then safely wait out an invincible attack.",
+  "player": {
+    "character": "nayukib",
+    "rf": 1000,
+    "pos": {
+      "x": 310.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "rf": 1000,
+    "pos": {
+      "x": 330.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_absence",
+    "cancel_transition",
+    "dummy_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks",
+    "wakeup_state"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "The Knockdown Is Half the Reward",
+        "text": "After a knockdown the opponent HAS to stand up into whatever you prepared - that is okizeme. A meaty attack timed onto their first vulnerable frame beats almost everything they can press."
+      },
+      {
+        "id": "p1",
+        "title": "Meaty or Bait - Read Them",
+        "text": "A nervous opponent with meter may press a reversal on wakeup. Bait it, block, and let it finish; once you recognize its recovery, that is where a punish belongs. Against a passive opponent, take the free meaty pressure instead."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Finish the knockdown route, then practice three answers: a meaty timed onto the rise, a delayed throw against a guarding wakeup, and the patient bait that safely waits out a reversal."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "meaty",
+        "kind": "combat",
+        "label": "Knock down with {input:5A} > {input:c.5B} > {input:5C} > {input:236A}, then land a meaty {input:5A} or {input:2A}",
+        "script": "ep_meaty_idle",
+        "sequence": [
+          {
+            "id": "setup_5a",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "land"
+          },
+          {
+            "id": "setup_c5b",
+            "notation": "c.5B",
+            "moveIds": [
+              201
+            ],
+            "fromMoveIds": [
+              200
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "setup_5c",
+            "notation": "5C",
+            "moveIds": [
+              203
+            ],
+            "fromMoveIds": [
+              201
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "setup_236a",
+            "notation": "236A",
+            "moveIds": [
+              253
+            ],
+            "fromMoveIds": [
+              203
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "meaty_hit",
+            "notation": "5A / 2A on wakeup",
+            "moveIds": [
+              200,
+              204
+            ],
+            "req": "hits",
+            "maxGap": 1152,
+            "afterWake": {
+              "maxTicks": 5
+            }
+          }
+        ],
+        "prompt": "Run the knockdown route, then land 5A or 2A before Misaki gets two full frames to act.",
+        "feedback": {
+          "success": "That attack covered the first vulnerable wakeup moment - a meaty.",
+          "failure": "Complete the full knockdown route, then time 5A or 2A for the instant Misaki finishes rising."
+        }
+      },
+      {
+        "id": "throw_setup",
+        "kind": "combat",
+        "label": "Knock down with {input:5A} > {input:c.5B} > {input:5C} > {input:236A}",
+        "script": "ep_throw_setup_idle",
+        "sequence": [
+          {
+            "id": "setup_5a",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "land"
+          },
+          {
+            "id": "setup_c5b",
+            "notation": "c.5B",
+            "moveIds": [
+              201
+            ],
+            "fromMoveIds": [
+              200
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "setup_5c",
+            "notation": "5C",
+            "moveIds": [
+              203
+            ],
+            "fromMoveIds": [
+              201
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "setup_236a",
+            "notation": "236A",
+            "moveIds": [
+              253
+            ],
+            "fromMoveIds": [
+              203
+            ],
+            "req": "land",
+            "maxGap": 180
+          }
+        ],
+        "prompt": "Run the route and put Misaki on the floor. The next step starts the moment she is down.",
+        "feedback": {
+          "success": "Knockdown secured - now walk up as Misaki rises.",
+          "failure": "Keep all four hits connected and finish with 236A."
+        }
+      },
+      {
+        "id": "wake_throw",
+        "kind": "combat",
+        "continuity": "continue",
+        "label": "Walk up and throw after Misaki wakes up guarding",
+        "moveIds": [
+          221
+        ],
+        "req": "move",
+        "afterWake": {
+          "maxTicks": 192
+        },
+        "script": "ep_block",
+        "prompt": "Misaki wakes up guarding. Stay close, let wakeup throw protection end, then throw with 6C or 4C.",
+        "feedback": {
+          "success": "The delayed throw caught the guarding wakeup once its protection ran out.",
+          "failure": "If the throw misses, you are too early or too far away - walk close, let wakeup protection end, then throw."
+        }
+      },
+      {
+        "id": "bait_setup",
+        "kind": "combat",
+        "label": "Knock down again with {input:5A} > {input:c.5B} > {input:5C} > {input:236A}",
+        "script": "ep_bait_setup_idle",
+        "sequence": [
+          {
+            "id": "setup_5a",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "land"
+          },
+          {
+            "id": "setup_c5b",
+            "notation": "c.5B",
+            "moveIds": [
+              201
+            ],
+            "fromMoveIds": [
+              200
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "setup_5c",
+            "notation": "5C",
+            "moveIds": [
+              203
+            ],
+            "fromMoveIds": [
+              201
+            ],
+            "req": "land",
+            "maxGap": 180
+          },
+          {
+            "id": "setup_236a",
+            "notation": "236A",
+            "moveIds": [
+              253
+            ],
+            "fromMoveIds": [
+              203
+            ],
+            "req": "land",
+            "maxGap": 180
+          }
+        ],
+        "prompt": "Use the same route to score a fresh knockdown for the reversal-bait drill.",
+        "feedback": {
+          "success": "Knockdown secured - stop attacking and prepare to guard.",
+          "failure": "Keep all four hits connected and finish with 236A."
+        }
+      },
+      {
+        "id": "bait",
+        "kind": "combat",
+        "continuity": "continue",
+        "label": "Hold back and safely wait out Misaki's wakeup {input:214C}",
+        "absence": {
+          "forbid": "attack",
+          "start": "taskArmed",
+          "end": "dummyAttackEnd"
+        },
+        "script": "ep_reversal",
+        "prompt": "Misaki will use invincible 214C as she wakes up. Do nothing offensive: hold back, block it if it reaches you, and wait until the attack finishes.",
+        "feedback": {
+          "success": "Patience beat the wakeup attack - you stayed safe until 214C finished.",
+          "failure": "Do not attack into the reversal or let it hit you. Hold back and wait until 214C finishes."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_meaty_idle",
+          "ownerTask": "meaty",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Finish the route with 236A, then cover wakeup with 5A or 2A.",
+            "lead": 0
+          }
+        },
+        {
+          "id": "ep_throw_setup_idle",
+          "ownerTask": "throw_setup",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Complete 5A > c.5B > 5C > 236A for the knockdown.",
+            "lead": 0
+          }
+        },
+        {
+          "id": "ep_block",
+          "ownerTask": "wake_throw",
+          "kind": "block",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Misaki guards on wakeup. Walk close and throw after protection ends.",
+            "lead": 0
+          }
+        },
+        {
+          "id": "ep_bait_setup_idle",
+          "ownerTask": "bait_setup",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Score another 236A knockdown, then stop attacking.",
+            "lead": 0
+          }
+        },
+        {
+          "id": "ep_reversal",
+          "ownerTask": "bait",
+          "kind": "macro",
+          "action": "214C",
+          "expectedMoveIds": [
+            252
+          ],
+          "approach": "none",
+          "start": "trigger",
+          "trigger": "onWakeup",
+          "cue": {
+            "text": "Wakeup 214C incoming - hold back and wait for it to finish.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "once",
+            "delay": 60
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:advanced-mechanics@457885",
+    "mizuumi:strategy@460572",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::misaki / 214C move 252",
+    "local:include/game/mission/move_notation_tables.h::nayukib moves 200,201,203,253",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.survive_pressure"
+  },
+  "recommendedAfter": [
+    "efz.strategy.open_guard"
+  ]
+}

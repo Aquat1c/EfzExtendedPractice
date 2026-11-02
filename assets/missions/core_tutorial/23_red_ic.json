@@ -1,0 +1,103 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.red_ic",
+ "revision": 8,
+ "category": "offense",
+ "order": 210,
+ "difficulty": 2,
+ "name": "Instant Charge (Red IC)",
+ "summary": "IC Nayuki's {input:5C}, then catch its pushback with sliding {input:2C}.",
+ "description": "IC Nayuki's {input:5C}, then catch its pushback with sliding {input:2C}.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  },
+  "rf": 500,
+  "blueIC": 0
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "cancel_transition",
+  "coherent_state",
+  "dummy_script",
+  "input_commit_mapping",
+  "input_edges",
+  "ordered_actions",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Instant Charge",
+    "showHud": "red_ic",
+    "text": "While your RF Gauge is {tone:red_ic|Red}, input {input:22C} the moment an attack connects to perform {tone:red_ic|Red IC}. IC spends the gauge, cuts the attack's recovery short, and briefly freezes the screen. Only attacks that allow IC can use it."
+   },
+   {
+    "id": "p1",
+    "title": "The Drill",
+    "text": "Normally Nayuki's {input:5C} can't cancel into {input:2C} at all. IC changes that - and her sliding 2C reaches right across the pushback: {input:5C} > {input:22C} > {input:2C}."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "ic_drill",
+    "kind": "combat",
+    "label": "Perform {input:5C} > {input:22C} > {input:2C} on hit at Red RF",
+    "prompt": "Land 5C, IC it, then slide in with 2C before the combo drops.",
+    "script": "ep_ic_idle",
+    "continuity": "sameCombo",
+    "sequence": [
+     {"id":"5c","notation":"5C","moveIds":[203],"req":"land"},
+     {"id":"ic","notation":"22C / IC","moveIds":[167],"fromMoveIds":[203],"inputMask":64,"req":"commit","maxGap":120},
+     {"id":"2c","notation":"2C","moveIds":[206],"req":"land","maxGap":180}
+    ],
+    "feedback": {
+     "success": "Nice - IC erased 5C's recovery and sliding 2C caught the pushback.",
+     "failure": "Make sure 5C connects, hit 22C during its IC window, then go straight into 2C."
+    }
+   }
+  ],
+  "dummyScript": {
+   "episodes": [
+    {
+     "id": "ep_ic_idle",
+     "ownerTask": "ic_drill",
+     "kind": "idle",
+     "start": "taskArmed",
+     "cue": {"text":"Red RF ready - 5C, IC, 2C!","lead":0}
+    }
+   ]
+  }
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180#Instant_Charge_.28IC.29"
+ ],
+ "next": {
+  "lessonId": "efz.offense.power_scaling"
+ },
+ "recommendedAfter": [
+  "efz.offense.rf_gauge"
+ ]
+}

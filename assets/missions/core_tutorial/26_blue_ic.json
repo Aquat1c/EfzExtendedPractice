@@ -1,0 +1,158 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.offense.blue_ic",
+  "revision": 10,
+  "category": "offense",
+  "order": 240,
+  "difficulty": 3,
+  "name": "Blue IC",
+  "summary": "Use Blue IC to extend a combo with restored Power.",
+  "description": "Use Blue IC to extend a combo with restored Power.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 20.0,
+      "y": 0.0
+    },
+    "rf": 1000,
+    "meter": 2000,
+    "blueIC": 1
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 160.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "cancel_transition",
+    "coherent_state",
+    "dummy_script",
+    "input_commit_mapping",
+    "input_edges",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "fail",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Blue IC",
+        "showHud": "blue_ic",
+        "text": "Instant Charge is always {input:22C}. When your RF Gauge is {tone:blue_ic|Light Blue}, that input becomes {tone:blue_ic|Blue IC}: BIC spends the stored Blue gauge and restores up to {tone:power|50 Power}, letting your combo continue where Red IC could not."
+      },
+      {
+        "id": "p1",
+        "title": "The Route",
+        "showHud": "blue_ic_meters",
+        "text": "Your route: {input:66C} > {input:22C} BIC > {input:66B} > ~{input:66B} > {input:236236B}. The {tone:blue_ic|Light Blue RF Gauge} makes 22C a Blue IC; the attack button does not pick its color. You have {tone:sp|two SP levels} for the B Super, and spent RF or SP is restored after a failed attempt."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "bic_route",
+        "kind": "combat",
+        "label": "Complete {input:66C} > {input:22C} BIC > {input:66B} > ~{input:66B} > {input:236236B}",
+        "prompt": "Light Blue RF and two SP levels are loaded for you. BIC with 22C, keep every hit connected, and delay the second 66B just a touch.",
+        "script": "ep_bic_idle",
+        "continuity": "sameCombo",
+        "sequence": [
+          {
+            "id": "66c",
+            "notation": "66C",
+            "moveIds": [
+              232
+            ],
+            "req": "land"
+          },
+          {
+            "id": "bic",
+            "notation": "22C / BIC",
+            "moveIds": [
+              167
+            ],
+            "fromMoveIds": [
+              232
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "maxGap": 120
+          },
+          {
+            "id": "66b_first",
+            "notation": "66B",
+            "moveIds": [
+              231
+            ],
+            "req": "land",
+            "maxGap": 240
+          },
+          {
+            "id": "66b_delay",
+            "notation": "~66B",
+            "moveIds": [
+              231
+            ],
+            "req": "land",
+            "minGap": 6,
+            "maxGap": 300
+          },
+          {
+            "id": "super",
+            "notation": "236236B",
+            "moveIds": [
+              304
+            ],
+            "fromMoveIds": [
+              231
+            ],
+            "req": "land",
+            "maxGap": 180
+          }
+        ],
+        "feedback": {
+          "success": "Beautiful - BIC bought back enough Power for the delayed follow-up to finish.",
+          "failure": "BIC with 22C right after 66C connects and keep the route linked. Don't worry - the prepared RF and SP reload before your retry."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_bic_idle",
+          "ownerTask": "bic_route",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Light Blue ready - BIC with 22C!",
+            "lead": 0
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180#Instant_Charge_.28IC.29",
+    "mizuumi:nayuki-awake@426475"
+  ],
+  "next": {
+    "lessonId": "efz.offense.rf_attacks"
+  },
+  "recommendedAfter": [
+    "efz.offense.juggle_gauge"
+  ]
+}

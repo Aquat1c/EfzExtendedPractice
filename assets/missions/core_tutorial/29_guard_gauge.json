@@ -1,0 +1,173 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.defense.guard_gauge",
+  "revision": 8,
+  "category": "defense",
+  "order": 270,
+  "difficulty": 3,
+  "name": "Guard Gauge",
+  "summary": "Build Guard Gauge, then see how it changes the next juggle.",
+  "description": "Build Guard Gauge, then see how it changes the next juggle.",
+  "player": {
+    "character": "misaki",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "nayukib",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "block_state",
+    "coherent_state",
+    "combo_lifecycle",
+    "dummy_script",
+    "pages",
+    "progress_store",
+    "result_comparison",
+    "task_checkpoints",
+    "task_state_seeds",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Guard Gauge",
+        "text": "Blocking fills the cyan Guard Gauge under the defender. It drains slowly when you are free. If you are launched while some remains, the juggle gauge waits for the Guard Gauge to drain before it begins counting down, so blocking a long string can make the next combo last longer."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "build_gauge",
+        "kind": "combat",
+        "label": "Block the repeated attack - watch the cyan gauge fill",
+        "prompt": "Hold {dir:4} and BLOCK the repeated attack. The cyan bar under you is the Guard Gauge - it fills as you block and drains slowly on its own.",
+        "script": "ep_pressure_string",
+        "seed": {
+          "player": {
+            "guard": 0
+          }
+        },
+        "goalState": {
+          "field": "guard",
+          "player": 1,
+          "op": "ge",
+          "value": 120,
+          "requiresBlock": true
+        }
+      },
+      {
+        "id": "juggle_empty",
+        "kind": "combat",
+        "label": "Launch with an EMPTY gauge and watch the juggle",
+        "prompt": "Now you attack. The dummy gauge is EMPTY - launch with Misaki's {input:236A} projectile and watch how quickly it can recover.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_gauge_idle_a",
+        "seed": {
+          "dummy": {
+            "guard": 0
+          }
+        },
+        "moveIds": [
+          254
+        ],
+        "req": "land",
+        "endsCombo": true
+      },
+      {
+        "id": "compare_juggle",
+        "kind": "combat",
+        "label": "Launch with a STORED gauge - recovery is delayed longer",
+        "prompt": "Use the same {input:236A} projectile - but now the dummy has a stored Guard Gauge. The juggle countdown waits while that gauge drains, so air recovery stays unavailable longer.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_gauge_idle_b",
+        "seed": {
+          "dummy": {
+            "guard": 320
+          }
+        },
+        "moveIds": [
+          254
+        ],
+        "req": "land",
+        "endsCombo": true,
+        "compare": {
+          "vs": "juggle_empty",
+          "metric": "untechTicks",
+          "op": "gt"
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_pressure_string",
+          "ownerTask": "build_gauge",
+          "kind": "macro",
+          "action": "5B",
+          "approach": "dash",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Block the string.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 90
+          }
+        },
+        {
+          "id": "ep_gauge_idle_a",
+          "ownerTask": "juggle_empty",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_gauge_idle_b",
+          "ownerTask": "compare_juggle",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180"
+  ],
+  "next": {
+    "lessonId": "efz.defense.recoil_guard"
+  },
+  "recommendedAfter": [
+    "efz.offense.final_memory"
+  ]
+}

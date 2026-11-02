@@ -1,0 +1,94 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.sp_supers",
+ "revision": 7,
+ "category": "offense",
+ "order": 190,
+ "difficulty": 2,
+ "name": "SP Gauge and Supers",
+ "summary": "Build one SP level and spend it on a Level 1 Super.",
+ "description": "Build one SP level and spend it on a Level 1 Super.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  },
+  "meter": 950,
+  "hasPos": true
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "coherent_state",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "SP",
+    "showHud": "sp",
+    "text": "Normals and Specials build the {tone:sp|SP Gauge} - many attacks give SP even when they whiff, and taking hits builds it too. Supers spend {tone:sp|one, two, or three levels}, usually picked with A, B, or C. Ask for a stronger version than you can afford while you still have some SP, and the strongest version you CAN afford comes out instead."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "build_sp",
+    "kind": "combat",
+    "label": "Fill your first SP level",
+    "goalState": {
+     "field": "sp",
+     "player": 1,
+     "op": "ge",
+     "value": 1000
+    }
+   },
+   {
+    "id": "super_236236a",
+    "kind": "combat",
+    "label": "Spend it: Nayuki {input:236236A}",
+    "moveIds": [
+     303
+    ],
+    "req": "move",
+    "continuity": "continue",
+    "completionHoldTicks": 0,
+    "restoreOnSuccess": true,
+    "pos": {
+     "x": 320.0,
+     "y": 0.0
+    }
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180",
+  "local:include/game/mission/move_notation_tables.h"
+ ],
+ "next": {
+  "lessonId": "efz.offense.super_inputs"
+ },
+ "recommendedAfter": [
+  "efz.offense.s_button"
+ ]
+}

@@ -1,0 +1,243 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.offense.power_scaling",
+  "revision": 7,
+  "category": "offense",
+  "order": 220,
+  "difficulty": 2,
+  "name": "Power, Guts, and Damage Scaling",
+  "summary": "See why later combo hits deal less - and why low-life opponents take less damage.",
+  "description": "See why later combo hits deal less - and why low-life opponents take less damage.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "combo_lifecycle",
+    "dummy_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "result_comparison",
+    "task_checkpoints",
+    "task_state_seeds",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "requirementPlacement": "belowStats",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Power",
+        "text": "Power starts at 100% when a combo begins, and every move you throw knocks it down - later hits deal less damage and usually leave less time for the next juggle hit. Don't go hunting for a universal 'combo ends at 30%' rule; the route, move, height, and character all still matter."
+      },
+      {
+        "id": "p1",
+        "title": "Guts",
+        "text": "Guts is the defender's safety net: the lower their Life, the less damage they take. And on your side, a fuller RF Gauge gives your hits a small damage boost."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "watch_power",
+        "kind": "combat",
+        "label": "Run the route - watch each hit scale down",
+        "prompt": "Run {input:5A} > {input:5B} > {input:5C} and keep an eye on the Power readout - every extra hit in a combo deals a smaller share of its damage.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_ps_idle_a",
+        "continuity": "sameCombo",
+        "sequence": [
+          {
+            "id": "w200",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "land"
+          },
+          {
+            "id": "w201",
+            "notation": "5B",
+            "moveIds": [
+              201
+            ],
+            "req": "land",
+            "maxGap": 300
+          },
+          {
+            "id": "w203",
+            "notation": "5C",
+            "moveIds": [
+              203
+            ],
+            "req": "land",
+            "maxGap": 300
+          }
+        ],
+        "endsCombo": true
+      },
+      {
+        "id": "fresh_full",
+        "kind": "combat",
+        "label": "One FRESH hit at full life",
+        "prompt": "Land one fresh {input:5C} on the full-life dummy and remember the damage - you'll compare against it next.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_ps_idle_b",
+        "seed": {
+          "dummy": {
+            "hp": 9999
+          },
+          "player": {
+            "rf": 0,
+            "blueIC": 0
+          }
+        },
+        "moveIds": [
+          203
+        ],
+        "req": "land",
+        "endsCombo": true
+      },
+      {
+        "id": "compare_guts",
+        "kind": "combat",
+        "label": "Same hit at LOW life - guts reduces it",
+        "prompt": "The dummy is hanging on by a thread now. Land the same fresh {input:5C} and watch low-life GUTS shrink the damage.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_ps_idle_c",
+        "seed": {
+          "dummy": {
+            "hp": 1800
+          },
+          "player": {
+            "rf": 0,
+            "blueIC": 0
+          }
+        },
+        "moveIds": [
+          203
+        ],
+        "req": "land",
+        "endsCombo": true,
+        "compare": {
+          "vs": "fresh_full",
+          "metric": "p2HpDelta",
+          "op": "lt"
+        }
+      },
+      {
+        "id": "compare_rf",
+        "kind": "combat",
+        "label": "Same hit at RED RF - the gauge boosts it",
+        "prompt": "Now your RF Gauge burns RED. Land the same fresh {input:5C} - Red RF pushes your damage above the plain hit.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_ps_idle_d",
+        "seed": {
+          "dummy": {
+            "hp": 9999
+          },
+          "player": {
+            "rf": 900,
+            "blueIC": 0
+          }
+        },
+        "moveIds": [
+          203
+        ],
+        "req": "land",
+        "endsCombo": true,
+        "compare": {
+          "vs": "fresh_full",
+          "metric": "p2HpDelta",
+          "op": "gt"
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_ps_idle_a",
+          "ownerTask": "watch_power",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_ps_idle_b",
+          "ownerTask": "fresh_full",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_ps_idle_c",
+          "ownerTask": "compare_guts",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_ps_idle_d",
+          "ownerTask": "compare_rf",
+          "kind": "idle",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180",
+    "mizuumi:strategy@460572#Damage_Efficiency"
+  ],
+  "next": {
+    "lessonId": "efz.offense.juggle_gauge"
+  },
+  "recommendedAfter": [
+    "efz.offense.red_ic"
+  ]
+}

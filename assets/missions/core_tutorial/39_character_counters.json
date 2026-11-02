@@ -1,0 +1,149 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.systems.character_counters",
+  "revision": 7,
+  "category": "systems",
+  "order": 370,
+  "difficulty": 4,
+  "name": "Character Counters and IC Exceptions",
+  "summary": "Learn why counter moves stop cancels - and when IC can still help.",
+  "description": "Learn why counter moves stop cancels - and when IC can still help.",
+  "player": {
+    "character": "shiori",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "cancel_transition",
+    "dummy_script",
+    "dummy_state",
+    "input_commit_mapping",
+    "input_edges",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "task_state_seeds",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Counters Lock Cancels",
+        "text": "When a counter move catches your attack, you're normally locked out of canceling the move it caught - you just have to eat the counterattack. But a few characters have an Instant Charge exception that can still bail them out before it lands."
+      },
+      {
+        "id": "p1",
+        "title": "The Exception",
+        "text": "Misaki {input:22A} answers with a BLOCKABLE counterattack. In this matchup, Shiori can Red IC the moment she triggers the counter, then block the answer. Fair warning: this escape belongs to Shiori - don't assume your character gets it too."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "counter_escape",
+        "kind": "combat",
+        "label": "Trigger the counter with {input:5B}, Red IC, then guard",
+        "req": "move",
+        "script": "ep_counter_stance",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "seed": {
+          "player": {
+            "rf": 500,
+            "blueIC": 0
+          }
+        },
+        "prompt": "Misaki is sitting in her {input:22A} counter stance. Poke it with {input:5B} - normally the counter locks you out of every cancel, but Shiori is one of the few who can Red IC through it. Hit {input:22C} the moment the counter triggers, then guard the counterattack.",
+        "sequence": [
+          {
+            "id": "trigger",
+            "notation": "5B",
+            "moveIds": [
+              201
+            ],
+            "req": "move",
+            "dummyState": [
+              261
+            ]
+          },
+          {
+            "id": "escape_ic",
+            "notation": "IC",
+            "moveIds": [
+              167
+            ],
+            "fromMoveIds": [
+              201
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "maxGap": 360
+          },
+          {
+            "id": "guard_answer",
+            "notation": "guard",
+            "moveIds": [
+              151,
+              153
+            ],
+            "req": "move",
+            "maxGap": 600
+          }
+        ]
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_counter_stance",
+          "ownerTask": "counter_escape",
+          "kind": "macro",
+          "action": "22A",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Counter stance up - use 5B, 22C, then guard.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:advanced-mechanics@457885",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::shiori",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::misaki"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.useful_range"
+  },
+  "recommendedAfter": [
+    "efz.systems.wakeup_vulnerability"
+  ]
+}

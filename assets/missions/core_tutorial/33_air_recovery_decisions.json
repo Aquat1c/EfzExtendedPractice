@@ -1,0 +1,170 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.defense.air_recovery_decisions",
+ "revision": 7,
+ "category": "defense",
+ "order": 310,
+ "difficulty": 3,
+ "name": "Air-Recovery Decisions",
+ "summary": "Don't recover in their face - save it for when you have space.",
+ "description": "Do not recover near the opponent; recover when space is safe.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_absence",
+  "dummy_script",
+  "juggle_state",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Recovery Is a Choice",
+    "text": "Air recovery is not always an escape. Near the opponent, the helpless moment after recovery lets them hit you again. If the juggle has ended and they are still close, falling into knockdown is often safer. At a safe distance, recover away to regain control sooner."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "observe_launch",
+    "kind": "combat",
+    "label": "Get launched and watch the juggle begin",
+    "prompt": "Let Misaki's {input:236A} projectile launch you. Watch the juggle gauge appear under you - the decision starts here.",
+    "script": "ep_observe_launch",
+    "goalState": {
+     "field": "launched",
+     "player": 1,
+     "op": "eq",
+     "value": 1
+    }
+   },
+   {
+    "id": "no_recover",
+    "kind": "combat",
+    "label": "Near the opponent: do not recover and land safely",
+    "prompt": "This launch keeps you close. Hold nothing - riding the fall into knockdown avoids the helpless moment a nearby recovery would give them.",
+    "script": "ep_no_recover",
+    "pos": {
+     "x": 330.0,
+     "y": 0.0
+    },
+    "absence": {
+     "forbid": "airtech",
+     "start": "launched",
+     "end": "grounded"
+    },
+    "feedback": {
+     "success": "You fell all the way into knockdown - nothing to punish.",
+     "failure": "You recovered while they were close. Keep your hands off the recovery inputs until you land."
+    }
+   },
+   {
+    "id": "recover_away",
+    "kind": "combat",
+    "label": "At a safe distance: recover away",
+    "prompt": "This launch starts far from the opponent. Once recovery becomes available, press away plus a button to {term:tech} and regain control sooner.",
+    "pos": {
+     "x": 250.0,
+     "y": 0.0
+    },
+    "moveIds": [
+     158
+    ],
+    "req": "move",
+    "script": "ep_recover_away",
+    "feedback": {
+     "success": "Recovered with space to spare - you are back in control.",
+     "failure": "Press away plus A, B, C, or S once the juggle gauge empties."
+    }
+   }
+  ],
+  "dummyScript": {
+   "episodes": [
+    {
+     "id": "ep_observe_launch",
+     "ownerTask": "observe_launch",
+     "kind": "macro",
+     "action": "236A",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "236A incoming - let it launch you",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    },
+    {
+     "id": "ep_no_recover",
+     "ownerTask": "no_recover",
+     "kind": "macro",
+     "action": "236A",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "Close 236A - do NOT recover",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    },
+    {
+     "id": "ep_recover_away",
+     "ownerTask": "recover_away",
+     "kind": "macro",
+     "action": "66C",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "66C launch - recover away!",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    }
+   ]
+  }
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180",
+  "local:assets/movedata/nayukib.json",
+  "local:assets/movedata/misaki.json",
+  "local:shared_documentation/TUTORIAL_MODE_DESIGN.md::3-5 Air-Recovery Decisions"
+ ],
+ "next": {
+  "lessonId": "efz.defense.air_recovery_punish"
+ },
+ "recommendedAfter": [
+  "efz.defense.recoil_counter"
+ ]
+}

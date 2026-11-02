@@ -1,0 +1,185 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.offense.rf_attacks",
+  "revision": 15,
+  "category": "offense",
+  "order": 250,
+  "difficulty": 3,
+  "name": "RF Attacks and BIC Safety",
+  "summary": "Use an RF version, see its fallback, then make a risky one safe.",
+  "description": "Use an RF version, see its fallback, then make a risky one safe.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 290.0,
+      "y": 0.0
+    },
+    "rf": 500,
+    "blueIC": 0
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 350.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "block_state",
+    "cancel_transition",
+    "coherent_state",
+    "dummy_script",
+    "input_commit_mapping",
+    "input_edges",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "task_state_seeds",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "RF Versions",
+        "showHud": "rf",
+        "text": "Many Specials have a beefed-up RF version, usually done with C - better damage, priority, or invulnerability. The price: half the gauge at Red, a quarter at Light Blue. Ask for one without enough RF and the B version comes out instead."
+      },
+      {
+        "id": "p1",
+        "title": "BIC Safety",
+        "text": "At Light Blue RF, an RF Attack costs only a quarter of the full gauge. And unlike Red IC, BIC can cancel an RF Attack, spending the remaining Blue gauge. That's how you make a risky RF Special safe when it's guarded - even an invincible pressure-escape attack, called a {term:reversal}. And if it hits instead? The same BIC rolls straight into a combo."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "rf_version",
+        "kind": "combat",
+        "label": "Perform Nayuki {input:623C} at Red RF",
+        "moveIds": [
+          252
+        ],
+        "inputMask": 64,
+        "req": "commit",
+        "feedback": {
+          "success": "That's the RF version - C plus the prepared Red gauge paid for it.",
+          "failure": "Your Red gauge is ready - just input 623C cleanly."
+        }
+      },
+      {
+        "id": "rf_fallback",
+        "kind": "combat",
+        "label": "Try {input:623C} with an EMPTY RF Gauge - see what comes out",
+        "moveIds": [
+          251
+        ],
+        "inputMask": 64,
+        "req": "commit",
+        "continuity": "continue",
+        "feedback": {
+          "success": "See that? RF was empty, so the same C input fell back to the B version.",
+          "failure": "Once the RF version finishes, throw out 623C again with the gauge empty."
+        }
+      },
+      {
+        "id": "bic_safety",
+        "kind": "combat",
+        "label": "Blocked {input:623C}? Blue IC in the air, then stay safe",
+        "script": "ep_bic_answer",
+        "seed": {
+          "player": {
+            "rf": 1000,
+            "blueIC": 1
+          }
+        },
+        "sequence": [
+          {
+            "id": "blocked_rf",
+            "notation": "623C (blocked)",
+            "moveIds": [
+              252
+            ],
+            "inputMask": 64,
+            "req": "block"
+          },
+          {
+            "id": "bic",
+            "notation": "22C / BIC",
+            "moveIds": [
+              167,
+              171
+            ],
+            "fromMoveIds": [
+              252
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "maxGap": 120
+          },
+          {
+            "id": "block_answer",
+            "notation": "guard / back double jump",
+            "moveIds": [
+              150,
+              151,
+              152,
+              153,
+              154,
+              155,
+              156,
+              16
+            ],
+            "req": "move",
+            "maxGap": 600
+          }
+        ],
+        "prompt": "The dummy blocks your {input:623C} - and the move leaves you AIRBORNE. Spend the Blue gauge on an air IC ({input:22C}) to cut the recovery, then guard the answer - or double-jump {dir:7} away.",
+        "feedback": {
+          "success": "BIC canceled the blocked RF attack in time to guard or double-jump away from the answer.",
+          "failure": "Use 623C at Light Blue RF, BIC it with 22C as it is blocked, then guard or double-jump back instead of pressing another attack."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_bic_answer",
+          "ownerTask": "bic_safety",
+          "kind": "block_answer",
+          "action": "5A",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Blocked! Air BIC - then stay safe.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 180
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180",
+    "mizuumi:strategy@460572#Understanding_Strategic_Value",
+    "local:include/game/mission/move_notation_tables.h"
+  ],
+  "next": {
+    "lessonId": "efz.offense.flicker_ic"
+  },
+  "recommendedAfter": [
+    "efz.offense.blue_ic"
+  ]
+}

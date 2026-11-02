@@ -1,0 +1,211 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.choose_rg",
+  "revision": 11,
+  "category": "strategy",
+  "order": 470,
+  "difficulty": 4,
+  "name": "Choose When to Recoil Guard",
+  "summary": "RG committed attacks; block when RG would add risk.",
+  "description": "RG committed attacks; block when RG would add risk.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 40.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "makoto",
+    "pos": {
+      "x": 160.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_absence",
+    "action_events",
+    "block_state",
+    "dummy_script",
+    "dummy_state",
+    "episode_script",
+    "episode_telegraph",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "RG Is a Choice, Not a Reflex",
+        "text": "The strategy guide's rule of thumb: counter attack after RGing C normals and SPECIALS, after some B normals - and if you RG an A or 2A, JUST KEEP BLOCKING. Fast normals cancel into the next hit before your punish comes out; you lose that race every time."
+      },
+      {
+        "id": "p1",
+        "title": "The Perfect RG Targets",
+        "text": "Dash normals and specials are the jackpot. Makoto's {input:66B} is +2 on normal block - but on Recoil Guard she has 10 frames of raw recovery and nothing cheap to cancel into. That is a free punish window of over 7 frames. Specials are even worse for her: RG turns 20+ frames of blockstun into almost nothing."
+      },
+      {
+        "id": "p2",
+        "title": "When NOT to RG",
+        "text": "Some moves are so unsafe on normal block that RG only gives the attacker a chance to counter-RG your punish. If the move already loses hard on block - just block it and take the guaranteed punish."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "no_challenge",
+        "kind": "combat",
+        "label": "The A string is airtight - do NOT challenge it",
+        "prompt": "Makoto rattles off her fast A string. There is no gap in it - hold {dir:4}, block, and do NOT press a button.",
+        "script": "ep_a_string",
+        "absence": {
+          "forbid": "attack",
+          "start": "taskArmed",
+          "end": "episodeCycleEnd",
+          "failOnHit": true,
+          "minBlocks": 4
+        }
+      },
+      {
+        "id": "rg_dash",
+        "kind": "combat",
+        "label": "Recoil Guard the {input:66B} charge",
+        "prompt": "Her {input:66B} charge is exactly what RG is for - Recoil Guard it and steal the turn.",
+        "script": "ep_66b_target",
+        "moveIds": [
+          168,
+          169,
+          170
+        ],
+        "req": "move",
+        "dummyState": [
+          231
+        ]
+      },
+      {
+        "id": "block_punish",
+        "kind": "combat",
+        "label": "Just block {input:623C} - then punish the landing",
+        "prompt": "Her {input:623C}? You don't even need RG - block it normally, then punish that long recovery with {input:5A}.",
+        "script": "ep_623c_target",
+        "sequence": [
+          {
+            "id": "blk",
+            "notation": "guard",
+            "moveIds": [
+              151,
+              153
+            ],
+            "req": "move",
+            "dummyState": [
+              258
+            ]
+          },
+          {
+            "id": "pnsh",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "land",
+            "maxGap": 600
+          }
+        ]
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_a_string",
+          "ownerTask": "no_challenge",
+          "kind": "macro",
+          "start": "taskArmed",
+          "approach": "dash",
+          "script": [
+            {
+              "action": "5A"
+            },
+            {
+              "action": "5A",
+              "cancel": true,
+              "waitTicks": 6
+            },
+            {
+              "action": "2A",
+              "cancel": true,
+              "waitTicks": 6
+            },
+            {
+              "action": "5B",
+              "cancel": true,
+              "waitTicks": 8
+            }
+          ],
+          "cue": {
+            "text": "Airtight string - just block.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 240
+          }
+        },
+        {
+          "id": "ep_66b_target",
+          "ownerTask": "rg_dash",
+          "kind": "macro",
+          "action": "66B",
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "She hops, then charges - RG it.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        },
+        {
+          "id": "ep_623c_target",
+          "ownerTask": "block_punish",
+          "kind": "macro",
+          "action": "623C",
+          "approach": "dash",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Uppercut - block, then punish.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 210
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572#RGing_Dash_Normals",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.attack_into_rg"
+  },
+  "recommendedAfter": [
+    "efz.strategy.survive_pressure"
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.defense.air_recovery_punish",
+  "revision": 7,
+  "category": "defense",
+  "order": 320,
+  "difficulty": 4,
+  "name": "Punishing Air Recovery",
+  "summary": "Punish an opponent's air recovery with {input:j.6C}.",
+  "description": "Punish an opponent's air recovery with {input:j.6C}.",
+  "player": {
+    "character": "misaki",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "nayukib",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "dummy_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "The Punish",
+        "text": "Misaki's {input:236A} projectile leaves the opponent enough juggle time to recover in the air - so make them regret it. Once it launches Nayuki, jump after her and press {input:j.6C} the moment she recovers. The air throw counts as a fresh punish, since the projectile's combo has already ended."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "recovery_punish",
+        "kind": "combat",
+        "label": "Launch with {input:236A}, then air-throw the recovery with {input:j.6C}",
+        "req": "move",
+        "script": "ep_airtech_fwd",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "prompt": "Hit Nayuki with 236A. She will air-recover FORWARD, toward you - jump up and press j.6C to throw the recovery before she can act.",
+        "sequence": [
+          {
+            "id": "launch",
+            "notation": "236A",
+            "moveIds": [
+              254
+            ],
+            "req": "land"
+          },
+          {
+            "id": "tag_recovery",
+            "notation": "j.6C air throw",
+            "moveIds": [
+              249
+            ],
+            "req": "move",
+            "maxGap": 900
+          }
+        ],
+        "feedback": {
+          "success": "Snatched her right out of the recovery - clean air throw.",
+          "failure": "Let 236A launch Nayuki, jump up with her, then press j.6C the moment she recovers toward you."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_airtech_fwd",
+          "ownerTask": "recovery_punish",
+          "kind": "airtech",
+          "clip": "forward",
+          "reactDelay": 12,
+          "start": "taskArmed",
+          "cue": {
+            "text": "She techs toward you - punish it!",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::misaki / 236A move 254",
+    "local:include/core/constants.h::AIR_THROW_SUCCESS_ID"
+  ],
+  "next": {
+    "lessonId": "efz.systems.recoil_armor"
+  },
+  "recommendedAfter": [
+    "efz.defense.air_recovery_decisions"
+  ]
+}

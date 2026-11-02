@@ -1,0 +1,100 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.fundamentals.screen",
+  "revision": 7,
+  "category": "fundamentals",
+  "order": 30,
+  "difficulty": 1,
+  "name": "Reading the Screen",
+  "summary": "Find Life, RF, SP, combo Power, and the juggle gauge.",
+  "description": "Find Life, RF, SP, combo Power, and the juggle gauge.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    },
+    "meter": 1000,
+    "rf": 500,
+    "blueIC": 0
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    },
+    "meter": 3000,
+    "rf": 1000,
+    "blueIC": 1
+  },
+  "stage": 4,
+  "requires": [
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "pages",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Life and Rounds",
+        "showHud": "life",
+        "text": "Each {tone:life|Life Gauge} is at the top. The {tone:rounds|Round Marks} beside it show rounds won. EFZ has no round timer: the middle readout is {tone:fps|FPS}, normally 64 under Revival."
+      },
+      {
+        "id": "p1",
+        "title": "SP and RF",
+        "showHud": "meter_states",
+        "text": "The large {tone:sp|SP Gauge} stores up to three Super levels. Here the left fighter has {tone:sp|one SP level} and {tone:red_ic|Red RF}; the right has {tone:sp|three SP levels} and {tone:blue_ic|Light Blue RF}. Both use {input:22C}: Red RF gives {tone:red_ic|Red IC}, while Light Blue RF gives {tone:blue_ic|Blue IC}."
+      },
+      {
+        "id": "p2",
+        "title": "Combo Power",
+        "text": "During a combo, the readout shows hits, damage, and {tone:power|Power}. Power affects damage and usually affects how much juggle time the next hit adds. The move used, height, and character also matter."
+      },
+      {
+        "id": "p3",
+        "title": "Juggle Gauge",
+        "showHud": "juggle",
+        "text": "When a fighter is launched, a {tone:juggle|cyan Juggle Gauge} appears beneath them. It shows how long they remain unable to recover in the air."
+      },
+      {
+        "id": "p4",
+        "title": "Juggle Gauge: Yellow",
+        "showHud": "juggle_yellow",
+        "text": "At {tone:juggle_yellow|20 visual frames or less}, the Juggle Gauge turns yellow. This is your warning that the opponent will soon be able to recover."
+      },
+      {
+        "id": "p5",
+        "title": "Juggle Gauge: Red",
+        "showHud": "juggle_red",
+        "text": "At {tone:juggle_red|10 visual frames or less}, the gauge turns red. When it empties, air recovery becomes available."
+      },
+      {
+        "id": "p6",
+        "title": "Character Resources",
+        "text": "Some characters have an extra meter of their own. That character's guide explains how it works."
+      }
+    ]
+  },
+  "sourceRefs": [
+    "mizuumi:hud-menus@333586",
+    "mizuumi:game-mechanics@473180"
+  ],
+  "next": {
+    "lessonId": "efz.fundamentals.walk_crouch"
+  },
+  "recommendedAfter": [
+    "efz.fundamentals.combo_notation"
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.fundamentals.air_throw",
+  "revision": 5,
+  "category": "fundamentals",
+  "order": 130,
+  "difficulty": 2,
+  "name": "Air Throw",
+  "summary": "Catch an airborne opponent with {input:j.6C}.",
+  "description": "Catch an airborne opponent with {input:j.6C}.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "dummy_script",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Air Throws",
+        "text": "Jump near an airborne opponent and press {input:j.6C}. Air throws start much faster than ground throws. If no one is in range to grab, your air {btn:C} attack comes out instead. You cannot air throw during an air dash."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "air_throw",
+        "kind": "combat",
+        "label": "Air throw the cued jumping dummy",
+        "moveIds": [
+          249
+        ],
+        "req": "move",
+        "script": "ep_jump",
+        "feedback": {
+          "success": "Clean catch. The air throw came out instead of j.C.",
+          "failure": "Get close in the air and press toward plus C before the dummy lands."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_jump",
+          "ownerTask": "air_throw",
+          "kind": "macro",
+          "action": "jump",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Dummy jumping in - meet them with {input:j.6C}",
+            "lead": 0
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 120
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180",
+    "local:shared_documentation/palletes_framedata/efz.exe copy.c"
+  ],
+  "next": {
+    "lessonId": "efz.fundamentals.air_recovery"
+  },
+  "recommendedAfter": [
+    "efz.fundamentals.ground_throws"
+  ]
+}

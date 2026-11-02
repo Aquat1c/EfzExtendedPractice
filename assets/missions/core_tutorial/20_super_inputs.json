@@ -1,0 +1,103 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.super_inputs",
+ "revision": 5,
+ "category": "offense",
+ "order": 192,
+ "difficulty": 2,
+ "name": "Super Inputs, Part 1 (Shiori)",
+ "summary": "Perform Shiori's three Super motions.",
+ "description": "Perform Shiori's three Super motions.",
+ "player": {
+  "character": "shiori",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  },
+  "meter": 3000,
+  "hasPos": true
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Longer Motions",
+    "text": "Supers use longer motions, but you read them exactly like Specials: {input:214214} repeats a motion, {input:641236} sweeps through half the directions, and {input:2141236} chains two motions together. Roll through the directions smoothly and press the attack near the end. Long motions also come out more consistently when they end on a diagonal - {input:64123} registers {input:641236} cleanly."
+   },
+   {
+    "id": "p1",
+    "title": "Air Supers and SP",
+    "text": "Some Supers work in the air too - Shiori's {input:2141236} Super has airborne versions. You've got free SP in this lesson so you can focus on the motions; in a real match, budget it like the SP lesson showed."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "sup_214214a",
+    "kind": "combat",
+    "label": "Perform {input:214214A}",
+    "moveIds": [
+     306
+    ],
+    "req": "move",
+    "completionHoldTicks": 0,
+    "restoreOnSuccess": true
+   },
+   {
+    "id": "sup_641236a",
+    "kind": "combat",
+    "label": "Perform {input:641236A}",
+    "moveIds": [
+     303
+    ],
+    "req": "move",
+    "completionHoldTicks": 0,
+    "restoreOnSuccess": true
+   },
+   {
+    "id": "sup_2141236a",
+    "kind": "combat",
+    "label": "Perform {input:2141236A}",
+    "moveIds": [
+     315
+    ],
+    "req": "move",
+    "completionHoldTicks": 0,
+    "restoreOnSuccess": true
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180",
+  "local:shared_documentation/MOVE_COMMAND_MAPS.md::shiori"
+ ],
+ "next": {
+  "lessonId": "efz.offense.super_inputs_2"
+ },
+ "recommendedAfter": [
+  "efz.offense.sp_supers"
+ ]
+}

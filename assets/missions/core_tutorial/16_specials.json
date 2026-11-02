@@ -1,0 +1,114 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.specials",
+ "revision": 4,
+ "category": "offense",
+ "order": 170,
+ "difficulty": 2,
+ "name": "Special Inputs, Part 1 (Shiori)",
+ "summary": "Perform every basic Special motion.",
+ "description": "Perform every basic Special motion.",
+ "player": {
+  "character": "shiori",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Reading a Motion",
+    "text": "A Special is a direction motion plus an attack button. Different buttons usually give different versions - often changing speed, distance, damage, or recovery. Read {input:236A} left to right: down, down-toward, toward, then A. The game briefly remembers your recent directions, so roll through the motion smoothly and press the button near the end."
+   },
+   {
+    "id": "p1",
+    "title": "The Four Common Motions",
+    "text": "The motions you'll see everywhere are {input:236}, {input:623}, {input:214}, and {input:412} - and Shiori has all four. Do each one and feel how the motion's shape matches the way your inputs move. Tip: ending a motion on a diagonal - {input:23623} instead of {input:236}, {input:21421} instead of {input:214} - comes out more consistently with the game's input buffer."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "s_236a",
+    "kind": "combat",
+    "label": "Perform {input:236A}",
+    "moveIds": [
+     250
+    ],
+    "req": "move"
+   },
+   {
+    "id": "s_236b",
+    "kind": "combat",
+    "label": "Do {input:236B} - spot how this version differs",
+    "moveIds": [
+     251
+    ],
+    "req": "move"
+   },
+   {
+    "id": "s_623a",
+    "kind": "combat",
+    "label": "Perform {input:623A}",
+    "moveIds": [
+     253
+    ],
+    "req": "move"
+   },
+   {
+    "id": "s_214a",
+    "kind": "combat",
+    "label": "Perform {input:214A}",
+    "moveIds": [
+     259
+    ],
+    "req": "move"
+   },
+   {
+   "id": "s_412a",
+    "kind": "combat",
+    "label": "Perform {input:412A}",
+    "moveIds": [
+     265
+    ],
+    "req": "move"
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180",
+  "local:shared_documentation/MOVE_COMMAND_MAPS.md::shiori"
+ ],
+ "next": {
+  "lessonId": "efz.offense.specials_2"
+ },
+ "recommendedAfter": [
+  "efz.offense.jump_cancels"
+ ]
+}

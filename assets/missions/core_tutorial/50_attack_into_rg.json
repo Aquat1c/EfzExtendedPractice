@@ -1,0 +1,233 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.attack_into_rg",
+  "revision": 10,
+  "category": "strategy",
+  "order": 480,
+  "difficulty": 5,
+  "name": "Attack into Recoil Guard",
+  "summary": "Choose a fast follow-up, Recoil Counter, or disciplined block.",
+  "description": "Choose a fast follow-up, Recoil Counter, or disciplined block.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_absence",
+    "action_events",
+    "block_state",
+    "cancel_transition",
+    "dummy_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "rg_state",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "When YOUR Attack Gets RG'd",
+        "text": "An RG against you is not the end of your turn - it is the start of an RG battle. As long as you are still inside the move that got Recoil Guarded, you can Recoil Counter their punish right back - no matter how deep into the move you are."
+      },
+      {
+        "id": "p1",
+        "title": "Your Three Outs",
+        "text": "One: cancel into a fast follow-up that reaches them before their answer. Two: stay in the move and Recoil Counter their answer - the tug of war. Three: if your pressure was blocked and you have no safe continuation, accept it - guard and give the turn back."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Practice three related decisions: beat an RG answer with a fast normal cancel, stay in the original move and Recoil Counter, then recognize an ordinary block and safely end your turn."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "safe_cancel",
+        "kind": "combat",
+        "label": "Beat the RG answer: {input:c.5B} > {input:f.5B}",
+        "prompt": "Misaki will Recoil Guard your {input:c.5B} and answer with {input:5A}. Cancel immediately into {input:f.5B} so your follow-up reaches her first.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_rg_dummy",
+        "sequence": [
+          {
+            "id": "poked",
+            "notation": "c.5B",
+            "moveIds": [
+              201
+            ],
+            "req": "rg"
+          },
+          {
+            "id": "safe",
+            "notation": "f.5B",
+            "moveIds": [
+              202
+            ],
+            "req": "land",
+            "fromMoveIds": [
+              201
+            ],
+            "maxGap": 240
+          }
+        ]
+      },
+      {
+        "id": "preserve_rc",
+        "kind": "combat",
+        "label": "Or stay - and Recoil Counter its answer",
+        "prompt": "Same situation - but this time STAY in the move and Recoil Counter the answer right back (tap {dir:4} as its attack lands).",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_rg_answer_50",
+        "sequence": [
+          {
+            "id": "poked2",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "rg"
+          },
+          {
+            "id": "rc_back",
+            "notation": "RG",
+            "moveIds": [
+              168,
+              169,
+              170
+            ],
+            "req": "move",
+            "maxGap": 600
+          }
+        ]
+      },
+      {
+        "id": "end_turn_poke",
+        "kind": "combat",
+        "label": "Let the dummy block your {input:5A}",
+        "prompt": "Poke with {input:5A}. Misaki blocks it normally this time - get ready to end your turn instead of forcing another attack.",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_block_50",
+        "moveIds": [
+          200
+        ],
+        "req": "block"
+      },
+      {
+        "id": "end_turn",
+        "kind": "combat",
+        "continuity": "continue",
+        "label": "End your turn and block the answer",
+        "prompt": "Your poke was BLOCKED and Misaki is answering. Hold {dir:4}, guard her {input:5A}, and do not press an attack.",
+        "script": "ep_answer_50",
+        "absence": {
+          "forbid": "attack",
+          "start": "taskArmed",
+          "end": "episodeCycleEnd",
+          "failOnHit": true,
+          "minBlocks": 1
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_rg_dummy",
+          "ownerTask": "safe_cancel",
+          "kind": "rg_answer",
+          "action": "5A",
+          "start": "taskArmed",
+          "cue": {
+            "text": "RG incoming - cancel into f.5B!",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_rg_answer_50",
+          "ownerTask": "preserve_rc",
+          "kind": "rg_answer",
+          "action": "5A",
+          "start": "taskArmed",
+          "cue": {
+            "text": "It RGs and answers - RC it back.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_block_50",
+          "ownerTask": "end_turn_poke",
+          "kind": "block",
+          "start": "taskArmed",
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 120
+          }
+        },
+        {
+          "id": "ep_answer_50",
+          "ownerTask": "end_turn",
+          "kind": "macro",
+          "action": "5A",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Your turn ended - block the answer.",
+            "lead": 20
+          },
+          "repeat": {
+            "mode": "afterFailure",
+            "delay": 150
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572#RG_Mind_Games",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.spend_rf"
+  },
+  "recommendedAfter": [
+    "efz.strategy.choose_rg"
+  ]
+}

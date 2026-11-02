@@ -1,0 +1,225 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.useful_range",
+  "revision": 5,
+  "category": "strategy",
+  "order": 380,
+  "difficulty": 3,
+  "name": "Control a Useful Range",
+  "summary": "Make a long-reaching attack miss, then hit its recovery.",
+  "description": "Make a long-reaching attack miss, then hit its recovery.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "dummy_script",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks",
+    "whiff_window"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "What a Useful Range Is",
+        "text": "Every attack has a sweet spot: a distance where YOUR poke reaches but THEIRS falls short. Standing there for free is what players call controlling a useful range - the opponent has to take a risk just to get to you."
+      },
+      {
+        "id": "p1",
+        "title": "Whiff Punishing",
+        "text": "When a poke misses, its recovery frames are a gift. If you are standing just outside its reach, you can step in and hit the opponent while they are still stuck recovering. This is whiff punishing - the backbone of EFZ neutral."
+      },
+      {
+        "id": "p2",
+        "title": "The Drill",
+        "text": "Misaki will keep poking at a fixed rhythm. Find the spot where her poke whiffs in front of you, then punish the miss before she recovers. Too close and you get hit; too far and your punish falls short."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "whiff_punish_1",
+        "kind": "combat",
+        "label": "Make the poke miss, then hit its recovery (1 of 3)",
+        "moveIds": [
+          200,
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          230,
+          231,
+          232,
+          233,
+          234,
+          235
+        ],
+        "req": "land",
+        "withinWhiffWindow": {
+          "maxTicks": 60
+        },
+        "script": "ep_poke_1",
+        "pos": {
+          "x": 250.0,
+          "y": 0.0
+        },
+        "feedback": {
+          "success": "That was a whiff punish - you hit before they could act again.",
+          "failure": "Wait for the poke to miss, then dash in and hit immediately. Too late means the window closed."
+        }
+      },
+      {
+        "id": "whiff_punish_2",
+        "kind": "combat",
+        "label": "Make the poke miss, then hit its recovery (2 of 3)",
+        "moveIds": [
+          200,
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          230,
+          231,
+          232,
+          233,
+          234,
+          235
+        ],
+        "req": "land",
+        "withinWhiffWindow": {
+          "maxTicks": 60
+        },
+        "script": "ep_poke_2",
+        "pos": {
+          "x": 250.0,
+          "y": 0.0
+        },
+        "feedback": {
+          "success": "Again - the whiffed poke paid for itself.",
+          "failure": "Stay just outside the poke's reach, then move in the instant it misses."
+        }
+      },
+      {
+        "id": "whiff_punish_3",
+        "kind": "combat",
+        "label": "Make the poke miss, then hit its recovery (3 of 3)",
+        "moveIds": [
+          200,
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          230,
+          231,
+          232,
+          233,
+          234,
+          235
+        ],
+        "req": "land",
+        "withinWhiffWindow": {
+          "maxTicks": 60
+        },
+        "script": "ep_poke_3",
+        "pos": {
+          "x": 250.0,
+          "y": 0.0
+        },
+        "feedback": {
+          "success": "Three clean punishes - this spacing is your useful range.",
+          "failure": "Watch the poke, not the opponent. The moment it whiffs, step in and hit."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_poke_1",
+          "ownerTask": "whiff_punish_1",
+          "kind": "macro",
+          "action": "5C",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Let the poke miss, then dash in and hit its recovery.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 200
+          }
+        },
+        {
+          "id": "ep_poke_2",
+          "ownerTask": "whiff_punish_2",
+          "kind": "macro",
+          "action": "5C",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Same poke - punish the whiff again.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 200
+          }
+        },
+        {
+          "id": "ep_poke_3",
+          "ownerTask": "whiff_punish_3",
+          "kind": "macro",
+          "action": "5C",
+          "approach": "none",
+          "start": "taskArmed",
+          "cue": {
+            "text": "One more - make it miss and take your turn.",
+            "lead": 30
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 200
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.take_space"
+  },
+  "recommendedAfter": [
+    "efz.systems.character_counters"
+  ]
+}

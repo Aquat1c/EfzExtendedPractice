@@ -1,0 +1,88 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.double_jumps",
+ "revision": 3,
+ "category": "fundamentals",
+ "order": 60,
+ "difficulty": 1,
+ "name": "Double Jumps",
+ "summary": "Change direction once more while airborne.",
+ "description": "Change direction once more while airborne.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "One More Jump",
+    "text": "Most characters can jump once more in the air. Use the extra jump to change your height or direction. For most characters, air dashing first removes the option to double jump afterward; unusual air-movement rules are explained in that character's guide."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "dj_up",
+    "kind": "combat",
+    "label": "Double jump straight up",
+    "moveIds": [
+     14
+    ],
+    "req": "move"
+   },
+   {
+    "id": "dj_fwd",
+    "kind": "combat",
+    "label": "Double jump toward",
+    "moveIds": [
+     15
+    ],
+    "req": "move"
+   },
+   {
+    "id": "dj_back",
+    "kind": "combat",
+    "label": "Double jump away",
+    "moveIds": [
+     16
+    ],
+    "req": "move"
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.ground_dash"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.jumps"
+ ]
+}

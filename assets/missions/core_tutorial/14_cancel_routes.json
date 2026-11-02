@@ -1,0 +1,150 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.cancel_routes",
+ "revision": 6,
+ "category": "offense",
+ "order": 150,
+ "difficulty": 2,
+ "name": "Cancels and Normal Routes",
+ "summary": "Build Nayuki's normal route, then finish a dash normal with a Special.",
+ "description": "Build Nayuki's normal route, then finish a dash normal with a Special.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "cancel_transition",
+  "dummy_script",
+  "ordered_actions",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Cancels",
+    "text": "When a normal hits or gets blocked, you can often cut its recovery short and go straight into another move - that's a cancel. A, then B, then C, then a Special or Super is the usual order, but treat it as a guide, not a law. Each move decides what it can cancel into."
+   },
+   {
+    "id": "p1",
+    "title": "B Routes",
+    "text": "B routes change with character and distance. Nayuki can go {input:c.5B} into {input:2B} into {input:f.5B}, and she can skip any of them along the way. Other characters link their close 5B, 2B, and far 5B differently, so learn the route for whoever you play."
+   },
+   {
+    "id": "p2",
+    "title": "Command and Dash Normals",
+    "text": "Command normals like 6B, and attacks done out of a dash like 66A, follow their own cancel routes. Many skip the ordinary normal chain and go straight to a Special, Super, IC, or jump."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "showcase",
+    "kind": "combat",
+    "label": "Perform {input:5A} > {input:c.5B} > {input:f.5B} > {input:5C} > {input:236A}",
+    "prompt": "Land every hit - each move has to cancel straight out of the one before it.",
+    "script": "ep_showcase_idle",
+    "continuity": "sameCombo",
+    "sequence": [
+     {"id":"5a","notation":"5A","moveIds":[200],"req":"land"},
+     {"id":"c5b","notation":"c.5B","moveIds":[201],"fromMoveIds":[200],"req":"land","maxGap":120},
+     {"id":"f5b","notation":"f.5B","moveIds":[202],"fromMoveIds":[201],"req":"land","maxGap":120},
+     {"id":"5c","notation":"5C","moveIds":[203],"fromMoveIds":[202],"req":"land","maxGap":120},
+     {"id":"236a","notation":"236A","moveIds":[253],"fromMoveIds":[203],"req":"land","maxGap":180}
+    ],
+    "feedback": {
+     "success": "Clean! Every attack flowed as a direct cancel.",
+     "failure": "Keep the route unbroken - if a move recovers or whiffs, start over from 5A."
+    }
+   },
+   {
+    "id": "full_b",
+    "kind": "combat",
+    "label": "Perform the full B string {input:c.5B} > {input:2B} > {input:f.5B}",
+    "script": "ep_b_idle",
+    "continuity": "sameCombo",
+    "sequence": [
+     {"id":"c5b","notation":"c.5B","moveIds":[201],"req":"land"},
+     {"id":"2b","notation":"2B","moveIds":[205],"fromMoveIds":[201],"req":"land","maxGap":120},
+     {"id":"f5b","notation":"f.5B","moveIds":[202],"fromMoveIds":[205],"req":"land","maxGap":120}
+    ],
+    "feedback": {
+     "success": "Nice - all three B attacks in one string.",
+     "failure": "Stay close: cancel c.5B into 2B, then 2B into f.5B."
+    }
+   },
+   {
+    "id": "dash_special",
+    "kind": "combat",
+    "label": "Connect {input:66A} > {input:623A}",
+    "script": "ep_dash_idle",
+    "continuity": "sameCombo",
+    "sequence": [
+     {"id":"66a","notation":"66A","moveIds":[230],"req":"land"},
+     {"id":"623a","notation":"623A","moveIds":[250],"fromMoveIds":[230],"req":"land","maxGap":180}
+    ],
+    "feedback": {
+     "success": "That's it - the Special came straight off the dash normal.",
+     "failure": "Land 66A first, then slide into 623A during its cancel window."
+    }
+   }
+  ],
+  "dummyScript": {
+   "episodes": [
+    {
+     "id": "ep_showcase_idle",
+     "ownerTask": "showcase",
+     "kind": "idle",
+     "start": "taskArmed",
+     "cue": {"text":"Dummy's idle - run the full route","lead":0}
+    },
+    {
+     "id": "ep_b_idle",
+     "ownerTask": "full_b",
+     "kind": "idle",
+     "start": "taskArmed",
+     "cue": {"text":"Get close - full B string","lead":0}
+    },
+    {
+     "id": "ep_dash_idle",
+     "ownerTask": "dash_special",
+     "kind": "idle",
+     "start": "taskArmed",
+     "cue": {"text":"Land 66A, cancel into 623A","lead":0}
+    }
+   ]
+  }
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180#Move_Cancelling",
+  "mizuumi:nayuki-awake@426475"
+ ],
+ "next": {
+  "lessonId": "efz.offense.jump_cancels"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.air_recovery"
+ ]
+}

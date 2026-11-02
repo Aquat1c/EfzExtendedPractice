@@ -1,0 +1,93 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.strategy.stable_combo",
+  "revision": 5,
+  "category": "strategy",
+  "order": 420,
+  "difficulty": 4,
+  "name": "Choose a Stable Combo",
+  "summary": "Finish reliably when Power, height, or distance changes.",
+  "description": "Finish reliably when Power, height, or distance changes.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "coherent_state",
+    "combo_lifecycle",
+    "pages",
+    "progress_store",
+    "result_comparison",
+    "task_checkpoints",
+    "tutorial_tasks",
+    "typed_contact"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Power% - the Combo Budget",
+        "text": "Every hit in a combo reduces your {term:Power%} - EFZ's proration system. The lower it drops, the shorter the juggle time each following hit gets, until nothing connects anymore. A combo is a budget: every hit spends some of it."
+      },
+      {
+        "id": "p1",
+        "title": "Damage Efficiency",
+        "text": "Good routes maximize damage-per-proration: strong hits that spend little budget. Long flashy routes are not automatically better - a stable route that always lands beats an optimal one you drop half the time."
+      },
+      {
+        "id": "p2",
+        "title": "Reading the Power Readout",
+        "text": "One trap: the Power% number on screen is always ONE HIT BEHIND - it shows the value when the previous hit connected. Combos stop working at their break point, so watch the readout and learn where your route stops connecting."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "long_route",
+        "kind": "combat",
+        "label": "Complete the displayed high-Power route",
+        "moveIds": [
+          0
+        ],
+        "req": "move"
+      },
+      {
+        "id": "short_route",
+        "kind": "combat",
+        "label": "Switch to the short route with its marked ~ delay",
+        "moveIds": [
+          0
+        ],
+        "req": "move"
+      }
+    ]
+  },
+  "sourceRefs": [
+    "mizuumi:strategy@460572#Damage_Efficiency",
+    "local:docs/info/strategy/Eternal Fighter Zero_Strategy - Mizuumi Wiki.html"
+  ],
+  "next": {
+    "lessonId": "efz.strategy.end_with_advantage"
+  },
+  "recommendedAfter": [
+    "efz.strategy.hit_confirm"
+  ]
+}

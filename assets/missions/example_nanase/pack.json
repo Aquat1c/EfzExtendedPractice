@@ -1,0 +1,16 @@
+{
+    "format": 1,
+    "name": "Nanase Bread & Butters",
+    "author": "EfzExtendedPractice",
+    "character": "nanase",
+    "description": "Example pack - basic Nanase combos.",
+    "scenarios": [
+        {
+            "name": "Basic BnB",
+            "file": "combo1.json",
+            "description": "5A > 2B > 5C > 236B",
+            "preview": "combo1.png",
+            "locked": false
+        }
+    ]
+}

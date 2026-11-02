@@ -1,0 +1,88 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.walk_crouch",
+ "revision": 3,
+ "category": "fundamentals",
+ "order": 40,
+ "difficulty": 1,
+ "name": "Walking and Crouching",
+ "summary": "Control distance without committing to a dash.",
+ "description": "Control distance without committing to a dash.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Walk and Crouch",
+    "text": "Hold {dir:6} to walk toward the opponent and {dir:4} to walk away. EFZ has no proximity guard, so holding away keeps you walking until an attack actually reaches you. Hold {dir:2} to crouch and lower your body; whether an attack passes overhead depends on its hitbox."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "walk_marker",
+    "kind": "combat",
+    "label": "Walk forward toward the opponent",
+    "moveIds": [
+     1
+    ],
+    "req": "move"
+   },
+   {
+    "id": "retreat_marker",
+    "kind": "combat",
+    "label": "Walk away from the opponent",
+    "moveIds": [
+     2
+    ],
+    "req": "move"
+   },
+   {
+    "id": "crouch_under",
+    "kind": "combat",
+    "label": "Hold down to crouch",
+    "moveIds": [
+     3
+    ],
+    "req": "move"
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.jumps"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.screen"
+ ]
+}

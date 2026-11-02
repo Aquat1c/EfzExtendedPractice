@@ -1,0 +1,147 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.fundamentals.ground_throws",
+  "revision": 5,
+  "category": "fundamentals",
+  "order": 120,
+  "difficulty": 1,
+  "name": "Ground Throws",
+  "summary": "Throw a guarding opponent and learn when a throw can connect.",
+  "description": "Throw a guarding opponent and learn when a throw can connect.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 310.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 330.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "block_state",
+    "dummy_script",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Normal Throws",
+        "text": "Stand close to a grounded opponent, hold toward or away, and press {btn:C}. A normal throw beats guard and has no universal throw-break input. If the opponent has already jumped clear, the ground throw misses and leaves you open."
+      },
+      {
+        "id": "p1",
+        "title": "Tick Throws",
+        "text": "You cannot throw someone while an attack has them stuck reeling or blocking. Make them block a quick attack, stay close while blockstun runs out, then grab them the moment they're free. This is called a tick throw."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "throw_guard",
+        "kind": "combat",
+        "label": "Throw the guarding dummy",
+        "moveIds": [
+          221
+        ],
+        "req": "move",
+        "script": "ep_guard",
+        "feedback": {
+          "success": "Throws beat guard when you are close enough.",
+          "failure": "Stand close, hold toward or away, and press C."
+        }
+      },
+      {
+        "id": "tick_throw",
+        "kind": "combat",
+        "label": "Make them block {input:5A}, wait, then throw",
+        "script": "ep_block",
+        "sequence": [
+          {
+            "id": "blocked_5a",
+            "notation": "5A (blocked)",
+            "moveIds": [
+              200,
+              230
+            ],
+            "req": "block"
+          },
+          {
+            "id": "walk_up",
+            "notation": "walk",
+            "moveIds": [
+              1
+            ],
+            "req": "move",
+            "maxGap": 600
+          },
+          {
+            "id": "delayed_throw",
+            "notation": "~ 6C / 4C",
+            "moveIds": [
+              221
+            ],
+            "req": "move",
+            "maxGap": 720
+          }
+        ],
+        "prompt": "Make the dummy block {input:5A} (or {input:66A}) - the pushback slides it out of throw range. WALK forward to close the gap, then throw.",
+        "feedback": {
+          "success": "Good timing - blockstun ran out and the throw connected before they could press anything.",
+          "failure": "If the throw misses, wait a little longer after the blocked 5A."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_guard",
+          "ownerTask": "throw_guard",
+          "kind": "block",
+          "start": "taskArmed",
+          "cue": {
+            "text": "The dummy will guard strikes. Throws still beat guard.",
+            "lead": 0
+          }
+        },
+        {
+          "id": "ep_block",
+          "ownerTask": "tick_throw",
+          "kind": "block",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Make 5A get blocked, pause briefly, then throw.",
+            "lead": 0
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180"
+  ],
+  "next": {
+    "lessonId": "efz.fundamentals.air_throw"
+  },
+  "recommendedAfter": [
+    "efz.fundamentals.guard"
+  ]
+}

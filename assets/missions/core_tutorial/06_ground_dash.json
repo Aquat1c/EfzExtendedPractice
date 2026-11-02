@@ -1,0 +1,104 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.ground_dash",
+ "revision": 5,
+ "category": "fundamentals",
+ "order": 70,
+ "difficulty": 1,
+ "name": "Ground Dash, Backdash, and Dash Momentum",
+ "summary": "Cover ground quickly and learn when a dash commits you.",
+ "description": "Cover ground quickly and learn when a dash commits you.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "cancel_transition",
+  "coherent_state",
+  "ordered_actions",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Dashes",
+    "text": "Tap {input:66} to dash and {input:44} to backdash. Dash style varies: some characters run, some hop, and some hover. You cannot guard while dashing. A running character carries forward momentum into a jump, letting {input:66} then {dir:8} travel farther than a neutral jump."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "dash_fwd",
+    "kind": "combat",
+    "label": "Forward dash ({input:66})",
+    "moveIds": [
+     163
+    ],
+    "req": "move"
+   },
+   {
+    "id": "backdash",
+    "kind": "combat",
+    "label": "Backdash ({input:44})",
+    "moveIds": [
+     164
+    ],
+    "req": "move"
+   },
+   {
+   "id": "dash_jump",
+   "kind": "combat",
+   "label": "Dash, then jump directly out of the run",
+    "sequence": [
+     {
+      "id": "dash",
+      "notation": "66",
+      "moveIds": [163],
+      "req": "move"
+     },
+     {
+      "id": "jump",
+      "notation": "8",
+      "moveIds": [4],
+      "fromMoveIds": [163],
+      "req": "move",
+      "maxGap": 180
+     }
+    ],
+    "prompt": "Dash in, then jump straight out of the run - feel how the momentum flings your jump farther."
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.hover_dash"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.double_jumps"
+ ]
+}

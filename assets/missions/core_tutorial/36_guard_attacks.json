@@ -1,0 +1,194 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.systems.guard_attacks",
+  "revision": 10,
+  "category": "systems",
+  "order": 340,
+  "difficulty": 3,
+  "name": "Guard Attacks",
+  "summary": "Use an attack that briefly blocks, then beat one with a low.",
+  "description": "Use an attack that briefly blocks, then beat one with a low.",
+  "player": {
+    "character": "ayu",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "direct_contact_state",
+    "dummy_script",
+    "dummy_state",
+    "episode_telegraph",
+    "guard_point_contact",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Guard Points",
+        "text": "Some attacks briefly BLOCK an incoming strike and keep on going - that protected part is called a guard point, or autoguard. It's not armor: normals deal no damage through it, Specials still chip, and every move has its own guard-point timing."
+      },
+      {
+        "id": "p1",
+        "title": "Recognize Them",
+        "text": "Ayu {input:6C} is your practice tool here. Misaki {input:5C}, {input:236B}, and {input:66C} are three more guard-point attacks worth learning to spot. They all guard as though STANDING - so a well-timed low slips right under the protection."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "use_gp",
+        "kind": "combat",
+        "label": "Use Ayu {input:6C} to block the cued strike and continue",
+        "sequence": [
+          {
+            "id": "start_6c",
+            "notation": "6C",
+            "moveIds": [
+              211
+            ],
+            "req": "move"
+          },
+          {
+            "id": "absorb_66b",
+            "notation": "guard point",
+            "req": "connect",
+            "maxGap": 240,
+            "contact": {
+              "attacker": "dummy",
+              "target": "learner",
+              "source": "direct",
+              "result": "guard_point",
+              "moveIds": [
+                231
+              ]
+            }
+          },
+          {
+            "id": "continue_6c",
+            "notation": "6C lands",
+            "req": "connect",
+            "maxGap": 240,
+            "dummyState": [
+              231
+            ],
+            "contact": {
+              "attacker": "learner",
+              "target": "dummy",
+              "source": "direct",
+              "result": "hit",
+              "moveIds": [
+                211
+              ]
+            }
+          }
+        ],
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "script": "ep_cued_strike",
+        "prompt": "Misaki keeps charging with {input:66B}. Start Ayu's {input:6C} early enough for its guard point to absorb the strike, then let {input:6C} continue into its hit."
+      },
+      {
+        "id": "beat_gp",
+        "kind": "combat",
+        "label": "Beat Misaki {input:66C} with Ayu {input:2C}",
+        "moveIds": [
+          206
+        ],
+        "req": "land",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "dummyState": [
+          232
+        ],
+        "contact": {
+          "attacker": "learner",
+          "target": "dummy",
+          "source": "direct",
+          "result": "hit",
+          "moveIds": [
+            206
+          ],
+          "count": 1
+        },
+        "script": "ep_gp_dash",
+        "prompt": "Now Misaki charges in with {input:66C} - its guard point (frames 4-14) shrugs off highs. But guard points do not cover LOWS: sweep her with {input:2C} while she is still charging."
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_cued_strike",
+          "ownerTask": "use_gp",
+          "kind": "macro",
+          "action": "66B",
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "She hops, then charges 66B - absorb it with 6C's guard point.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_gp_dash",
+          "ownerTask": "beat_gp",
+          "kind": "macro",
+          "action": "66C",
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Hop, then a guard-point charge - hit LOW.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 180
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:advanced-mechanics@457885",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::ayu",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::misaki"
+  ],
+  "next": {
+    "lessonId": "efz.systems.special_knockdown"
+  },
+  "recommendedAfter": [
+    "efz.systems.recoil_armor"
+  ]
+}

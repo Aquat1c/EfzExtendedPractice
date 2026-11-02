@@ -1,0 +1,175 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.fundamentals.combo_notation",
+  "revision": 5,
+  "category": "fundamentals",
+  "order": 20,
+  "difficulty": 1,
+  "name": "Reading Move and Combo Notation",
+  "summary": "Read the shorthand used by guides, Trials, and combo lists.",
+  "description": "Read the shorthand used by guides, Trials, and combo lists.",
+  "player": {
+    "character": "nayukib",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "choice_tasks",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Directions Before Buttons",
+        "text": "A direction is written before its button: {input:5A} is neutral A and {input:2B} is down B. {input:c.5B} means close standing B; {input:f.5B} means far standing B. {input:j.B} is airborne B, and {input:dj.B} is B after a double jump."
+      },
+      {
+        "id": "p1",
+        "title": "Markers",
+        "text": "A ~ before a move marks an intentional delay. * means any listed button version, xN means a move must hit that many times, ? marks an optional step, and [SETUP] means the previous combo ended before the next part begins. (whiff) means the move should miss. IC (Instant Charge - a cancel you'll learn later in this tutorial) is written at the point where it is used."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "notation.delay_marker",
+        "kind": "choice",
+        "prompt": "What does ~ before a move mean?",
+        "options": [
+          {
+            "id": "delay",
+            "label": "Delay this move"
+          },
+          {
+            "id": "repeat",
+            "label": "Repeat this move"
+          },
+          {
+            "id": "optional",
+            "label": "This move is optional"
+          }
+        ],
+        "acceptedOptionIds": [
+          "delay"
+        ],
+        "feedback": {
+          "delay": "Right - a ~ tells you to pause a beat before that move.",
+          "repeat": "Not quite - repeats are written xN. The ~ means delay.",
+          "optional": "Optional steps get a ?. The ~ means delay."
+        }
+      },
+      {
+        "id": "notation.hits_marker",
+        "kind": "choice",
+        "prompt": "What does x2 after a move mean?",
+        "options": [
+          {
+            "id": "hits",
+            "label": "The move must hit two times"
+          },
+          {
+            "id": "twice",
+            "label": "Perform the move two times"
+          },
+          {
+            "id": "both",
+            "label": "Press two buttons together"
+          }
+        ],
+        "acceptedOptionIds": [
+          "hits"
+        ],
+        "feedback": {
+          "hits": "Right - the move has to actually connect that many times.",
+          "twice": "Careful - xN counts HITS from one use of the move, not how many times you do it.",
+          "both": "Nope - buttons are never written with xN. It counts hits."
+        }
+      },
+      {
+        "id": "notation.setup_marker",
+        "kind": "choice",
+        "prompt": "What does [SETUP] between two parts mean?",
+        "options": [
+          {
+            "id": "ended",
+            "label": "The previous combo ended before the next part"
+          },
+          {
+            "id": "charge",
+            "label": "Hold the direction to charge"
+          },
+          {
+            "id": "cancel",
+            "label": "Cancel into the next move faster"
+          }
+        ],
+        "acceptedOptionIds": [
+          "ended"
+        ],
+        "feedback": {
+          "ended": "Right - those are two separate combos glued together by a setup.",
+          "charge": "Nope - EFZ notation never uses [SETUP] for charging.",
+          "cancel": "Not this one - cancels are just written as the moves themselves."
+        }
+      },
+      {
+        "id": "follow_sequence",
+        "kind": "combat",
+        "label": "Follow the shown sequence: {input:5A}, wait a moment, {input:5A}",
+        "sequence": [
+          {
+            "id": "first_5a",
+            "notation": "5A",
+            "moveIds": [
+              200
+            ],
+            "req": "move"
+          },
+          {
+            "id": "delayed_5a",
+            "notation": "~5A",
+            "moveIds": [
+              200
+            ],
+            "req": "move",
+            "minGap": 18,
+            "maxGap": 360
+          }
+        ],
+        "prompt": "Tap A, hold that pause on purpose, then tap A again - that little gap is the ~."
+      }
+    ]
+  },
+  "sourceRefs": [
+    "mizuumi:combo-basics@346605"
+  ],
+  "next": {
+    "lessonId": "efz.fundamentals.screen"
+  },
+  "recommendedAfter": [
+    "efz.controls.notation"
+  ]
+}

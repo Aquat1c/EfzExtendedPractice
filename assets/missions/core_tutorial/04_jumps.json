@@ -1,0 +1,88 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.jumps",
+ "revision": 3,
+ "category": "fundamentals",
+ "order": 50,
+ "difficulty": 1,
+ "name": "Jumps",
+ "summary": "Jump straight up, toward, and away.",
+ "description": "Jump straight up, toward, and away.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Three Jumps",
+    "text": "Use {dir:8}, {dir:9}, and {dir:7} to jump straight up, toward the opponent, and away. A jump takes a short moment before you leave the ground, so it can escape a throw - but not if you start too late."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "jump_up",
+    "kind": "combat",
+    "label": "Neutral jump ({dir:8})",
+    "moveIds": [
+     4
+    ],
+    "req": "move"
+   },
+   {
+    "id": "jump_fwd",
+    "kind": "combat",
+    "label": "Forward jump ({dir:9})",
+    "moveIds": [
+     5
+    ],
+    "req": "move"
+   },
+   {
+    "id": "jump_back",
+    "kind": "combat",
+    "label": "Backward jump ({dir:7})",
+    "moveIds": [
+     6
+    ],
+    "req": "move"
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180"
+ ],
+ "next": {
+  "lessonId": "efz.fundamentals.double_jumps"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.walk_crouch"
+ ]
+}

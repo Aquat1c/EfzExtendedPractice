@@ -1,0 +1,290 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.systems.recoil_armor",
+  "revision": 23,
+  "category": "systems",
+  "order": 330,
+  "difficulty": 3,
+  "name": "Recoil Armor (Mizuka vs Rumi)",
+  "summary": "Recognize armor, then practice three answers to it.",
+  "description": "Recognize armor, then practice three answers to it.",
+  "player": {
+    "character": "nagamori",
+    "pos": {
+      "x": 250.0,
+      "y": 0.0
+    }
+  },
+  "dummy": {
+    "character": "nanase",
+    "pos": {
+      "x": 390.0,
+      "y": 0.0
+    },
+    "resources": {
+      "barehanded": 0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "cancel_transition",
+    "direct_contact_state",
+    "dummy_script",
+    "dummy_state",
+    "episode_telegraph",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "task_state_seeds",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Recoil Armor",
+        "text": "Recoil Armor flashes white: the armored character still takes your damage, but they don't flinch. Hits absorbed one by one don't add up to a real combo. The good news? A small set of attacks BREAKS armor outright - and a super with invincible startup doesn't fear what comes after the flash."
+      },
+      {
+        "id": "p1",
+        "title": "Answers",
+        "text": "Here's the trick: hitting armor doesn't count as a real hit, but some moves are allowed to jump-cancel even on armor - Mizuka {input:5A} is one of them. Against Rumi's slow armored {input:41236C}, tag the armor with {input:5A}, then jump-cancel so her ground command throw grabs nothing but air."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "super_armor",
+        "kind": "combat",
+        "label": "Break the armor with {input:236236}",
+        "sequence": [
+          {
+            "id": "super_connect",
+            "notation": "236236 (hits the armor)",
+            "moveIds": [
+              300,
+              301,
+              302
+            ],
+            "req": "land",
+            "dummyState": [
+              264
+            ],
+            "contact": {
+              "attacker": "learner",
+              "target": "dummy",
+              "source": "direct",
+              "result": "hit",
+              "moveIds": [
+                300,
+                301,
+                302
+              ],
+              "count": 1
+            }
+          },
+          {
+            "id": "super_seal",
+            "notation": "connect",
+            "moveIds": [
+              303,
+              304,
+              305
+            ],
+            "fromMoveIds": [
+              300,
+              301,
+              302
+            ],
+            "req": "move",
+            "maxGap": 180
+          }
+        ],
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "dummyPos": {
+          "x": 390.0,
+          "y": 0.0
+        },
+        "seed": {
+          "player": {
+            "meter": 3000
+          }
+        },
+        "script": "ep_armor_super",
+        "prompt": "Rumi hops, lands, then starts her armored {input:41236C}. The moment she lands, fire {input:236236} - its invincible startup rides through her armor and the hit breaks it. Finish the second 236 cleanly: a sloppy roll comes out as 623 instead.",
+        "feedback": {
+          "success": "Armor broken - the super went straight through the flash.",
+          "failure": "Fire 236236 right after she lands, so it connects while the armor flashes."
+        }
+      },
+      {
+        "id": "break_armor",
+        "kind": "combat",
+        "label": "Beat it with Mizuka's bow {input:2C}",
+        "moveIds": [
+          206
+        ],
+        "req": "land",
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "dummyPos": {
+          "x": 390.0,
+          "y": 0.0
+        },
+        "dummyState": [
+          264
+        ],
+        "contact": {
+          "attacker": "learner",
+          "target": "dummy",
+          "source": "direct",
+          "result": "hit",
+          "moveIds": [
+            206
+          ],
+          "count": 1
+        },
+        "script": "ep_armor_break",
+        "prompt": "Some attacks punch straight through armor. She hops, then starts the armored {input:41236C} - smack it with the bow {input:2C} and knock her clean out of it.",
+        "feedback": {
+          "success": "Clean break - the bow 2C smashed straight through the armor.",
+          "failure": "Too early or too late - hit her WHILE the armored 41236C is flashing white."
+        }
+      },
+      {
+        "id": "cancel_escape",
+        "kind": "combat",
+        "label": "Use {input:5A} > neutral jump and make the throw whiff",
+        "sequence": [
+          {
+            "id": "bait_poke",
+            "notation": "5A (into the armor)",
+            "moveIds": [
+              200
+            ],
+            "req": "move",
+            "dummyState": [
+              264
+            ]
+          },
+          {
+            "id": "jump_out",
+            "notation": "jump cancel",
+            "moveIds": [
+              4
+            ],
+            "fromMoveIds": [
+              200
+            ],
+            "req": "move",
+            "maxGap": 240
+          }
+        ],
+        "feedback": {
+          "success": "Airborne before the grab - the absorbed 5A kept its jump cancel.",
+          "failure": "Poke 5A into the flashing armor, then jump-cancel right away - do not stay grounded."
+        },
+        "pos": {
+          "x": 330.0,
+          "y": 0.0
+        },
+        "dummyPos": {
+          "x": 390.0,
+          "y": 0.0
+        },
+        "req": "move",
+        "script": "ep_cmd_throw",
+        "prompt": "She hops, then starts her armored {input:41236C}. Tag the FLASHING armor with {input:5A} - the absorbed hit keeps its jump cancel - and jump IMMEDIATELY, so her command throw grabs nothing but air."
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_armor_super",
+          "ownerTask": "super_armor",
+          "kind": "macro",
+          "action": "41236C",
+          "expectedMoveIds": [
+            264
+          ],
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Hop, land - now 236236!",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_armor_break",
+          "ownerTask": "break_armor",
+          "kind": "macro",
+          "action": "41236C",
+          "expectedMoveIds": [
+            264
+          ],
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Hop, then armored command throw - pierce it with 2C.",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        },
+        {
+          "id": "ep_cmd_throw",
+          "ownerTask": "cancel_escape",
+          "kind": "macro",
+          "action": "41236C",
+          "expectedMoveIds": [
+            264
+          ],
+          "approach": "none",
+          "telegraph": "jump",
+          "start": "taskArmed",
+          "cue": {
+            "text": "She hops, then the armored throw - poke 5A into it and jump-cancel!",
+            "lead": 45
+          },
+          "repeat": {
+            "mode": "loop",
+            "delay": 150
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:advanced-mechanics@457885",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::nagamori",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::nanase"
+  ],
+  "next": {
+    "lessonId": "efz.systems.guard_attacks"
+  },
+  "recommendedAfter": [
+    "efz.defense.air_recovery_punish"
+  ]
+}

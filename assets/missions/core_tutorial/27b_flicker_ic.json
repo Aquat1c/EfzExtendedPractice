@@ -1,0 +1,132 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.offense.flicker_ic",
+  "revision": 9,
+  "category": "offense",
+  "order": 255,
+  "difficulty": 3,
+  "name": "Flicker Instant Charge (FIC)",
+  "summary": "FIC Sayuri's {input:236A} before its projectile connects.",
+  "description": "Cancel a projectile move during its brief built-in FIC window.",
+  "player": {
+    "character": "sayuri",
+    "pos": {
+      "x": 190.0,
+      "y": 0.0
+    },
+    "rf": 500,
+    "blueIC": 0
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 450.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "cancel_transition",
+    "coherent_state",
+    "dummy_script",
+    "flicker_ic",
+    "input_commit_mapping",
+    "input_edges",
+    "ordered_actions",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "fail",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Flicker Instant Charge",
+        "showHud": "red_ic",
+        "text": "Normally you IC after an attack hits or gets guarded. Some moves instead have a short, fixed window where you can IC BEFORE they connect - that is Flicker Instant Charge, or FIC. The input is always {input:22C}; {tone:red_ic|Red RF} gives Red FIC and {tone:blue_ic|Light Blue RF} gives Blue FIC."
+      },
+      {
+        "id": "p1",
+        "title": "Use the Move's Window",
+        "text": "Sayuri's {input:236A} Magical Shot gets its FIC window once the projectile appears. Wait until the shot is clearly out, then hit {input:22C} while Sayuri is still recovering. The projectile keeps flying after the FIC - free cover to act behind."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "fic_projectile",
+        "kind": "combat",
+        "label": "FIC: {input:236A} > {input:22C} before the shot connects",
+        "prompt": "Fire Magical Shot, then tap 22C during 236A's FIC window - while the projectile is still travelling.",
+        "script": "ep_fic_idle",
+        "continuity": "independent",
+        "sequence": [
+          {
+            "id": "projectile",
+            "notation": "236A",
+            "moveIds": [
+              250
+            ],
+            "req": "move"
+          },
+          {
+            "id": "fic",
+            "notation": "22C / FIC",
+            "moveIds": [
+              167
+            ],
+            "fromMoveIds": [
+              250
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "maxGap": 384,
+            "flickerIC": {
+              "projectilePattern": 401
+            }
+          }
+        ],
+        "feedback": {
+          "success": "Nice - Sayuri was free to move while Magical Shot was still travelling.",
+          "failure": "Wait until you can SEE Magical Shot, then hit 22C during 236A's short FIC window - before the shot reaches Misaki."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_fic_idle",
+          "ownerTask": "fic_projectile",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Red RF ready - 236A, then FIC 22C.",
+            "lead": 0
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:game-mechanics@473180#Flicker_Instant_Charge_.28FIC.29",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::sayuri / 236A move 250",
+    "local:shared_documentation/MISSION_ENTITY_CAST_CENSUS.md::Sayuri",
+    "local:include/game/mission/move_notation_tables.h::sayuri move 250",
+    "local:shared_documentation/MISSION_ENTITY_TRACKING_AND_RESET_DESIGN.md::3.7"
+  ],
+  "next": {
+    "lessonId": "efz.offense.final_memory"
+  },
+  "recommendedAfter": [
+    "efz.offense.rf_attacks"
+  ]
+}

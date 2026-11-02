@@ -1,0 +1,168 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.fundamentals.air_recovery",
+ "revision": 6,
+ "category": "fundamentals",
+ "order": 140,
+ "difficulty": 2,
+ "name": "Air Recovery: When Not to Recover",
+ "summary": "Recover in the air - and learn why doing it near the opponent is risky.",
+ "description": "Recover in the air - and learn why doing it near the opponent is risky.",
+ "player": {
+  "character": "nayukib",
+  "pos": {
+   "x": 250.0,
+   "y": 0.0
+  }
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 390.0,
+   "y": 0.0
+  }
+ },
+ "stage": 4,
+ "requires": [
+  "action_absence",
+  "dummy_script",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Air Recovery",
+    "text": "When the juggle gauge empties, hold toward or away from the opponent and press A, B, C, or S to recover in the air. This air recovery is often called a {term:tech}. S is often the safest choice because it is less likely to leave an attack input behind."
+   },
+   {
+    "id": "p1",
+    "title": "The Risk",
+    "text": "After air recovery, you are briefly unable to move, attack, or even block. Recovering close to the opponent can give them a new combo. If you do not recover, you become invulnerable when the juggle expires and fall into a normal knockdown instead."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "tech_away",
+    "kind": "combat",
+    "label": "Recover away from Misaki",
+    "prompt": "Misaki will launch you with her {input:236A} projectile. When recovery becomes available, hold away from Misaki and press A, B, C, or S.",
+    "moveIds": [
+     158
+    ],
+    "req": "move",
+    "script": "ep_tech_away",
+    "feedback": {
+     "success": "You recovered away from Misaki and created more space.",
+     "failure": "That recovery moved toward Misaki. Hold away from her before pressing A, B, C, or S."
+    }
+   },
+   {
+    "id": "tech_toward",
+    "kind": "combat",
+    "label": "Recover toward Misaki",
+    "prompt": "Let the {input:236A} projectile launch you again. This time, hold toward Misaki and press A, B, C, or S when recovery becomes available.",
+    "moveIds": [
+     157
+    ],
+    "req": "move",
+    "script": "ep_tech_toward",
+    "feedback": {
+     "success": "You recovered toward Misaki. Notice how much closer this leaves you.",
+     "failure": "That recovery moved away from Misaki. Hold toward her before pressing A, B, C, or S."
+    }
+   },
+   {
+    "id": "no_tech",
+    "kind": "combat",
+    "label": "Do not recover once and land safely",
+    "prompt": "Let Misaki's {input:236A} projectile launch you - then hands off. Press no recovery direction or button and let Nayuki fall all the way to the ground.",
+    "script": "ep_no_tech",
+    "absence": {
+     "forbid": "airtech",
+     "start": "launched",
+     "end": "grounded"
+    },
+    "feedback": {
+     "success": "You skipped air recovery and fell into a normal knockdown.",
+     "failure": "You recovered before landing. On this attempt, leave the recovery inputs alone."
+    }
+   }
+  ],
+  "dummyScript": {
+   "episodes": [
+    {
+     "id": "ep_tech_away",
+     "ownerTask": "tech_away",
+     "kind": "macro",
+     "action": "236A",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "236A incoming - recover AWAY after launch",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    },
+    {
+     "id": "ep_tech_toward",
+     "ownerTask": "tech_toward",
+     "kind": "macro",
+     "action": "236A",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "236A incoming - recover TOWARD Misaki after launch",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    },
+    {
+     "id": "ep_no_tech",
+     "ownerTask": "no_tech",
+     "kind": "macro",
+     "action": "236A",
+     "approach": "none",
+     "start": "taskArmed",
+     "cue": {
+      "text": "236A incoming - do NOT recover",
+      "lead": 0
+     },
+     "repeat": {
+      "mode": "loop",
+      "delay": 240
+     }
+    }
+   ]
+  }
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180",
+  "local:assets/movedata/nayukib.json",
+  "local:assets/movedata/misaki.json",
+  "local:shared_documentation/TUTORIAL_MODE_DESIGN.md::1-12 Air Recovery: When Not to Recover"
+ ],
+ "next": {
+  "lessonId": "efz.offense.cancel_routes"
+ },
+ "recommendedAfter": [
+  "efz.fundamentals.air_throw"
+ ]
+}

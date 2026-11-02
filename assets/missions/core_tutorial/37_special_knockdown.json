@@ -1,0 +1,155 @@
+{
+  "format": 1,
+  "tutorialSchema": 1,
+  "type": "tutorial",
+  "id": "efz.systems.special_knockdown",
+  "revision": 9,
+  "category": "systems",
+  "order": 350,
+  "difficulty": 3,
+  "name": "Special Knockdown and OTG",
+  "summary": "Cancel Mai's throw with Red IC, then hit the grounded opponent with {input:2C}.",
+  "description": "Cancel Mai's throw with Red IC, then hit the grounded opponent with {input:2C}.",
+  "player": {
+    "character": "mai",
+    "pos": {
+      "x": 310.0,
+      "y": 0.0
+    },
+    "rf": 500,
+    "blueIC": 0
+  },
+  "dummy": {
+    "character": "misaki",
+    "pos": {
+      "x": 330.0,
+      "y": 0.0
+    }
+  },
+  "stage": 4,
+  "requires": [
+    "action_events",
+    "cancel_transition",
+    "dummy_script",
+    "input_commit_mapping",
+    "input_edges",
+    "ordered_actions",
+    "otg_contact",
+    "pages",
+    "progress_store",
+    "task_checkpoints",
+    "tutorial_tasks"
+  ],
+  "lesson": {
+    "completion": "allTasks",
+    "flow": {
+      "wrongAction": "coach",
+      "failureReset": "taskCheckpoint",
+      "preserveCompletedTasks": true
+    },
+    "pages": [
+      {
+        "id": "p0",
+        "title": "Special Knockdown",
+        "text": "Some knockdowns leave the opponent briefly hittable while they're still lying on the floor. Landing a hit in that window is called an off-the-ground hit, or OTG. The knockdown move itself creates that state - you can't turn an ordinary knockdown into an OTG just by picking the right follow-up attack."
+      },
+      {
+        "id": "p1",
+        "title": "Mai's OTG Route",
+        "text": "Mai's ground throw is the easy example. With RED RF ready, throw from close range with {dir:6}/{dir:4} + {btn:C}, cancel the connected throw with {input:22C}, then press {input:2C}. The IC gets Mai moving again just in time for 2C to catch the grounded window: Throw > IC > 2C."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "otg_route",
+        "kind": "combat",
+        "label": "Land Throw > {input:22C} > {input:2C} as Mai",
+        "script": "ep_otg_idle",
+        "continuity": "sameCombo",
+        "sequence": [
+          {
+            "id": "throw_startup",
+            "notation": "6C / 4C",
+            "moveIds": [
+              220
+            ],
+            "req": "move"
+          },
+          {
+            "id": "throw_success",
+            "notation": "Throw",
+            "moveIds": [
+              221
+            ],
+            "fromMoveIds": [
+              220
+            ],
+            "req": "move"
+          },
+          {
+            "id": "red_ic",
+            "notation": "22C / Red IC",
+            "moveIds": [
+              167
+            ],
+            "fromMoveIds": [
+              221
+            ],
+            "inputMask": 64,
+            "req": "commit",
+            "maxGap": 120
+          },
+          {
+            "id": "otg_2c",
+            "notation": "2C (OTG)",
+            "moveIds": [
+              206
+            ],
+            "req": "land",
+            "maxGap": 180,
+            "contact": {
+              "attacker": "learner",
+              "target": "dummy",
+              "source": "direct",
+              "result": "hit",
+              "targetStateBefore": "downed",
+              "moveIds": [
+                206
+              ],
+              "count": 1
+            }
+          }
+        ],
+        "prompt": "Get in close, throw the dummy, hit 22C the moment the throw connects, then slam 2C right away.",
+        "feedback": {
+          "success": "There it is - the throw set up the special knockdown, and 2C scooped the dummy right off the floor.",
+          "failure": "Stay close. Confirm the throw, cancel it with 22C at Red RF, then hit 2C immediately - no hesitating."
+        }
+      }
+    ],
+    "dummyScript": {
+      "episodes": [
+        {
+          "id": "ep_otg_idle",
+          "ownerTask": "otg_route",
+          "kind": "idle",
+          "start": "taskArmed",
+          "cue": {
+            "text": "Red RF is ready: Throw > 22C > 2C.",
+            "lead": 0
+          }
+        }
+      ]
+    }
+  },
+  "sourceRefs": [
+    "mizuumi:advanced-mechanics@457885",
+    "local:shared_documentation/MOVE_COMMAND_MAPS.md::mai"
+  ],
+  "next": {
+    "lessonId": "efz.systems.wakeup_vulnerability"
+  },
+  "recommendedAfter": [
+    "efz.systems.guard_attacks"
+  ]
+}

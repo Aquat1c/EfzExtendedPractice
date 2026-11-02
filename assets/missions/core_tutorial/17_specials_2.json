@@ -1,0 +1,118 @@
+{
+ "format": 1,
+ "tutorialSchema": 1,
+ "type": "tutorial",
+ "id": "efz.offense.specials_2",
+ "revision": 4,
+ "category": "offense",
+ "order": 175,
+ "difficulty": 2,
+ "name": "Special Inputs, Part 2 (Sayuri)",
+ "summary": "Learn the Special motions Shiori doesn't have.",
+ "description": "Learn the Special motions Shiori doesn't have.",
+ "player": {
+  "character": "sayuri",
+  "pos": {
+   "x": 290.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "dummy": {
+  "character": "misaki",
+  "pos": {
+   "x": 350.0,
+   "y": 0.0
+  },
+  "hasPos": true
+ },
+ "stage": 4,
+ "requires": [
+  "action_events",
+  "input_commit_mapping",
+  "input_edges",
+  "ordered_actions",
+  "pages",
+  "progress_store",
+  "task_checkpoints",
+  "tutorial_tasks"
+ ],
+ "lesson": {
+  "completion": "allTasks",
+  "flow": {
+   "wrongAction": "coach",
+   "failureReset": "taskCheckpoint",
+   "preserveCompletedTasks": true
+  },
+  "pages": [
+   {
+    "id": "p0",
+    "title": "Different Input Sets",
+    "text": "Every character has their own set of inputs. Sayuri has {input:41236}, which Shiori doesn't. When you pick up a new character, check their command list first - the motions themselves always read the same way."
+   },
+   {
+    "id": "p1",
+    "title": "Versions and Air Specials",
+    "text": "Not every Special has three versions: Sayuri's {input:214} gives the same move no matter which button you press. Some Specials also work in the air - her {input:236} moves have airborne versions."
+   },
+   {
+    "id": "p2",
+    "title": "Rare Motions",
+    "text": "A few characters use rarer motions like {input:421} - their character guides list them. Don't sweat it: every motion reads the same way, directions left to right, attack button near the end."
+   }
+  ],
+  "tasks": [
+   {
+    "id": "s_41236a",
+    "kind": "combat",
+    "label": "Perform {input:41236A}",
+    "moveIds": [
+     253
+    ],
+    "req": "move"
+   },
+   {
+   "id": "s_214_same",
+   "kind": "combat",
+   "label": "Do {input:214A}, then {input:214B} - same move both times",
+    "sequence": [
+     {
+      "id": "s_214a",
+      "notation": "214A",
+      "moveIds": [256],
+      "inputMask": 16,
+      "req": "commit"
+     },
+     {
+      "id": "s_214b",
+      "notation": "214B",
+      "moveIds": [256],
+      "inputMask": 32,
+      "req": "commit",
+      "maxGap": 720
+     }
+    ],
+    "prompt": "Do 214A, let it finish, then do 214B - watch the exact same move come out twice."
+   },
+   {
+    "id": "s_air236a",
+    "kind": "combat",
+    "label": "Do {input:236A} in the air",
+    "moveIds": [
+     265
+    ],
+    "req": "move"
+   }
+  ]
+ },
+ "sourceRefs": [
+  "mizuumi:game-mechanics@473180",
+  "local:shared_documentation/MOVE_COMMAND_MAPS.md::sayuri"
+ ],
+ "next": {
+  "lessonId": "efz.offense.s_button"
+ },
+ "recommendedAfter": [
+  "efz.offense.specials"
+ ]
+}
