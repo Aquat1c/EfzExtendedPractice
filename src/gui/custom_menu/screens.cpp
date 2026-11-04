@@ -1574,7 +1574,7 @@ const char* PopupChoiceDisplayText(int index) {
 const char* PopupHelpText() {
     static char s_buf[240];
     if (!g_popup.active) return nullptr;
-    if (PopupIsMulti() && g_popup.sourceRow.choiceHelpFormatter &&
+    if (g_popup.sourceRow.choiceHelpFormatter &&
         g_popup.focusIdx >= 0 && g_popup.focusIdx < g_popup.choiceCount) {
         const char* text = g_popup.sourceRow.choiceHelpFormatter(g_popup.sourceRow,
                                                                  PopupChoiceValueAt(g_popup.focusIdx));

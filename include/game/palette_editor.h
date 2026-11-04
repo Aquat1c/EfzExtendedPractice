@@ -9,6 +9,7 @@
 namespace PaletteEditor {
 struct Hsv { float h = 0, s = 0, v = 0; };
 struct Ramp { unsigned first = 0, last = 0, key = 0; };
+enum class ColorScope { Palette, Ramp, Shade };
 Hsv RgbToHsv(Color color);
 Color HsvToRgb(Hsv color);
 bool ParseHex(const std::string& text, Color& color);
@@ -48,6 +49,8 @@ public:
     bool ResetEntry(unsigned entry);
     bool ResetRamp(unsigned ramp);
     bool ResetAll();
+    bool Generate(std::uint32_t seed, ColorScope scope, unsigned selection, unsigned transparent);
+    bool Gradient(unsigned ramp, unsigned transparent, bool hsv);
     void BeginGesture();
     void EndGesture();
     bool Undo();
@@ -58,6 +61,7 @@ private:
     void Checkpoint();
     void ComposeRamp(unsigned ramp);
     void ResetHsv();
+    bool CommitGenerated(SavedPalette next);
     SavedPalette state_, loaded_;
     struct Snapshot { SavedPalette palette; std::array<Hsv, 40> hsv, rampHsv; };
     std::vector<Snapshot> history_;

@@ -858,6 +858,21 @@ Pins protect individual edits from group changes. Undo keeps sixteen edits,
 with a slider drag or held adjustment recorded as one edit. Hue remains editable on black and
 gray even when changing it does not change the visible RGB value.
 
+Tools beside the stock selector provides whole-palette generation, selected
+ramp/shade randomization and RGB/HSV endpoint gradients. Small square icons
+below the color controls provide Pin, Reset, Undo, Lighten, Darken, Copy and
+Paste; hover or keyboard focus shows their descriptions.
+Generation samples hue, saturation and lightness, then uses the
+existing ramp composition to retain stock shading. Each invocation uses a
+private random engine; it does not consume game or process-wide RNG values.
+Generators preserve pinned shades and the sprite's actual transparent index.
+Gradients use the selected ramp, or the ramp containing the selected shade,
+and keep its visible endpoints fixed. Changed intermediate shades become
+pinned overrides. HSV gradients take the shorter hue path. Lighten/darken
+adds or subtracts sixteen RGB levels from the selected shade or ramp target.
+Copied colors remain inside the editor session and can be pasted into another
+shade or ramp. Each operation is one Undo step and uses the normal live preview.
+
 `palette_assets.cpp` reads the character's DAT and PAT files into bounded,
 mod-owned assets. Six stock palettes supply forty colours each. Transparency
 comes from the sprite data, and shared effect colours come from the stage

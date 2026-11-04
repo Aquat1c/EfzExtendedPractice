@@ -1,6 +1,7 @@
 #include "game/palette_editor.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -53,6 +54,51 @@ void ScopedHsvTests() {
     d.BeginGesture();d.SetRampHsv(0,{120,30,0});d.SetRampHsv(0,{160,70,0});d.EndGesture();
     Check(d.Undo()&&d.RampHsv(0).h==30&&d.RampHsv(0).s==90,"ramp black hue-only gesture undo");
     Check(d.ColorHsv(key).h==pinned.h,"ramp undo keeps pinned entry HSV");
+}
+void GenerationTests() {
+    const auto stock=Stock();Document d;d.LoadStock("misaki",0,stock);
+    d.SetHsv(1,{210,80,0});const auto pinnedHsv=d.ColorHsv(1);
+    const auto before=d.State();const auto undos=d.UndoCount();
+    std::srand(1234);const auto expectedRandom=std::rand();std::srand(1234);
+    Check(d.Generate(42,ColorScope::Palette,0,0),"whole palette generation");
+    Check(std::rand()==expectedRandom,"generation must not consume process RNG");
+    Check(d.Original()==stock && d.Colors()[0]==stock[0] && d.Colors()[1]==before.colors[1] &&
+        d.ColorHsv(1).h==pinnedHsv.h && d.ColorHsv(1).s==pinnedHsv.s,"generator preserves transparency, pins and latent HSV");
+    Check(d.State().pins==before.pins && d.UndoCount()==undos+1,"generation is one edit and does not pin ramps");
+    const auto generated=d.Colors();d.Undo();
+    Check(d.Colors()==before.colors && d.State().targets==before.targets,"generation undo restores colors and targets");
+    Check(d.Generate(42,ColorScope::Palette,0,0) && d.Colors()==generated,"seeded generation is reproducible");
+    d.Undo();Check(d.Generate(43,ColorScope::Palette,0,0) && d.Colors()!=generated,"new seeds vary generation");
+    d.Undo();Check(d.Generate(5,ColorScope::Ramp,0,0),"selected ramp generation");
+    for(unsigned i=d.Ramps()[0].last+1;i<40;++i) Check(d.Colors()[i]==before.colors[i],"selected generator changed another ramp");
+    d.Undo();Check(d.Generate(6,ColorScope::Shade,3,0),"selected shade generation");
+    for(unsigned i=0;i<40;++i) if(i!=3) Check(d.Colors()[i]==before.colors[i],"selected generator changed another shade");
+    d.Undo();const auto count=d.UndoCount();
+    Check(!d.Generate(0,ColorScope::Shade,1,0) && !d.Generate(0,ColorScope::Shade,0,0),"generator respects protected shade");
+    Check(!d.Generate(0,ColorScope::Ramp,99,0) && !d.Generate(0,ColorScope::Shade,40,0) &&
+        !d.Generate(0,static_cast<ColorScope>(99),0,0) && d.UndoCount()==count,"invalid generation is atomic");
+    for(unsigned i=0;i<40;++i)d.SetPinned(i,true);
+    const auto allPinned=d.State();const auto pinnedUndos=d.UndoCount();
+    Check(!d.Generate(7,ColorScope::Palette,0,40) && d.State().targets==allPinned.targets && d.UndoCount()==pinnedUndos,
+        "fully pinned generation must be a no-op");
+}
+void GradientTests() {
+    Document d;auto stock=Stock();d.LoadStock("misaki",0,stock);
+    auto saved=d.State();saved.ramps={{0,4,2},{5,39,20}};saved.colors[0]={255,0,0};saved.colors[4]={0,0,255};
+    std::string error;Check(d.LoadSaved(saved,stock,error),"gradient fixture");
+    const auto count=d.UndoCount();Check(d.Gradient(0,40,false),"RGB gradient");
+    Check(d.Colors()[2]==Color{128,0,128} && d.Colors()[0]==saved.colors[0] && d.Colors()[4]==saved.colors[4],"RGB gradient midpoint and endpoints");
+    Check(d.Pinned(2) && !d.Pinned(0) && d.UndoCount()==count+1,"gradient stores individual overrides in one edit");
+    for(unsigned i=5;i<40;++i) Check(d.Colors()[i]==saved.colors[i],"gradient scope");
+    d.Undo();Check(d.Colors()==saved.colors && d.State().pins==saved.pins,"gradient undo");
+    Check(d.Gradient(0,40,true) && d.Colors()[2]==Color{255,0,255},"HSV gradient takes shortest hue arc");
+    d.Undo();d.SetPinned(2,true);const auto pinned=d.Colors()[2];
+    Check(d.Gradient(0,1,false) && d.Colors()[1]==saved.colors[1] && d.Colors()[2]==pinned,"gradient preserves transparent interior and pins");
+    Check(d.LoadSaved(saved,stock,error),"restore gradient anchors");
+    Check(d.Gradient(0,0,false) && d.Colors()[0]==saved.colors[0] && d.Colors()[1]==saved.colors[1],"transparent endpoint excluded from gradient anchors");
+    d.Undo();Check(!d.Gradient(99,40,false),"gradient bounds");
+    saved.ramps={{0,0,0},{1,39,20}};Check(d.LoadSaved(saved,stock,error),"singleton gradient fixture");
+    Check(!d.Gradient(0,40,true),"single shade has no gradient");
 }
 void DocumentTests() {
     const auto stock=Stock(); Document d;d.LoadStock("misaki",2,stock);
@@ -227,7 +273,7 @@ void LibraryTests(const std::filesystem::path& root) {
 int main() {
     const auto root=std::filesystem::temp_directory_path()/("efz_palette_editor_tests_"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
     try {
-        ColorTests();ScopedHsvTests();DocumentTests();PaletteFileTests(root);LibraryTests(root);
+        ColorTests();ScopedHsvTests();GenerationTests();GradientTests();DocumentTests();PaletteFileTests(root);LibraryTests(root);
         std::error_code ec;std::filesystem::remove_all(root,ec);
         std::cout<<"Palette colors, gestures, ramps, persistence and recovery passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<"\nFixtures: "<<root<<'\n';return 1;}

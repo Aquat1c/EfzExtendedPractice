@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <set>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
@@ -447,6 +448,68 @@ bool Document::ResetAll() {
     Checkpoint(); state_.colors=state_.baseline; state_.pins.reset(); state_.targets={};
     ResetHsv();
     return true;
+}
+bool Document::CommitGenerated(SavedPalette next) {
+    if(Same(state_,next)) return false;
+    EndGesture();Checkpoint();
+    for(unsigned i=0;i<40;++i)
+        if(next.colors[i]!=state_.colors[i]) hsv_[i]=RgbToHsv(next.colors[i]);
+    for(unsigned i=0;i<state_.ramps.size();++i) {
+        const auto key=state_.ramps[i].key;
+        if(next.targets[key]!=state_.targets[key]) rampHsv_[i]=RgbToHsv(next.targets[key].value_or(next.baseline[key]));
+    }
+    state_=std::move(next);return true;
+}
+bool Document::Generate(std::uint32_t seed,ColorScope scope,unsigned selection,unsigned transparent) {
+    if(state_.ramps.empty() || (scope==ColorScope::Ramp && selection>=state_.ramps.size()) ||
+       (scope==ColorScope::Shade && selection>=40) ||
+       (scope!=ColorScope::Palette && scope!=ColorScope::Ramp && scope!=ColorScope::Shade)) return false;
+    std::mt19937 random(seed);
+    const auto color=[&] {
+        const float h=float(random()%360),s=float(10+random()%91)/100.f,l=float(20+random()%76)/100.f;
+        const float v=l+s*(std::min)(l,1-l);
+        return HsvToRgb({h,v>0?200*(1-l/v):0,100*v});
+    };
+    auto next=state_;
+    if(scope==ColorScope::Shade) {
+        if(selection==transparent || state_.pins[selection]) return false;
+        next.colors[selection]=color();next.pins.set(selection);
+    } else for(unsigned i=0;i<state_.ramps.size();++i) {
+        if(scope==ColorScope::Ramp && i!=selection) continue;
+        const auto ramp=state_.ramps[i];
+        bool editable=false;
+        for(unsigned index=ramp.first;index<=ramp.last;++index)
+            editable=editable || (index!=transparent && !state_.pins[index]);
+        if(!editable) continue;
+        const auto target=color();next.targets[ramp.key]=target;
+        for(unsigned index=ramp.first;index<=ramp.last;++index)
+            if(index!=transparent && !state_.pins[index]) next.colors[index]=Shade(state_.baseline,ramp,index,target);
+    }
+    return CommitGenerated(std::move(next));
+}
+bool Document::Gradient(unsigned ramp,unsigned transparent,bool hsv) {
+    if(ramp>=state_.ramps.size()) return false;
+    unsigned first=state_.ramps[ramp].first,last=state_.ramps[ramp].last;
+    if(first==last) return false;
+    if(first==transparent) ++first;
+    if(last==transparent) --last;
+    if(first>=last) return false;
+    const auto start=state_.colors[first],end=state_.colors[last];
+    auto a=RgbToHsv(start),b=RgbToHsv(end);
+    if(a.s==0) a.h=b.h;
+    if(b.s==0) b.h=a.h;
+    const float hueDelta=float(Wrap(b.h-a.h+180,360)-180);
+    auto next=state_;
+    for(unsigned i=first+1;i<last;++i) {
+        if(i==transparent || state_.pins[i]) continue;
+        const float t=float(i-first)/float(last-first);
+        const auto mix=[t](float x,float y){return x+(y-x)*t;};
+        const auto byte=[&](unsigned x,unsigned y){return std::uint8_t(std::lround(mix(float(x),float(y))));};
+        const Color value=hsv?HsvToRgb({a.h+hueDelta*t,mix(a.s,b.s),mix(a.v,b.v)}):
+            Color{byte(start.r,end.r),byte(start.g,end.g),byte(start.b,end.b)};
+        if(value!=next.colors[i]) {next.colors[i]=value;next.pins.set(i);}
+    }
+    return CommitGenerated(std::move(next));
 }
 void Document::Import(const Palette& colors) {
     if(state_.colors==colors) return;

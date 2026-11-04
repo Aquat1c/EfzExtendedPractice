@@ -22,6 +22,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <random>
 
 namespace CustomMenu::PaletteEditorPanel {
 namespace {
@@ -49,7 +50,8 @@ struct State {
     bool mouseHelp = false;
     float helpMouseX = -1, helpMouseY = -1;
     I18n::Language language = I18n::English;
-    int category = 1, moveChoice = 0;
+    int category = 1, moveChoice = 0, toolChoice = 0;
+    std::optional<Model::Color> copiedColor;
     bool closeRequested = false, focusAbove = false, panMode = false, classesKnown = false, keyboardGesture = false;
     int keyboardChannel = -1;
     int components[3]{}, stock = 0;
@@ -595,6 +597,85 @@ bool EditorButton(ImDrawList* dl,int focus,float x,float y,float width,float hei
     dl->PopClipRect();
     return !disabled && (clicked || (input && g.editorFocus==focus && Input::Activate()));
 }
+bool EditorIcon(ImDrawList* dl,int focus,float x,float y,bool input,bool disabled=false) {
+    const bool clicked=EditorButton(dl,focus,x,y,26,26,"",input,disabled);
+    const float cx=x+13,cy=y+13;
+    const ImU32 color=disabled?Theme::kTextDisabled:focus==6 && g.pin?Theme::kInfoAccent:Theme::kTextActive;
+    switch(focus) {
+    case 6:
+        dl->AddRect(ImVec2(cx-4,cy-7),ImVec2(cx+4,cy-3),color);
+        dl->AddLine(ImVec2(cx-2,cy-3),ImVec2(cx-4,cy+2),color,1.5f);
+        dl->AddLine(ImVec2(cx+2,cy-3),ImVec2(cx+4,cy+2),color,1.5f);
+        dl->AddLine(ImVec2(cx-5,cy+2),ImVec2(cx+5,cy+2),color,1.5f);
+        dl->AddLine(ImVec2(cx,cy+2),ImVec2(cx,cy+8),color,1.5f);break;
+    case 7:
+        dl->PathArcTo(ImVec2(cx,cy),6,-2.5f,2.5f,16);dl->PathStroke(color,0,1.5f);
+        dl->AddTriangleFilled(ImVec2(cx-7,cy-6),ImVec2(cx-1,cy-6),ImVec2(cx-6,cy),color);break;
+    case 8:
+        dl->AddBezierCubic(ImVec2(cx+5,cy+6),ImVec2(cx+11,cy-5),ImVec2(cx-1,cy-8),ImVec2(cx-6,cy-2),color,1.5f);
+        dl->AddTriangleFilled(ImVec2(cx-7,cy-2),ImVec2(cx-1,cy-6),ImVec2(cx-1,cy+2),color);break;
+    case 29:
+        dl->AddCircle(ImVec2(cx,cy),3,color,12,1.5f);
+        for(int i=0;i<8;++i) {
+            const float angle=i*0.78539816f,dx=std::cos(angle),dy=std::sin(angle);
+            dl->AddLine(ImVec2(cx+5*dx,cy+5*dy),ImVec2(cx+8*dx,cy+8*dy),color,1.5f);
+        }break;
+    case 30:
+        dl->PathLineTo(ImVec2(cx+3,cy-7));
+        dl->PathBezierCubicCurveTo(ImVec2(cx-9,cy-7),ImVec2(cx-9,cy+8),ImVec2(cx+3,cy+7));
+        dl->PathBezierCubicCurveTo(ImVec2(cx-3,cy+4),ImVec2(cx-3,cy-4),ImVec2(cx+3,cy-7));
+        dl->PathStroke(color,ImDrawFlags_Closed,1.5f);break;
+    case 31:
+        dl->AddRect(ImVec2(cx-3,cy-3),ImVec2(cx+7,cy+7),color,0,0,1.5f);
+        dl->PathLineTo(ImVec2(cx-7,cy+3));dl->PathLineTo(ImVec2(cx-7,cy-7));
+        dl->PathLineTo(ImVec2(cx+3,cy-7));dl->PathLineTo(ImVec2(cx+3,cy-5));dl->PathStroke(color,0,1.5f);break;
+    case 32:
+        dl->AddRect(ImVec2(cx-6,cy-5),ImVec2(cx+6,cy+8),color,0,0,1.5f);
+        dl->AddRectFilled(ImVec2(cx-3,cy-8),ImVec2(cx+3,cy-3),color);
+        dl->AddLine(ImVec2(cx-3,cy+1),ImVec2(cx+3,cy+1),color);
+        dl->AddLine(ImVec2(cx-3,cy+4),ImVec2(cx+3,cy+4),color);break;
+    }
+    return clicked;
+}
+enum class ColorTool { Generate, Randomize, GradientRgb, GradientHsv, Lighten, Darken, Copy, Paste };
+constexpr const char* kColorTools[]={"Generate palette","Randomize selection","RGB gradient","HSV gradient"};
+const char* ColorToolHelp(const Screens::Row&,int choice) {
+    static const char* help[]={
+        "Generate new ramp colors for the whole palette. Pins and transparency are protected; Undo restores the draft.",
+        "Randomize the selected ramp or shade. Pins and transparency are protected.",
+        "Blend between this ramp's endpoint colors in RGB. Changed shades become pinned overrides; existing pins are kept.",
+        "Blend this ramp's endpoints along the shortest hue path. Changed shades become pinned overrides; existing pins are kept.",
+        "Lighten the selected ramp or shade by 16 RGB steps. Ramp shading and pinned shades are preserved.",
+        "Darken the selected ramp or shade by 16 RGB steps. Ramp shading and pinned shades are preserved.",
+        "Copy the selected ramp's target color or individual shade for use elsewhere in this editor.",
+        "Paste the copied color into this ramp or shade. Ramp shading and pinned shades are preserved."
+    };
+    return choice>=0 && choice<int(std::size(help))?help[choice]:"";
+}
+void RunColorTool(ColorTool tool) {
+    Neutral();
+    const auto current=g.target?g.document.RampColor(unsigned(g.ramp)):g.document.Colors()[g.color];
+    if(tool==ColorTool::Copy) {g.copiedColor=current;Status("Color copied.");return;}
+    if(tool==ColorTool::Paste && !g.copiedColor) {Status("Copy a color before pasting.");return;}
+    bool changed=false;
+    if(tool==ColorTool::Generate || tool==ColorTool::Randomize) {
+        static std::mt19937 random(GetTickCount());
+        const auto scope=tool==ColorTool::Generate?Model::ColorScope::Palette:g.target?Model::ColorScope::Ramp:Model::ColorScope::Shade;
+        changed=g.document.Generate(random(),scope,unsigned(g.target?g.ramp:g.color),g.assets.transparentKey);
+    } else if(tool==ColorTool::GradientRgb || tool==ColorTool::GradientHsv) {
+        const auto& ramps=g.document.Ramps();
+        const auto ramp=std::find_if(ramps.begin(),ramps.end(),[](const auto& r){return unsigned(g.color)>=r.first && unsigned(g.color)<=r.last;});
+        if(ramp!=ramps.end()) changed=g.document.Gradient(unsigned(ramp-ramps.begin()),g.assets.transparentKey,tool==ColorTool::GradientHsv);
+    } else if(tool==ColorTool::Lighten || tool==ColorTool::Darken || tool==ColorTool::Paste) {
+        const int step=tool==ColorTool::Lighten?16:-16;
+        const auto shift=[step](unsigned value){return uint8_t((std::clamp)(int(value)+step,0,255));};
+        const auto color=tool==ColorTool::Paste?*g.copiedColor:Model::Color{shift(current.r),shift(current.g),shift(current.b)};
+        if(!g.target && unsigned(g.color)==g.assets.transparentKey) {Status("The transparent shade is protected.");return;}
+        changed=g.target?g.document.SetRampColor(unsigned(g.ramp),color):g.document.SetColor(unsigned(g.color),color);
+    }
+    SyncColor();Status(changed?"Palette tool applied. Undo restores the previous edit.":"No editable colors changed. Check pins and the selected ramp.");
+}
+void ToolChoiceChanged() {RunColorTool(static_cast<ColorTool>(g.toolChoice));}
 void OpenEditorChoice(const Screens::Row& row) {
     Screens::OpenDropdownPopup(row);Neutral();
 }
@@ -738,7 +819,7 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
         if(Input::NavUp()) g.panY=(std::max)(-2048,g.panY-4);if(Input::NavDown()) g.panY=(std::min)(2048,g.panY+4);
         if(Input::Activate() || Input::Back()) {g.panMode=false;Neutral();input=false;}
     } else if(input && g.sliderRow<0 && g.pickerInput==State::PickerInput::Idle) {
-        static const int order[]={22,9,0,1,2,3,4,5,6,7,8,10,26,11,12,13,14,15,16,17,18,19,23,24,25,20,21};
+        static const int order[]={22,9,28,0,1,2,3,4,5,6,7,8,29,30,31,32,10,26,11,12,13,14,15,16,17,18,19,23,24,25,20,21};
         if(Input::NavUp() || Input::NavDown()) {
             int position=int(std::find(std::begin(order),std::end(order),g.editorFocus)-std::begin(order));
             if(position==0 && Input::NavUp()) {g.focusAbove=true;Neutral();input=false;}
@@ -779,8 +860,13 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
     bool controls=input && !g.panMode && g.pickerInput==State::PickerInput::Idle && !Modal();
     if(EditorButton(dl,22,left,top,64,20,"P"+std::to_string(g.player)+"  <>",controls)) SwitchPlayer();
     static const char* slots[]={"1","2","3","4","5","6"};
-    if(EditorButton(dl,9,left+70,top,182,20,I18n::TrFormat("Stock %d",g.stock+1),controls))
+    if(EditorButton(dl,9,left+70,top,100,20,I18n::TrFormat("Stock %d",g.stock+1),controls))
         OpenEditorChoice(Screens::DropdownRow("Stock palette",&g.stock,slots,6,LoadStock));
+    if(EditorButton(dl,28,left+176,top,76,20,"TOOLS",controls)) {
+        g.toolChoice=0;
+        auto row=Screens::DropdownRow("Palette tools",&g.toolChoice,kColorTools,int(std::size(kColorTools)),ToolChoiceChanged);
+        row.choiceHelpFormatter=ColorToolHelp;OpenEditorChoice(row);
+    }
     const std::string selection=g.target?I18n::TrFormat("RAMP %d  /  SHADE",g.ramp):I18n::TrFormat("SHADE %d  /  RAMP",g.color);
     if(EditorButton(dl,0,left,top+24,width,20,selection,controls)) {g.target=g.target?0:1;SyncColor();}
     if(g.target) DrawRampGrid(dl,left,top+50,width,80,controls);
@@ -790,9 +876,13 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
     if(EditorButton(dl,2,left+94,top+136,158,20,HexValue(),controls)) EditHex();
     if(g.colorControls==State::ColorControls::Picker) DrawColorPicker(dl,left,top+162,width,input && !g.panMode && !Modal());
     else for(int component=0;component<3;++component) CompactSlider(dl,component,left,top+162+component*26,width,controls);
-    if(EditorButton(dl,6,left,top+254,76,22,g.pin?"UNPIN":"PIN",controls)) {g.pin=!g.pin;Pin();}
-    if(EditorButton(dl,7,left+82,top+254,76,22,"RESET",controls)) ResetSelected();
-    if(EditorButton(dl,8,left+164,top+254,88,22,I18n::TrFormat("UNDO %zu",g.document.UndoCount()),controls,NoUndo())) Undo();
+    if(EditorIcon(dl,6,left+5,top+254,controls)) {g.pin=!g.pin;Pin();}
+    if(EditorIcon(dl,7,left+41,top+254,controls)) ResetSelected();
+    if(EditorIcon(dl,8,left+77,top+254,controls,NoUndo())) Undo();
+    if(EditorIcon(dl,29,left+113,top+254,controls)) RunColorTool(ColorTool::Lighten);
+    if(EditorIcon(dl,30,left+149,top+254,controls)) RunColorTool(ColorTool::Darken);
+    if(EditorIcon(dl,31,left+185,top+254,controls)) RunColorTool(ColorTool::Copy);
+    if(EditorIcon(dl,32,left+221,top+254,controls,!g.copiedColor)) RunColorTool(ColorTool::Paste);
     const std::string move=g.moveOptions.empty()?I18n::Tr("No drawable animations"):g.moveOptions[g.moveChoice];
     if(EditorButton(dl,10,right,top,previewWidth,22,move,controls,g.moveOptions.empty())) {
         auto row=Screens::DropdownRow("Move",&g.moveChoice,g.moveOptions.data(),int(g.moveOptions.size()),MoveChoiceChanged);
@@ -828,6 +918,7 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
     if(EditorButton(dl,21,500,392,112,24,"RESTORE",controls,false,true)) RestoreMatch();
 }
 const char* ControlHelp(int control) {
+    if(control>=29 && control<=32) return ColorToolHelp(Screens::Row{},control-25);
     static const char* help[]={
         "Choose a ramp to recolor its shades together, or edit one shade.",
         "Switch between the visual picker, RGB sliders and HSV sliders.",
@@ -856,7 +947,8 @@ const char* ControlHelp(int control) {
         "Save to the current file. A new draft opens Windows Save As.",
         "Use Windows Save As to choose another name or location. JSON keeps ramps and pins.",
         "Switch between the character's normal and alternate sprite animations.",
-        "Click a sprite pixel to select its ramp or shade. Wheel zooms; right-drag pans."
+        "Click a sprite pixel to select its ramp or shade. Wheel zooms; right-drag pans.",
+        "Generate palette colors or create RGB/HSV gradients in the selected ramp."
     };
     if(g.colorControls!=State::ColorControls::Picker) {
         if(control==3) return HsvControls()?"Adjust hue for the selected ramp or shade.":"Adjust the red channel for the selected ramp or shade.";
@@ -1017,7 +1109,8 @@ void Render(ImDrawList* dl,float contentY,bool inputEnabled) {
         const std::string context="P"+std::to_string(g.player)+" / "+I18n::Tr(g.context.displayName.c_str())+(g.document.Dirty()?" *  ":"  ")+(!g.status.empty() && DWORD(GetTickCount()-g.statusTick)<5000?g.status:I18n::Tr(g.liveStatus.c_str()));
         FitText(dl,28,425,584,context,Theme::kTextInactive);
         const char* help=ControlHelp(g.helpControl>=0?g.helpControl:g.editorFocus);
-        if(Modal() && !g.status.empty()) help=g.status.c_str();
+        if(Screens::IsPopupActive() && g.editorFocus==28) help=Screens::CurrentPopupHelpText();
+        else if(Modal() && !g.status.empty()) help=g.status.c_str();
         else if(g.panMode) help=ControlHelp(15);
         dl->PushClipRect(ImVec2(28,443),ImVec2(612,480),true);
         dl->AddText(Layout::BodyFont(),metrics.bodyPx,ImVec2(28,444),Theme::kInfoAccent,I18n::Tr(help),nullptr,584);

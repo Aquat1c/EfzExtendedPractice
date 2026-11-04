@@ -384,15 +384,19 @@ void CaptureRealAssets(IDirect3DDevice9* device,const std::filesystem::path& gam
             BeginFrame();DrawPalettePage();EndFrame(device);
             SaveBitmap(device,output/(std::string(language==I18n::Japanese?"ja-":"en-")+character+"-"+std::to_string(int(scale*100))+"-moves.bmp"));
             Screens::ClosePopup();
+            state.editorFocus=28;BeginFrame();input.activate=true;DrawPalettePage();EndFrame(device);
+            BeginFrame();DrawPalettePage();EndFrame(device);
+            SaveBitmap(device,output/(std::string(language==I18n::Japanese?"ja-":"en-")+character+"-"+std::to_string(int(scale*100))+"-tools.bmp"));
+            Screens::ClosePopup();
         }
     }
     }
 }
 void CheckFontFit() {
-    const std::pair<std::string,int> labels[]={{"PICKER",88},{"RGB",88},{"HSV",88},{"#FFFFFF",158},{"UNPIN",76},{"RESET",76},
+    const std::pair<std::string,int> labels[]={{"TOOLS",76},{"PICKER",88},{"RGB",88},{"HSV",88},{"#FFFFFF",158},{"UNPIN",76},{"RESET",76},
         {"400%",96},{"PAN*",100},{"CENTER",108},{"ORIGINAL",110},{"MARK",80},{"PREVIEW",114},{"APPLY",112},{"RESTORE",112},
         {"ALT",64},{"SAVE",112},{"SAVE AS",112},{"LOAD",112},
-        {I18n::TrFormat("UNDO %zu",size_t(16)),88},{I18n::TrFormat("Stock %d",6),182},
+        {I18n::TrFormat("UNDO %zu",size_t(16)),88},{I18n::TrFormat("Stock %d",6),100},
         {I18n::TrFormat("PAUSE  %d / %d",999,999),228}};
     for(const auto& label:labels) {
         const auto* translated=I18n::Tr(label.first.c_str());
@@ -640,6 +644,71 @@ void CheckColorPicker() {
     Require(Panel::g.color==1 && Panel::g.document.Colors()==pickedColors,"Shared-effect eyedropper changed editable palette");
     EndFrame(nullptr);
 }
+void CheckIconClicks() {
+    Seed();BeginFrame();Panel::g.target=0;Panel::g.color=3;Panel::SyncColor();
+    const auto original=Panel::g.document.Colors()[3];
+    const auto click=[&](int column,int focus) {
+        input={};input.click=true;input.x=46+36.0f*column;input.y=339;
+        Panel::g.mouseHelp=true;Panel::g.helpControl=-1;
+        Panel::DrawEditor(ImGui::GetForegroundDrawList(),72,true);
+        Require(Panel::g.helpControl==focus,"Square icon hover missed its description");
+        Panel::SyncColor();
+    };
+    click(0,6);Require(Panel::g.document.Pinned(3),"Pin icon missed its hit target");
+    click(1,7);Require(!Panel::g.document.Pinned(3),"Reset icon missed its hit target");
+    click(2,8);Require(Panel::g.document.Pinned(3),"Undo icon missed its hit target");
+    click(5,31);click(3,29);
+    Require(Panel::g.document.Colors()[3].r==(std::min)(255,int(original.r)+16),"Lighten icon missed its hit target");
+    click(6,32);Require(Panel::g.document.Colors()[3]==original,"Paste icon missed its hit target");
+    click(4,30);Require(Panel::g.document.Colors()[3].r==(std::max)(0,int(original.r)-16),"Darken icon missed its hit target");
+    EndFrame(nullptr);
+}
+void CheckTools() {
+    Seed();BeginFrame();
+    const auto openTool=[&](int choice) {
+        Panel::g.editorFocus=28;NextFrame();input.activate=true;DrawPalettePage();
+        Require(Screens::IsPopupActive(),"Palette Tools button did not open");
+        const auto colors=Panel::g.document.Colors();
+        for(int i=0;i<choice;++i) {NextFrame();input.down=true;DrawPalettePage();}
+        Require(Panel::g.document.Colors()==colors,"Tool navigation applied an edit before confirmation");
+        const char* help=Screens::CurrentPopupHelpText();
+        Require(help && std::string(help)==Panel::ColorToolHelp(Screens::Row{},choice),"Tool lacks focused description");
+    };
+    const auto runTool=[&](int choice){
+        if(choice<4) {openTool(choice);NextFrame();input.activate=true;DrawPalettePage();}
+        else {Panel::g.editorFocus=choice+25;NextFrame();input.activate=true;DrawPalettePage();}
+        Require(!Screens::IsPopupActive(),"Tool action left a popup open");
+    };
+    const auto original=Panel::g.document.Colors();const auto undos=Panel::g.document.UndoCount();
+    runTool(7);Require(Panel::g.document.Colors()==original && Panel::g.document.UndoCount()==undos,"Empty paste changed the draft");
+    openTool(0);NextFrame();input.back=true;DrawPalettePage();
+    Require(Panel::g.document.Colors()==original && !Panel::ConsumeCloseRequest(),"Cancelling tools edited colors or closed the menu");
+    runTool(0);Require(Panel::g.document.Colors()!=original && Panel::g.document.Colors()[0]==original[0] &&
+        Panel::g.document.UndoCount()==undos+1,"Generate did not update the palette in one protected edit");
+    int player=0;std::string resource;::PaletteEditor::Palette live;
+    Require(Panel::GetLivePreview(player,resource,live) && live==Panel::g.document.Colors(),"Generated palette missed the live preview");
+    Panel::g.document.Undo();Panel::g.target=0;Panel::g.color=4;Panel::SyncColor();
+    runTool(6);const auto copied=Panel::g.document.Colors()[4];
+    Panel::g.color=5;Panel::SyncColor();runTool(7);
+    Require(Panel::g.document.Colors()[5]==copied,"Copy/paste shade failed");
+    for(unsigned i=0;i<40;++i) if(i!=5) Require(Panel::g.document.Colors()[i]==original[i],"Paste changed another shade");
+    Panel::g.document.Undo();Panel::g.target=1;Panel::g.ramp=0;Panel::SyncColor();runTool(7);
+    Require(Panel::g.document.RampColor(0)==copied,"Paste did not target the selected ramp");
+    Panel::g.document.Undo();Panel::g.target=0;Panel::g.color=4;Panel::SyncColor();runTool(4);
+    Require(Panel::g.document.Colors()[4].r==(std::min)(255,int(original[4].r)+16),"Lighten does not use reference step");
+    Panel::g.document.Undo();runTool(5);
+    Require(Panel::g.document.Colors()[4].r==(std::max)(0,int(original[4].r)-16),"Darken does not use reference step");
+    Panel::g.document.Undo();runTool(1);
+    Require(Panel::g.document.Colors()[4]!=original[4],"Selected shade randomization was not wired");
+    Panel::g.document.Undo();auto state=Panel::g.document.State();state.ramps={{0,4,2},{5,39,20}};
+    state.colors[1]={255,0,0};state.colors[4]={0,0,255};std::string error;
+    Require(Panel::g.document.LoadSaved(state,state.baseline,error),"UI gradient fixture");
+    Panel::g.color=2;Panel::SyncColor();runTool(2);
+    Require(Panel::g.document.Colors()[2]==::PaletteEditor::Color{170,0,85},"RGB gradient did not find the selected shade's ramp");
+    Panel::g.document.Undo();runTool(3);
+    Require(Panel::g.document.Colors()[2]==::PaletteEditor::Color{255,0,170},"HSV gradient action was not wired");
+    EndFrame(nullptr);
+}
 void CheckLargeMoveCategory() {
     Seed();Panel::g.assets.animations.clear();
     for(int id=1000;id<1200;++id) Panel::g.assets.animations.push_back({id,{{0,4,1,2,2,2}}});
@@ -768,7 +837,7 @@ int main(int argc,char** argv) {
         }
         Require(SUCCEEDED(result),"Hidden D3D9 device unavailable");
         ImGui_ImplDX9_Init(device);Panel::SetDevice(device);
-        SetFonts(1);CheckPreviewTexture(device);CheckColorPicker();CheckLargeMoveCategory();CheckClosingInput();CheckRampHoverHelp();CheckControls();CheckRampGeometry();CheckEditorNavigation();CheckTabContent();
+        SetFonts(1);CheckPreviewTexture(device);CheckColorPicker();CheckIconClicks();CheckTools();CheckLargeMoveCategory();CheckClosingInput();CheckRampHoverHelp();CheckControls();CheckRampGeometry();CheckEditorNavigation();CheckTabContent();
         const std::filesystem::path output=argc>1?argv[1]:"palette-ui-smoke";
         std::filesystem::create_directories(output);
         CheckSources(output);CheckOpeningClicks(output);
