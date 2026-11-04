@@ -1,5 +1,6 @@
 #include "../src/gui/custom_menu/palette_editor.cpp"
 #include "gui/custom_menu/fonts.h"
+#include "gui/imgui_impl.h"
 #include "gui/custom_menu/sound.h"
 #include "utils/i18n.h"
 #include "utils/config.h"
@@ -182,8 +183,19 @@ void WriteBytes(const std::filesystem::path& path,const std::vector<uint8_t>& by
     std::ofstream stream(path,std::ios::binary);stream.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());
     Require(bool(stream),"Fixture write failed");
 }
+
+std::filesystem::path CreateFixtureDirectory(const std::filesystem::path& output, const char* prefix) {
+    const auto base=std::filesystem::absolute(output)/(std::string(prefix)+"-"+std::to_string(GetCurrentProcessId()));
+    for (unsigned suffix=0;;++suffix) {
+        auto candidate=base;
+        if (suffix) candidate+="-"+std::to_string(suffix);
+        std::error_code error;
+        if (std::filesystem::create_directory(candidate,error)) return candidate;
+        if (error) throw std::filesystem::filesystem_error("Could not create fixture directory",candidate,error);
+    }
+}
 void CheckSources(const std::filesystem::path& directory) {
-    contextFixture=std::filesystem::absolute(directory)/("fixture-"+std::to_string(GetCurrentProcessId()));
+    contextFixture=CreateFixtureDirectory(directory,"fixture");
     std::vector<uint8_t> dat(721);dat[0]=240;dat[1]=255;dat[2]=128;dat[3]=17;
     const uint8_t sprite[]={3,0,1,0,15,0x82};dat.insert(dat.end(),std::begin(sprite),std::end(sprite));
     WriteBytes(contextFixture/"ayu"/"ayu.dat",dat);
@@ -283,7 +295,7 @@ void CheckSources(const std::filesystem::path& directory) {
 }
 void CheckOpeningClicks(const std::filesystem::path& directory) {
     SetFonts(1.5f);Seed();
-    const auto path=std::filesystem::absolute(directory)/("modal-"+std::to_string(GetCurrentProcessId()))/"Selected.json";
+    const auto path=CreateFixtureDirectory(directory,"modal")/"Selected.json";
     ::PaletteEditor::PaletteFile saved;std::string error;
     Require(::PaletteEditor::SavePaletteFile(path,Panel::g.document.State(),std::nullopt,saved,error),"Modal fixture could not be saved");
     const auto savedColors=Panel::g.document.Colors();
@@ -840,7 +852,8 @@ int main(int argc,char** argv) {
         SetFonts(1);CheckPreviewTexture(device);CheckColorPicker();CheckIconClicks();CheckTools();CheckLargeMoveCategory();CheckClosingInput();CheckRampHoverHelp();CheckControls();CheckRampGeometry();CheckEditorNavigation();CheckTabContent();
         const std::filesystem::path output=argc>1?argv[1]:"palette-ui-smoke";
         std::filesystem::create_directories(output);
-        CheckSources(output);CheckOpeningClicks(output);
+        CheckSources(output);
+        for (int attempt=0;attempt<2;++attempt) CheckOpeningClicks(output);
         Panel::Configure(nullptr,nullptr,ApplyFixture,RestoreFixture);
         for(const auto language:{I18n::English,I18n::Japanese}) {
             I18n::SetLanguage(language);
@@ -861,7 +874,10 @@ int main(int argc,char** argv) {
         Panel::SetDevice(nullptr);
         Require(!Panel::g_workingTexture.value && !Panel::g_originalTexture.value,"Device identity change retained preview textures");
         Panel::SetDevice(device);
-        ImGui_ImplDX9_InvalidateDeviceObjects();Panel::ReleaseTextures();
+        BeginFrame();DrawPalettePage();EndFrame(device);
+        Require(Panel::g_workingTexture.value!=nullptr,"Reset fixture has no live preview texture");
+        ImGuiImpl::InvalidateDeviceObjects();
+        Require(!Panel::g_workingTexture.value && !Panel::g_originalTexture.value,"Device invalidation retained preview textures");
         Require(SUCCEEDED(device->Reset(&pp)),"Device reset failed after releasing editor resources");
         BeginFrame();DrawPalettePage();EndFrame(device);
         Require(Panel::g_workingTexture.value!=nullptr,"Preview texture did not recover after reset");

@@ -139,6 +139,7 @@ void SyncPalettePreview() {
 void UpdatePalettePreview() {
     std::lock_guard<std::recursive_mutex> control(g_p2ControlMutex);
     if (s_usePlayer && s_useGeneration != GetRuntimeLifecycleGeneration()) s_usePlayer = 0;
+    if (!s_usePlayer && !PaletteEditorPanel::IsOpen()) PaletteEditor::Live::Restore();
     PaletteEditor::Live::Pump(s_usePlayer && s_forceUse);
     s_forceUse = false;
     if (!s_usePlayer) return;

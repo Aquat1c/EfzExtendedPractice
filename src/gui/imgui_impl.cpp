@@ -103,10 +103,8 @@ HRESULT __cdecl BeforeOverlayReset(void* device, uint32_t epoch) {
     if (invalidate) {
         if (!g_imguiContext || !g_imguiInitialization.IsReady()) return E_UNEXPECTED;
         EfzScopedImGuiContext context(g_imguiContext);
-        CustomMenu::PaletteEditorPanel::ReleaseTextures();
-        // InvalidateDeviceObjects clears VB/IB/font pointers only; the context
-        // and WndProc chain must survive the reset.
-        ImGui_ImplDX9_InvalidateDeviceObjects();
+        // The context and WndProc chain must survive the reset.
+        ImGuiImpl::InvalidateDeviceObjects();
         g_resetGate.DidInvalidateBackend();
     }
     return S_OK;
@@ -1463,7 +1461,7 @@ namespace ImGuiImpl {
                                "exclusive fullscreen active)", true);
                         continue;
                     }
-                    ImGui_ImplDX9_InvalidateDeviceObjects();
+                    InvalidateDeviceObjects();
                     if (SUCCEEDED(device->Reset(&d3dpp))) {
                         ImGui_ImplDX9_CreateDeviceObjects();
                         notResetCount = 0;

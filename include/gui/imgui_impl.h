@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <d3d9.h>
 #include "compat/overlay_reset_gate.h"
+#include "custom_menu/palette_editor.h"
 #include "../3rdparty/imgui/imgui.h"
 #include "../3rdparty/imgui/backends/imgui_impl_dx9.h"
 #include "../3rdparty/imgui/backends/imgui_impl_win32.h"
@@ -28,6 +29,11 @@ namespace ImGuiImpl {
     bool IsBoundToDevice(IDirect3DDevice9* device);
     
     void Shutdown();
+
+    inline void InvalidateDeviceObjects() {
+        CustomMenu::PaletteEditorPanel::ReleaseTextures();
+        ImGui_ImplDX9_InvalidateDeviceObjects();
+    }
     
     void RenderFrame();
     

@@ -588,7 +588,8 @@ if(BUILD_TESTING)
     add_test(NAME palette_assets_tests COMMAND palette_assets_tests)
 
     add_executable(palette_live_tests
-        tests/palette_live_tests.cpp src/game/palette_live.cpp)
+        tests/palette_live_tests.cpp src/game/palette_live.cpp
+        src/gui/custom_menu/palette_editor_integration.cpp)
     target_include_directories(palette_live_tests PRIVATE include)
     set_property(TARGET palette_live_tests PROPERTY
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
