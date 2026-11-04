@@ -1,6 +1,7 @@
 #include "../../../include/game/mission/mission_movedata.h"
 #include "../../../include/game/character_settings.h"
 #include "../../../include/core/logger.h"
+#include "../../../include/core/globals.h"
 
 #include <nlohmann/json.hpp>
 
@@ -8,9 +9,8 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <fstream>
+#include <cctype>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 
@@ -47,33 +47,25 @@ Cls ParseClass(const std::string& c) {
     return Cls::Unknown;
 }
 
-std::string ResolveFile(const std::string& resource) {
-    if (resource.empty() || resource == "unknown") return std::string();
-    HMODULE mod = GetModuleHandleA("efz_training_mode.dll");
-    char path[MAX_PATH] = {0};
-    if (!mod || GetModuleFileNameA(mod, path, MAX_PATH) == 0) return std::string();
-    std::string dir(path);
-    const size_t slash = dir.find_last_of("\\/");
-    if (slash == std::string::npos) return std::string();
-    dir.resize(slash + 1);
-    return dir + "assets\\movedata\\" + resource + ".json";
-}
-
 template <typename T>
 void SortUnique(std::vector<T>& values) {
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
-bool ParseFile(const std::string& file, CharEntry& e) {
-    std::ifstream in(file, std::ios::binary);
-    if (!in.is_open()) return false;
-    std::stringstream ss;
-    ss << in.rdbuf();
-    const std::string text = ss.str();
-    if (text.empty()) return false;
+bool LoadProfile(const std::string& profile, CharEntry& e) {
+    if (!g_hSelfModule) return false;
+    // RC stores named resources in uppercase.
+    std::string name = profile;
+    std::transform(name.begin(), name.end(), name.begin(),
+        [](unsigned char c) { return char(std::toupper(c)); });
+    const HRSRC resource = FindResourceA(g_hSelfModule, name.c_str(), "MOVEDATA");
+    if (!resource) return false;
+    const DWORD size = SizeofResource(g_hSelfModule, resource);
+    const auto* text = static_cast<const char*>(LockResource(LoadResource(g_hSelfModule, resource)));
+    if (!text || !size) return false;
     try {
-        auto j = nlohmann::json::parse(text);
+        auto j = nlohmann::json::parse(text, text + size);
         auto it = j.find("moves");
         if (it == j.end() || !it->is_object()) return false;
         for (auto m = it->begin(); m != it->end(); ++m) {
@@ -128,11 +120,10 @@ bool EnsureLoaded(int charId) {
     bool allLoaded = !profiles.empty();
     std::string loadedFiles;
     for (const std::string& profile : profiles) {
-        const std::string file = ResolveFile(profile);
-        const bool loaded = !file.empty() && ParseFile(file, e);
+        const bool loaded = LoadProfile(profile, e);
         allLoaded = allLoaded && loaded;
         if (!loadedFiles.empty()) loadedFiles += ",";
-        loadedFiles += file.empty() ? profile : file;
+        loadedFiles += profile;
     }
     e.ok = allLoaded;
     if (!profiles.empty()) {

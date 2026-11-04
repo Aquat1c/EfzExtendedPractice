@@ -163,12 +163,6 @@ endif()
 
 add_library(efz_training_mode SHARED ${SOURCES})
 
-add_custom_target(efz_movedata ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata"
-        "$<TARGET_FILE_DIR:efz_training_mode>/assets/movedata")
-add_dependencies(efz_movedata efz_training_mode)
-
 if(EFZ_ENABLE_INPUT_LOGS)
     target_compile_definitions(efz_training_mode PRIVATE EFZ_ENABLE_INPUT_LOGS=1)
 endif()
@@ -948,6 +942,15 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME mission_authoring_tests
              COMMAND mission_authoring_tests)
+
+    add_executable(mission_movedata_embedded_tests
+        tests/mission_movedata_embedded_tests.cpp src/game/mission/mission_movedata.cpp)
+    target_include_directories(mission_movedata_embedded_tests PRIVATE include 3rdparty/json/single_include)
+    set_property(TARGET mission_movedata_embedded_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_dependencies(mission_movedata_embedded_tests efz_training_mode)
+    add_test(NAME mission_movedata_embedded_tests COMMAND mission_movedata_embedded_tests
+        "$<TARGET_FILE:efz_training_mode>" "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata")
 
     add_executable(mission_movedata_cache_tests tests/mission_movedata_cache_tests.cpp)
     target_include_directories(mission_movedata_cache_tests PRIVATE include 3rdparty/json/single_include)

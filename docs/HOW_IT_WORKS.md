@@ -852,11 +852,17 @@ gray even when changing it does not change the visible RGB value.
 mod-owned assets. Six stock palettes supply forty colours each. Transparency
 comes from the sprite data, and shared effect colours come from the stage
 palette rather than the editable fighter bank. Animation choices use PAT
-IDs, the shipped move classifications, and the move/entity notation catalogues,
+IDs, the embedded move classifications, and the move/entity notation catalogues,
 including sparse IDs and the native last-definition rule for duplicates.
 Nanase and Ikumi also expose their alternate PATs. Preview playback uses visual frame durations at 64 Hz and
 never executes a move or advances the match. Managed D3D9 textures belong
 to the overlay's device and are released through its reset/shutdown gate.
+
+Move classifications are embedded as Windows resources from `assets/movedata`.
+The shared move-data cache reads them directly from the loaded DLL, including
+Nanase and Ikumi's alternate tables. External move-data files are not required
+or read; resource filenames remain internal keys while menus use character
+display names.
 
 `palette_editor.cpp` owns the document and file library. The immutable stock
 baseline, edited colours, pins and group targets are stored together in

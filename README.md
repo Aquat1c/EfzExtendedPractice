@@ -14,7 +14,7 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
 2. **Install EFZ Mod Manager** (if you don't have it already)
    - Download: [EFZ Mod Manager spreadsheet](https://docs.google.com/spreadsheets/d/1r0nBAaQczj9K4RG5zAVV4uXperDeoSnXaqQBal2-8Us/edit?usp=sharing)
 
-3. **Place the DLL and its assets in your mods folder**
+3. **Place the DLL in your mods folder**
 
    The mod expects this layout inside your game directory:
 
@@ -26,14 +26,13 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
    ├── EfzModManager.ini         <- mod enable list (edit this)
    └── mods/
        └── efz_training_mode/    <- mod folder (name matches the DLL)
-           ├── efz_training_mode.dll
-           └── assets/movedata/  <- move classifications used by the palette editor
+           └── efz_training_mode.dll
    ```
 
    Example full path: `EFZ\mods\efz_training_mode\efz_training_mode.dll`
 
-   Keep the packaged `assets` folder beside the DLL. Source builds copy move data
-   into the DLL output directory automatically.
+   Fonts and move classifications are embedded in the DLL; no separate assets
+   folder is required.
 
 4. **Enable the mod in `EfzModManager.ini`**
 

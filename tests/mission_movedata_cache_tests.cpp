@@ -5,39 +5,39 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+#include <unordered_map>
+
+HMODULE g_hSelfModule = reinterpret_cast<HMODULE>(uintptr_t(1));
 
 namespace {
 constexpr int kCharacters = 96;
-std::string g_fixtureModule;
+std::unordered_map<std::string, std::string> g_fixtures;
 std::array<std::atomic<unsigned>, kCharacters + 3> g_nameReads{};
 std::atomic<unsigned> g_logCount{0};
 
-HMODULE WINAPI FixtureModuleHandle(LPCSTR name) {
-    return name && std::strcmp(name, "efz_training_mode.dll") == 0
-        ? reinterpret_cast<HMODULE>(uintptr_t(1)) : nullptr;
+HRSRC WINAPI FixtureResource(HMODULE module, LPCSTR name, LPCSTR type) {
+    if (module != g_hSelfModule || !name || !type || std::strcmp(type, "MOVEDATA")) return nullptr;
+    const auto found = g_fixtures.find(name);
+    return found == g_fixtures.end() ? nullptr
+        : reinterpret_cast<HRSRC>(const_cast<std::string*>(&found->second));
 }
-DWORD WINAPI FixtureModuleFilename(HMODULE module, LPSTR buffer, DWORD capacity) {
-    if (!module || !buffer || capacity <= g_fixtureModule.size()) return 0;
-    std::memcpy(buffer, g_fixtureModule.c_str(), g_fixtureModule.size() + 1);
-    return static_cast<DWORD>(g_fixtureModule.size());
+HGLOBAL WINAPI FixtureLoadResource(HMODULE, HRSRC resource) {
+    return reinterpret_cast<HGLOBAL>(resource);
+}
+LPVOID WINAPI FixtureLockResource(HGLOBAL resource) {
+    return resource ? const_cast<char*>(reinterpret_cast<std::string*>(resource)->data()) : nullptr;
+}
+DWORD WINAPI FixtureResourceSize(HMODULE, HRSRC resource) {
+    return resource ? DWORD(reinterpret_cast<std::string*>(resource)->size()) : 0;
 }
 void Check(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
-}
-void WriteFixture(const std::filesystem::path& path, const std::string& bytes) {
-    std::ofstream out(path, std::ios::binary);
-    out << bytes;
-    out.close();
-    Check(bool(out), "fixture write failed");
 }
 }
 
@@ -53,25 +53,19 @@ std::string GetCharacterInternalName(int charId) {
 }
 void LogOut(const std::string&, bool) { ++g_logCount; }
 
-#define GetModuleHandleA FixtureModuleHandle
-#define GetModuleFileNameA FixtureModuleFilename
+#define FindResourceA FixtureResource
+#define LoadResource FixtureLoadResource
+#define LockResource FixtureLockResource
+#define SizeofResource FixtureResourceSize
 #include "../src/game/mission/mission_movedata.cpp"
-#undef GetModuleFileNameA
-#undef GetModuleHandleA
+#undef SizeofResource
+#undef LockResource
+#undef LoadResource
+#undef FindResourceA
 
 int main() {
-    namespace fs = std::filesystem;
     using namespace Mission::MoveData;
-    const auto temp = fs::temp_directory_path();
-    const auto root = temp / ("efz_movedata_cache_tests_" +
-        std::to_string(GetCurrentProcessId()) + "_" +
-        std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
     try {
-        Check(fs::create_directory(root), "fixture directory already exists");
-        const auto directory = root / "assets" / "movedata";
-        fs::create_directories(directory);
-        g_fixtureModule = (root / "efz_training_mode.dll").string();
-        Check(g_fixtureModule.size() < MAX_PATH, "fixture module path exceeds native path bound");
         for (int i = 0; i < kCharacters; ++i) {
             const auto json = nlohmann::json{
                 {"moves", {
@@ -82,13 +76,11 @@ int main() {
                     {"401", {{"class", "entity"}, {"attack", false}}}
                 }}
             };
-            WriteFixture(directory / ("fixture" + std::to_string(i) + ".json"), json.dump());
+            g_fixtures["FIXTURE" + std::to_string(i)] = json.dump();
         }
-        WriteFixture(directory / "nanase.json",
-            R"({"moves":{"250":{"class":"special","attack":true},"413":{"class":"entity","attack":false}}})");
-        WriteFixture(directory / "nanase2.json",
-            R"({"moves":{"250":{"class":"system","attack":false},"413":{"class":"projectile","attack":true}}})");
-        WriteFixture(directory / "broken.json", "{invalid");
+        g_fixtures["NANASE"] = R"({"moves":{"250":{"class":"special","attack":true},"413":{"class":"entity","attack":false}}})";
+        g_fixtures["NANASE2"] = R"({"moves":{"250":{"class":"system","attack":false},"413":{"class":"projectile","attack":true}}})";
+        g_fixtures["BROKEN"] = "{invalid";
 
         Check(EnsureLoaded(0), "initial fixture load failed");
         const auto& borrowedSpecials = Specials(0);
@@ -160,17 +152,10 @@ int main() {
             Specials(kCharacters+1).empty() && EntityPatterns(kCharacters+1).empty() &&
             AttackEntityPatterns(kCharacters+1).empty(), "invalid fixture published partial data");
 
-        const auto checked = fs::absolute(root).lexically_normal();
-        Check(checked.parent_path() == fs::absolute(temp / "fixture").parent_path().lexically_normal() &&
-            checked.filename().string().find("efz_movedata_cache_tests_") == 0,
-            "unsafe fixture cleanup path");
-        std::error_code error;
-        fs::remove_all(checked,error);
-        Check(!error, "fixture cleanup failed");
         std::cout << "Production move-data cache concurrent loading and queries passed\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << error.what() << "\nFixtures: " << root << '\n';
+        std::cerr << error.what() << '\n';
         return 1;
     }
 }
