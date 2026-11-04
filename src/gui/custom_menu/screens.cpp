@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #include "../include/gui/custom_menu/screens.h"
 #include "../include/gui/custom_menu/anim.h"
 #include "../include/gui/custom_menu/layout.h"
@@ -3010,7 +3011,7 @@ bool KeyEdge(bool (&prevPressed)[256], int vk) {
 }
 
 struct KeybindState {
-    bool active = false;
+    GuiLifecycle::KeyCapture capture;
     char title[48] = "";
     int* settingsField = nullptr;
     char iniSection[16] = "";
@@ -3019,12 +3020,11 @@ struct KeybindState {
     uint32_t prevGamepadMask = 0;
     bool captureGamepad = false;
     bool disallowMenuReserved = false;
-    bool primed = false; // first frame ignores the held key/button that opened binding
 };
 KeybindState g_keybind;
 
-bool IsKeybindActive() { return g_keybind.active; }
-bool IsGamepadKeybindActive() { return g_keybind.active && g_keybind.captureGamepad; }
+bool IsKeybindActive() { return g_keybind.capture.IsOpen(); }
+bool IsGamepadKeybindActive() { return g_keybind.capture.IsOpen() && g_keybind.captureGamepad; }
 
 void OpenKeybind(const char* title, int* field,
                  const char* section, const char* key,
@@ -3032,7 +3032,7 @@ void OpenKeybind(const char* title, int* field,
     if (!field || !title || !section || !key) return;
     if (!Input::IsGameWindowActive()) return;
 
-    g_keybind.active = true;
+    g_keybind.capture.Open();
     strncpy_s(g_keybind.title, sizeof(g_keybind.title), title, _TRUNCATE);
     g_keybind.settingsField = field;
     strncpy_s(g_keybind.iniSection, sizeof(g_keybind.iniSection), section, _TRUNCATE);
@@ -3041,7 +3041,7 @@ void OpenKeybind(const char* title, int* field,
     g_keybind.disallowMenuReserved = disallowMenuReserved;
     g_keybind.prevGamepadMask = 0;
     SnapshotKeyboardState(g_keybind.prevPressed);
-    g_keybind.primed = false;
+    g_keybind.capture.Suspend();
 }
 
 void OpenGamepadKeybind(const char* title, int* field,
@@ -3049,7 +3049,7 @@ void OpenGamepadKeybind(const char* title, int* field,
     if (!field || !title || !section || !key) return;
     if (!Input::IsGameWindowActive()) return;
 
-    g_keybind.active = true;
+    g_keybind.capture.Open();
     strncpy_s(g_keybind.title, sizeof(g_keybind.title), title, _TRUNCATE);
     g_keybind.settingsField = field;
     strncpy_s(g_keybind.iniSection, sizeof(g_keybind.iniSection), section, _TRUNCATE);
@@ -3058,11 +3058,11 @@ void OpenGamepadKeybind(const char* title, int* field,
     g_keybind.disallowMenuReserved = false;
     SnapshotKeyboardState(g_keybind.prevPressed);
     g_keybind.prevGamepadMask = PollRelevantGamepadMask();
-    g_keybind.primed = false;
+    g_keybind.capture.Suspend();
 }
 
 void CloseKeybind() {
-    g_keybind.active = false;
+    g_keybind.capture.Close();
     g_keybind.settingsField = nullptr;
     g_keybind.iniSection[0] = '\0';
     g_keybind.iniKey[0] = '\0';
@@ -3123,11 +3123,11 @@ bool VkAllowedForCurrentCapture(int vk) {
 
 namespace KeybindAPI {
     void TickInput() {
-        if (!g_keybind.active) return;
+        if (!g_keybind.capture.IsOpen()) return;
         if (!Input::IsGameWindowActive() || Input::IsSuspended()) {
             memset(g_keybind.prevPressed, 0, sizeof(g_keybind.prevPressed));
             g_keybind.prevGamepadMask = 0;
-            g_keybind.primed = false;
+            g_keybind.capture.Suspend();
             return;
         }
 
@@ -3141,9 +3141,9 @@ namespace KeybindAPI {
             const uint32_t currentMask = PollRelevantGamepadMask();
             const bool anyHeld = currentMask != 0;
 
-            if (!g_keybind.primed) {
+            if (!g_keybind.capture.CanCapture()) {
                 g_keybind.prevGamepadMask = currentMask;
-                if (!anyHeld) g_keybind.primed = true;
+                g_keybind.capture.ObserveRelease(anyHeld);
                 return;
             }
 
@@ -3190,13 +3190,13 @@ namespace KeybindAPI {
             const bool was = g_keybind.prevPressed[vk];
             g_keybind.prevPressed[vk] = now;
             if (now) anyHeld = true;
-            if (g_keybind.primed && now && !was && captured == 0 && VkAllowedForCurrentCapture(vk)) {
+            if (g_keybind.capture.CanCapture() && now && !was && captured == 0 && VkAllowedForCurrentCapture(vk)) {
                 captured = vk;
             }
         }
 
-        if (!g_keybind.primed) {
-            if (!anyHeld) g_keybind.primed = true;
+        if (!g_keybind.capture.CanCapture()) {
+            g_keybind.capture.ObserveRelease(anyHeld);
             return;
         }
 
@@ -3212,10 +3212,10 @@ namespace KeybindAPI {
 }
 
 bool TickKeybindIfActive(ImDrawList* dl, const ScreenLayout& layout) {
-    if (!g_keybind.active) return false;
+    if (!g_keybind.capture.IsOpen()) return false;
 
     KeybindAPI::TickInput();
-    if (!g_keybind.active) return true;
+    if (!g_keybind.capture.IsOpen()) return true;
 
     using namespace Theme;
     const Scale::Metrics& metrics = Scale::Get();
@@ -3251,7 +3251,7 @@ bool TickKeybindIfActive(ImDrawList* dl, const ScreenLayout& layout) {
             _snprintf_s(cancelBuf, sizeof(cancelBuf), _TRUNCATE,
                         "ESC TO CANCEL");
         }
-        if (!g_keybind.primed) {
+        if (!g_keybind.capture.CanCapture()) {
             centerText(Scale::Snap(by + 46.0f * metrics.layoutScale), "RELEASE ALL INPUTS...", kTextInactive);
         } else {
             centerText(Scale::Snap(by + 46.0f * metrics.layoutScale), "PRESS A CONTROLLER BUTTON", kTextActive);
@@ -3259,7 +3259,7 @@ bool TickKeybindIfActive(ImDrawList* dl, const ScreenLayout& layout) {
         centerText(Scale::Snap(by + 74.0f * metrics.layoutScale), "DELETE / BACKSPACE TO DISABLE", kTextInactive);
         centerText(Scale::Snap(by + 100.0f * metrics.layoutScale), cancelBuf, kTextInactive);
     } else {
-        if (!g_keybind.primed) {
+        if (!g_keybind.capture.CanCapture()) {
             centerText(Scale::Snap(by + 50.0f * metrics.layoutScale), "RELEASE ALL KEYS...", kTextInactive);
         } else {
             centerText(Scale::Snap(by + 50.0f * metrics.layoutScale),

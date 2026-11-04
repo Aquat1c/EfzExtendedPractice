@@ -155,6 +155,16 @@ struct JugglePreviewLease {
     int refreshWatchdogTicks = 0;
 };
 
+enum class AbsencePhase { AwaitingWindow, WindowOpen };
+enum class TelegraphPhase { PressHop, AwaitingAirborne, AwaitingLanding, Done };
+enum class ScriptStepPhase { Prepare, AwaitingMove, MoveActive, PostMoveWait };
+enum class EpisodeStatus { Stopped, Playing, Finished };
+enum class EpisodeDrivePhase {
+    Start, AwaitingDash, Dashing, Settling, ScriptReady,
+    AwaitingContact, AttackActive, Cooldown, Jumping,
+    ReactionDelay, AwaitingAttack
+};
+
 struct State {
     bool active = false;
     Phase phase = Phase::Idle;
@@ -194,7 +204,8 @@ struct State {
     TaskMetrics liveMetrics;
     bool  metricsLive = false;
     bool  waitingComboEnd = false;
-    int   branchPhase = 0;        // 0 = starter, 1 = hit route, 2 = block hold
+    ::Mission::TutorialStatePolicy::BranchPhase branchPhase =
+        ::Mission::TutorialStatePolicy::BranchPhase::Starter;
     int   branchSeqIndex = 0;
     int   branchTicks = 0;
     int   branchComboBase = 0;
@@ -203,7 +214,7 @@ struct State {
     int   sinceP2Wake = -1;       // non-frozen ticks since P2's wake edge (-1 = none this task)
     int   sinceP2Whiff = -1;      // non-frozen ticks since P2's attack finished untouched (-1 = none)
     bool  p1TouchedByP2Attack = false;
-    int   absencePhase = 0;       // action_absence: 0 = waiting for window, 1 = window open
+    AbsencePhase absencePhase = AbsencePhase::AwaitingWindow;
     int   absenceElapsed = 0;
     bool  absenceDummyAttackSeen = false;
     int   absenceBlockCount = 0;
@@ -249,10 +260,9 @@ struct State {
     bool  traceContactOverflow = false;
     bool  traceDirectHookReady = false;
     bool  traceEntityHookReady = false;
-    bool  episodePlaying = false;
-    bool  episodeFinished = false;
+    EpisodeStatus episodeStatus = EpisodeStatus::Stopped;
     int   episodeCycleSerial = 0;
-    int   episodePhase = 0;
+    EpisodeDrivePhase episodePhase = EpisodeDrivePhase::Start;
     int   episodeTimer = 0;
     short episodeAnswerRgMove = -1;
     int   episodeCueTicks = 0;
@@ -263,9 +273,7 @@ struct State {
     short epPrevP2Move = -1;
     short epPrevP2FrameIdx = -1;
     bool  episodeFreeze = false;
-    // episode_telegraph: 0 = press hop, 1 = await airborne,
-    // 2 = await landed+settled, 3 = done.
-    int   episodeTelegraphPhase = 0;
+    TelegraphPhase episodeTelegraphPhase = TelegraphPhase::PressHop;
     int   episodeTelegraphTimer = 0;
     uint64_t wakeAutoToken = 0;
     bool rfLockApplied[2] = {false, false};
@@ -304,7 +312,7 @@ struct State {
     uint32_t variantSeed = 0;
     std::map<std::string, std::string> episodeVariantAssignments;
     int  episodeScriptStep = -1;
-    int  scriptStepPhase = 0;     // 0 = pre-inject, 1 = awaiting move, 2 = move active
+    ScriptStepPhase scriptStepPhase = ScriptStepPhase::Prepare;
     bool scriptGapOpen = false;
     bool airtechTouched = false;
     bool airtechSavedEnabled = false;
@@ -1443,10 +1451,10 @@ std::string EpisodeDriveContextLocked(const ::Mission::DummyEpisode* episode) {
         << " task=" << (task ? task->id : std::string("?"))
         << " episode=" << (episode ? episode->id : std::string("?"))
         << " cycle=" << g_s.episodeCycleSerial
-        << " phase=" << g_s.episodePhase
+        << " phase=" << static_cast<int>(g_s.episodePhase)
         << " timer=" << g_s.episodeTimer
         << " scriptStep=" << g_s.episodeScriptStep
-        << " stepPhase=" << g_s.scriptStepPhase
+        << " stepPhase=" << static_cast<int>(g_s.scriptStepPhase)
         << " gap=" << (g_s.scriptGapOpen ? 1 : 0)
         << " p1Move=" << g_s.episodeDiagP1Move
         << " p2Move=" << g_s.episodeDiagP2Move
@@ -1501,16 +1509,16 @@ void ObserveEpisodeDriveLocked(const ::Mission::DummyEpisode* episode,
     }
 
     const bool stateChanged = moveChanged ||
-        g_s.episodePhase != g_s.episodeDiagLoggedPhase ||
+        static_cast<int>(g_s.episodePhase) != g_s.episodeDiagLoggedPhase ||
         g_s.episodeScriptStep != g_s.episodeDiagLoggedScriptStep ||
-        g_s.scriptStepPhase != g_s.episodeDiagLoggedStepPhase ||
+        static_cast<int>(g_s.scriptStepPhase) != g_s.episodeDiagLoggedStepPhase ||
         snapshot.freezeActive != g_s.episodeDiagLoggedFreeze ||
         g_s.episodeCueBlockedThisTick != g_s.episodeDiagLoggedCueBlocked;
 
     g_s.episodeDiagLoggedP2Move = snapshot.p2Move;
-    g_s.episodeDiagLoggedPhase = g_s.episodePhase;
+    g_s.episodeDiagLoggedPhase = static_cast<int>(g_s.episodePhase);
     g_s.episodeDiagLoggedScriptStep = g_s.episodeScriptStep;
-    g_s.episodeDiagLoggedStepPhase = g_s.scriptStepPhase;
+    g_s.episodeDiagLoggedStepPhase = static_cast<int>(g_s.scriptStepPhase);
     g_s.episodeDiagLoggedFreeze = snapshot.freezeActive;
     g_s.episodeDiagLoggedCueBlocked = g_s.episodeCueBlockedThisTick;
 
@@ -1692,10 +1700,9 @@ bool TickEpisodeCueLocked(const ::Mission::DummyEpisode* episode,
 }
 
 void StopTaskEpisodeLocked() {
-    g_s.episodePlaying = false;
-    g_s.episodeFinished = false;
+    g_s.episodeStatus = EpisodeStatus::Stopped;
     g_s.episodeCycleSerial = 0;
-    g_s.episodePhase = 0;
+    g_s.episodePhase = EpisodeDrivePhase::Start;
     g_s.episodeTimer = 0;
     g_s.episodeAnswerRgMove = -1;
     g_s.episodeCueTicks = 0;
@@ -1706,7 +1713,7 @@ void StopTaskEpisodeLocked() {
     g_s.epPrevP2Move = -1;
     g_s.epPrevP2FrameIdx = -1;
     g_s.episodeScriptStep = -1;
-    g_s.scriptStepPhase = 0;
+    g_s.scriptStepPhase = ScriptStepPhase::Prepare;
     g_s.scriptGapOpen = false;
     ReleaseEpisodeOwnersLocked();
     ResetEpisodeDiagnosticsLocked();
@@ -1916,10 +1923,9 @@ void StartTaskEpisodeLocked() {
                    " inputInjection=0", true);
         }
     }
-    g_s.episodePlaying = true;
-    g_s.episodeFinished = false;
+    g_s.episodeStatus = EpisodeStatus::Playing;
     g_s.episodeCycleSerial = 0;
-    g_s.episodePhase = 0;
+    g_s.episodePhase = EpisodeDrivePhase::Start;
     g_s.episodeTimer = 0;
     g_s.episodeAnswerRgMove = -1;
     g_s.episodeChainIndex = 0;
@@ -1927,9 +1933,9 @@ void StartTaskEpisodeLocked() {
     g_s.epPrevP2Move = -1;
     g_s.epPrevP2FrameIdx = -1;
     g_s.episodeScriptStep = -1;
-    g_s.scriptStepPhase = 0;
+    g_s.scriptStepPhase = ScriptStepPhase::Prepare;
     g_s.scriptGapOpen = false;
-    g_s.episodeTelegraphPhase = 0;
+    g_s.episodeTelegraphPhase = TelegraphPhase::PressHop;
     g_s.episodeTelegraphTimer = 0;
     if (::Mission::TutorialEpisodePolicy::CueStartsOnArm(
             e->start, e->trigger)) {
@@ -1993,7 +1999,7 @@ void FinishEpisodeCycleLocked(const ::Mission::DummyEpisode* e) {
     g_s.episodeTimer = 0;
     g_s.episodeChainIndex = 0;
     g_s.episodeContactFreezeSeen = false;
-    g_s.episodeTelegraphPhase = 0;
+    g_s.episodeTelegraphPhase = TelegraphPhase::PressHop;
     g_s.episodeTelegraphTimer = 0;
     ReassertDummySwordModeLocked();
     if (e && !e->telegraph.empty()) {
@@ -2001,14 +2007,14 @@ void FinishEpisodeCycleLocked(const ::Mission::DummyEpisode* e) {
     }
     ResetEpisodeDiagnosticsLocked();
     if (e && e->repeatMode == "loop") {
-        g_s.episodePhase = 0;
+        g_s.episodePhase = EpisodeDrivePhase::Start;
         if (::Mission::TutorialEpisodePolicy::CueStartsOnArm(
                 e->start, e->trigger)) {
             BeginEpisodeCueLocked(e);
         }
     } else {
-        g_s.episodePhase = 0;
-        g_s.episodeFinished = true;
+        g_s.episodePhase = EpisodeDrivePhase::Start;
+        g_s.episodeStatus = EpisodeStatus::Finished;
     }
 }
 
@@ -2020,47 +2026,47 @@ void RememberEpisodeP2Locked(const ::Mission::Engine::Snapshot& s) {
 bool PrepareScriptApproachLocked(const ::Mission::DummyEpisode* e,
                                  const ::Mission::Engine::Snapshot& s) {
     if (!e || e->approach != "dash") {
-        g_s.episodePhase = 4;
+        g_s.episodePhase = EpisodeDrivePhase::ScriptReady;
         return true;
     }
 
     const bool p2Idle = s.p2Move >= 0 && s.p2Move <= 3;
     switch (g_s.episodePhase) {
-        case 0:
+        case EpisodeDrivePhase::Start:
             if (s.freezeActive) return false;
             if (!QueueDummyMotionLocked(MOTION_FORWARD_DASH, 0)) {
                 FailEpisodeLeaseLocked(
                     "The tutorial could not queue the dummy's scripted approach.");
                 return false;
             }
-            g_s.episodePhase = 1;
+            g_s.episodePhase = EpisodeDrivePhase::AwaitingDash;
             g_s.episodeTimer = 0;
             return false;
-        case 1:
+        case EpisodeDrivePhase::AwaitingDash:
             if (!s.freezeActive) ++g_s.episodeTimer;
             if (::Mission::TutorialEpisodePolicy::IsForwardDashApproachState(
                     s.p2Move)) {
-                g_s.episodePhase = 2;
+                g_s.episodePhase = EpisodeDrivePhase::Dashing;
                 g_s.episodeTimer = 0;
             } else if (g_s.episodeTimer > kEpisodeDashMinTicks * 4) {
                 FailEpisodeLeaseLocked(
                     "The dummy's scripted approach did not enter its dash state.");
             }
             return false;
-        case 2:
+        case EpisodeDrivePhase::Dashing:
             if (!s.freezeActive) ++g_s.episodeTimer;
             if (p2Idle && g_s.episodeTimer >= kEpisodeDashMinTicks) {
-                g_s.episodePhase = 3;
+                g_s.episodePhase = EpisodeDrivePhase::Settling;
                 g_s.episodeTimer = 0;
             } else if (g_s.episodeTimer > kEpisodeDashMinTicks * 8) {
                 FailEpisodeLeaseLocked(
                     "The dummy's scripted approach did not return to neutral.");
             }
             return false;
-        case 3:
+        case EpisodeDrivePhase::Settling:
             if (!s.freezeActive) ++g_s.episodeTimer;
             if (g_s.episodeTimer < kEpisodeSettleTicks) return false;
-            g_s.episodePhase = 4;
+            g_s.episodePhase = EpisodeDrivePhase::ScriptReady;
             g_s.episodeTimer = 0;
             return true;
         default:
@@ -2078,7 +2084,7 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
             return;
         }
         g_s.episodeScriptStep = 0;
-        g_s.scriptStepPhase = 0;
+        g_s.scriptStepPhase = ScriptStepPhase::Prepare;
         g_s.episodeTimer = 0;
         g_s.scriptGapOpen = false;
     }
@@ -2099,7 +2105,7 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
         if (g_s.episodeTimer >= st.gapTicks) {
             g_s.scriptGapOpen = false;
             ++g_s.episodeScriptStep;
-            g_s.scriptStepPhase = 0;
+            g_s.scriptStepPhase = ScriptStepPhase::Prepare;
             g_s.episodeTimer = 0;
         }
         RememberEpisodeP2Locked(s);
@@ -2109,7 +2115,7 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
     const bool dashStep =
         ::Mission::TutorialEpisodePolicy::IsDashNormalAction(st.action);
     switch (g_s.scriptStepPhase) {
-        case 0: {
+        case ScriptStepPhase::Prepare: {
             if (dashStep) {
                 if (!s.freezeActive) ++g_s.episodeTimer;
                 if (g_s.episodeTimer == 1) {
@@ -2123,7 +2129,7 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
                                 : btn == 'B' ? (low ? MOTION_2B : MOTION_5B)
                                              : (low ? MOTION_2A : MOTION_5A);
                     InjectDummyMoveLocked(m);
-                    g_s.scriptStepPhase = 1;
+                    g_s.scriptStepPhase = ScriptStepPhase::AwaitingMove;
                     g_s.episodeTimer = 0;
                 } else if (g_s.episodeTimer > 240) {
                     FailEpisodeLeaseLocked(
@@ -2142,18 +2148,18 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
             }
             if (ready) {
                 InjectDummyMoveLocked(ActionToMotion(st.action));
-                g_s.scriptStepPhase = 1;
+                g_s.scriptStepPhase = ScriptStepPhase::AwaitingMove;
                 g_s.episodeTimer = 0;
             }
             break;
         }
-        case 1: {
+        case ScriptStepPhase::AwaitingMove: {
             if (g_s.episodeTimer >= kEpisodeFreezeHold) ReleaseDummyFreezeLocked();
             if (!s.freezeActive) ++g_s.episodeTimer;
             if (::Mission::TutorialEpisodePolicy::IsScriptAttackInstanceEdge(
                     s.p2Move, s.p2FrameIdx,
                     g_s.epPrevP2Move, g_s.epPrevP2FrameIdx)) {
-                g_s.scriptStepPhase = 2;
+                g_s.scriptStepPhase = ScriptStepPhase::MoveActive;
                 g_s.episodeTimer = 0;
             } else if (g_s.episodeTimer > 240) {
                 ReleaseDummyFreezeLocked();
@@ -2163,7 +2169,7 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
             }
             break;
         }
-        case 2: {
+        case ScriptStepPhase::MoveActive: {
             const bool nextCancels =
                 g_s.episodeScriptStep + 1 < static_cast<int>(steps.size()) &&
                 steps[g_s.episodeScriptStep + 1].cancel;
@@ -2178,15 +2184,15 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
                     g_s.episodeTimer, cancelWait, s.freezeActive)) {
                 ReleaseDummyFreezeLocked();
                 ++g_s.episodeScriptStep;
-                g_s.scriptStepPhase = 0;
+                g_s.scriptStepPhase = ScriptStepPhase::Prepare;
                 g_s.episodeTimer = 0;
             } else if (!nextCancels && moveEnded) {
                 ReleaseDummyFreezeLocked();
                 if (postResolveWait <= 0) {
                     ++g_s.episodeScriptStep;
-                    g_s.scriptStepPhase = 0;
+                    g_s.scriptStepPhase = ScriptStepPhase::Prepare;
                 } else {
-                    g_s.scriptStepPhase = 3;
+                    g_s.scriptStepPhase = ScriptStepPhase::PostMoveWait;
                 }
                 g_s.episodeTimer = 0;
             }
@@ -2196,7 +2202,7 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
             if (!s.freezeActive) ++g_s.episodeTimer;
             if (g_s.episodeTimer >= (st.cancel ? 0 : st.waitTicks)) {
                 ++g_s.episodeScriptStep;
-                g_s.scriptStepPhase = 0;
+                g_s.scriptStepPhase = ScriptStepPhase::Prepare;
                 g_s.episodeTimer = 0;
             }
             break;
@@ -2207,42 +2213,42 @@ void DriveScriptLocked(const ::Mission::DummyEpisode* e,
 bool DriveTelegraphLocked(const ::Mission::DummyEpisode* e,
                           const ::Mission::Engine::Snapshot& s) {
     if (e->telegraph != "jump") return true;
-    if (g_s.episodeTelegraphPhase >= 3) return true;
+    if (g_s.episodeTelegraphPhase == TelegraphPhase::Done) return true;
     if (s.freezeActive) return false;
     ++g_s.episodeTelegraphTimer;
     const bool p2Idle = s.p2Move >= 0 && s.p2Move <= 3;
     switch (g_s.episodeTelegraphPhase) {
-        case 0:
+        case TelegraphPhase::PressHop:
             if (p2Idle && g_s.episodeTelegraphTimer >= 2) {
                 if (!PressDummyImmediateLocked(GAME_INPUT_UP, 3)) {
                     FailEpisodeLeaseLocked(
                         "The tutorial could not press the dummy's telegraph hop.");
                     return false;
                 }
-                g_s.episodeTelegraphPhase = 1;
+                g_s.episodeTelegraphPhase = TelegraphPhase::AwaitingAirborne;
                 g_s.episodeTelegraphTimer = 0;
             } else if (g_s.episodeTelegraphTimer >= 1152) {
-                g_s.episodeTelegraphPhase = 3;
+                g_s.episodeTelegraphPhase = TelegraphPhase::Done;
             }
             break;
-        case 1:
+        case TelegraphPhase::AwaitingAirborne:
             if (s.p2Move == PREJUMP_ID || s.p2Move == STRAIGHT_JUMP_ID) {
-                g_s.episodeTelegraphPhase = 2;
+                g_s.episodeTelegraphPhase = TelegraphPhase::AwaitingLanding;
                 g_s.episodeTelegraphTimer = 0;
             } else if (g_s.episodeTelegraphTimer >= kEpisodeDashMinTicks * 4) {
-                g_s.episodeTelegraphPhase = 3;
+                g_s.episodeTelegraphPhase = TelegraphPhase::Done;
             }
             break;
         default:
             if (!p2Idle) {
                 g_s.episodeTelegraphTimer = 0;
             } else if (g_s.episodeTelegraphTimer >= kEpisodeSettleTicks) {
-                g_s.episodeTelegraphPhase = 3;
+                g_s.episodeTelegraphPhase = TelegraphPhase::Done;
                 g_s.episodeTelegraphTimer = 0;
             }
             break;
     }
-    return g_s.episodeTelegraphPhase >= 3;
+    return g_s.episodeTelegraphPhase == TelegraphPhase::Done;
 }
 
 void DriveDashNormalLocked(const ::Mission::DummyEpisode* e,
@@ -2250,14 +2256,14 @@ void DriveDashNormalLocked(const ::Mission::DummyEpisode* e,
                            int cooldown) {
     if (!s.freezeActive) ++g_s.episodeTimer;
     switch (g_s.episodePhase) {
-        case 0:
+        case EpisodeDrivePhase::Start:
             if (g_s.episodeTimer == 1) {
                 (void)QueueDummyMotionLocked(MOTION_FORWARD_DASH, 0);
-                g_s.episodePhase = 1;
+                g_s.episodePhase = EpisodeDrivePhase::AwaitingDash;
                 g_s.episodeTimer = 0;
             }
             break;
-        case 1:
+        case EpisodeDrivePhase::AwaitingDash:
             if (!s.freezeActive &&
                 ::Mission::TutorialEpisodePolicy::IsForwardDashApproachState(
                     s.p2Move)) {
@@ -2268,7 +2274,7 @@ void DriveDashNormalLocked(const ::Mission::DummyEpisode* e,
                   : btn == 'B' ? (low ? MOTION_2B : MOTION_5B)
                                : (low ? MOTION_2A : MOTION_5A);
                 InjectDummyMoveLocked(motion);
-                g_s.episodePhase = 2;
+                g_s.episodePhase = EpisodeDrivePhase::AttackActive;
                 g_s.episodeTimer = 0;
             } else if (g_s.episodeTimer >= kEpisodeDashMinTicks * 4) {
                 FailEpisodeLeaseLocked(
@@ -2276,9 +2282,9 @@ void DriveDashNormalLocked(const ::Mission::DummyEpisode* e,
                 return;
             }
             break;
-        case 2:
+        case EpisodeDrivePhase::AttackActive:
             if (g_s.episodeTimer >= kEpisodeAttackTicks) {
-                g_s.episodePhase = 3;
+                g_s.episodePhase = EpisodeDrivePhase::Cooldown;
                 g_s.episodeTimer = 0;
             }
             break;
@@ -2294,18 +2300,18 @@ void DriveContactChainLocked(const ::Mission::DummyEpisode* e,
     static const int kMotions[] = {MOTION_5A, MOTION_5B, MOTION_2C};
     constexpr int kCount = static_cast<int>(sizeof(kMotions) / sizeof(kMotions[0]));
 
-    if (g_s.episodePhase == 0) {
+    if (g_s.episodePhase == EpisodeDrivePhase::Start) {
         if (!s.freezeActive && ++g_s.episodeTimer == 1) {
             InjectDummyMoveLocked(kMotions[0]);
             g_s.episodeChainIndex = 1;
             g_s.episodeContactFreezeSeen = false;
-            g_s.episodePhase = 1;
+            g_s.episodePhase = EpisodeDrivePhase::AwaitingContact;
             g_s.episodeTimer = 0;
         }
         return;
     }
 
-    if (g_s.episodePhase == 1) {
+    if (g_s.episodePhase == EpisodeDrivePhase::AwaitingContact) {
         if (s.freezeActive) {
             g_s.episodeContactFreezeSeen = true;
             return; // never advance a scripted input while the world is frozen
@@ -2317,7 +2323,7 @@ void DriveContactChainLocked(const ::Mission::DummyEpisode* e,
             if (g_s.episodeChainIndex < kCount) {
                 InjectDummyMoveLocked(kMotions[g_s.episodeChainIndex++]);
             } else {
-                g_s.episodePhase = 2;
+                g_s.episodePhase = EpisodeDrivePhase::Cooldown;
             }
             return;
         }
@@ -2339,23 +2345,23 @@ void DriveAttackSequenceLocked(const ::Mission::DummyEpisode* e, short p2Move,
     const bool p2Idle = p2Move >= 0 && p2Move <= 3;
     if (e->action == "jump") {
         switch (g_s.episodePhase) {
-            case 0:
+            case EpisodeDrivePhase::Start:
                 if (g_s.episodeTimer == 1) {
                     if (e->approach == "dash") (void)QueueDummyMotionLocked(MOTION_FORWARD_DASH, 0);
-                    else { g_s.episodePhase = 1; g_s.episodeTimer = 0; break; }
+                    else { g_s.episodePhase = EpisodeDrivePhase::Jumping; g_s.episodeTimer = 0; break; }
                 }
                 if (g_s.episodeTimer >= kEpisodeDashMinTicks && p2Idle) {
-                    g_s.episodePhase = 1; g_s.episodeTimer = 0;
+                    g_s.episodePhase = EpisodeDrivePhase::Jumping; g_s.episodeTimer = 0;
                 }
                 break;
-            case 1:
+            case EpisodeDrivePhase::Jumping:
                 if (g_s.episodeTimer == 1) {
                     const bool fr = GetPlayerFacingDirection(2);
                     (void)PressDummyImmediateLocked(GAME_INPUT_UP |
                         (fr ? GAME_INPUT_RIGHT : GAME_INPUT_LEFT), 3);
                 }
                 if (g_s.episodeTimer >= kEpisodeDashMinTicks && p2Idle) {
-                    g_s.episodePhase = 2; g_s.episodeTimer = 0;
+                    g_s.episodePhase = EpisodeDrivePhase::Cooldown; g_s.episodeTimer = 0;
                 }
                 break;
             default:
@@ -2368,43 +2374,43 @@ void DriveAttackSequenceLocked(const ::Mission::DummyEpisode* e, short p2Move,
     }
     if (IsAirAction(e->action)) {
         switch (g_s.episodePhase) {
-            case 0:
+            case EpisodeDrivePhase::Start:
                 if (g_s.episodeTimer == 1) {
                     if (e->approach == "dash") (void)QueueDummyMotionLocked(MOTION_FORWARD_DASH, 0);
-                    else { g_s.episodePhase = 1; g_s.episodeTimer = 0; break; }
+                    else { g_s.episodePhase = EpisodeDrivePhase::Jumping; g_s.episodeTimer = 0; break; }
                 }
-                if (g_s.episodeTimer >= kEpisodeDashMinTicks && p2Idle) { g_s.episodePhase = 1; g_s.episodeTimer = 0; }
+                if (g_s.episodeTimer >= kEpisodeDashMinTicks && p2Idle) { g_s.episodePhase = EpisodeDrivePhase::Jumping; g_s.episodeTimer = 0; }
                 break;
-            case 1: {
+            case EpisodeDrivePhase::Jumping: {
                 if (g_s.episodeTimer == 1) {
                     const bool fr = GetPlayerFacingDirection(2);
                     (void)PressDummyImmediateLocked(GAME_INPUT_UP | (fr ? GAME_INPUT_RIGHT : GAME_INPUT_LEFT), 3);
                 }
-                if (g_s.episodeTimer >= kJumpRiseTicks) { g_s.episodePhase = 2; g_s.episodeTimer = 0; }
+                if (g_s.episodeTimer >= kJumpRiseTicks) { g_s.episodePhase = EpisodeDrivePhase::AttackActive; g_s.episodeTimer = 0; }
                 break;
             }
-            case 2:
+            case EpisodeDrivePhase::AttackActive:
                 if (g_s.episodeTimer == 1)
                     (void)PressDummyImmediateLocked(DetermineButtonFromMotionType(motion), 3);
-                if (g_s.episodeTimer >= kEpisodeAttackTicks) { g_s.episodePhase = 3; g_s.episodeTimer = 0; }
+                if (g_s.episodeTimer >= kEpisodeAttackTicks) { g_s.episodePhase = EpisodeDrivePhase::Cooldown; g_s.episodeTimer = 0; }
                 break;
             default: if (g_s.episodeTimer >= cooldown) FinishEpisodeCycleLocked(e); break;
         }
         return;
     }
     switch (g_s.episodePhase) {
-        case 0:
+        case EpisodeDrivePhase::Start:
             if (g_s.episodeTimer == 1) {
                 if (e->approach == "dash") (void)QueueDummyMotionLocked(MOTION_FORWARD_DASH, 0);
                 else if (p2Idle) {
-                    g_s.episodePhase = 2;
+                    g_s.episodePhase = EpisodeDrivePhase::AwaitingAttack;
                     g_s.episodeTimer = 0;
                     break;
                 }
             }
             if (e->approach == "none") {
                 if (p2Idle) {
-                    g_s.episodePhase = 2;
+                    g_s.episodePhase = EpisodeDrivePhase::AwaitingAttack;
                     g_s.episodeTimer = 0;
                 } else if (g_s.episodeTimer >= 480) {
                     FailEpisodeLeaseLocked(
@@ -2412,33 +2418,33 @@ void DriveAttackSequenceLocked(const ::Mission::DummyEpisode* e, short p2Move,
                 }
                 break;
             }
-            if (g_s.episodeTimer >= kEpisodeDashMinTicks && p2Idle) { g_s.episodePhase = 1; g_s.episodeTimer = 0; }
+            if (g_s.episodeTimer >= kEpisodeDashMinTicks && p2Idle) { g_s.episodePhase = EpisodeDrivePhase::Settling; g_s.episodeTimer = 0; }
             break;
-        case 1:
-            if (g_s.episodeTimer >= kEpisodeSettleTicks) { g_s.episodePhase = 2; g_s.episodeTimer = 0; }
+        case EpisodeDrivePhase::Settling:
+            if (g_s.episodeTimer >= kEpisodeSettleTicks) { g_s.episodePhase = EpisodeDrivePhase::AwaitingAttack; g_s.episodeTimer = 0; }
             break;
-        case 2:
+        case EpisodeDrivePhase::AwaitingAttack:
             if (g_s.episodeTimer == 1) InjectDummyMoveLocked(motion);
             if (!e->expectedMoveIds.empty()) {
                 if (EpisodeExpectedAttack(e, p2Move)) {
                     ReleaseDummyFreezeLocked();
-                    g_s.episodePhase = 3;
+                    g_s.episodePhase = EpisodeDrivePhase::AttackActive;
                     g_s.episodeTimer = 0;
                 } else if (g_s.episodeTimer >= 480) {
                     FailEpisodeLeaseLocked(
                         "The dummy's scripted action was not recognized by the game.");
                 }
             } else if (g_s.episodeTimer >= kEpisodeAttackTicks) {
-                g_s.episodePhase = 3;
+                g_s.episodePhase = EpisodeDrivePhase::AttackActive;
                 g_s.episodeTimer = 0;
             }
             break;
-        case 3:
+        case EpisodeDrivePhase::AttackActive:
             if (!e->expectedMoveIds.empty()) {
                 if (p2Move >= 200) {
                     g_s.episodeTimer = 0;
                 } else {
-                    g_s.episodePhase = 4;
+                    g_s.episodePhase = EpisodeDrivePhase::Cooldown;
                     g_s.episodeTimer = 0;
                 }
                 break;
@@ -2454,7 +2460,7 @@ void DriveAttackSequenceLocked(const ::Mission::DummyEpisode* e, short p2Move,
 
 void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
     g_s.episodeCueBlockedThisTick = false;
-    if (!g_s.episodePlaying) return;
+    if (g_s.episodeStatus == EpisodeStatus::Stopped) return;
     const ::Mission::DummyEpisode* e = CurrentEpisodeLocked();
     if (!e || !EpisodeBehaviorReady(e)) {
         FailEpisodeLeaseLocked(
@@ -2473,7 +2479,7 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
         ::Mission::TutorialEpisodePolicy::UsesNativeWakeProducer(
             e->kind, e->start, e->trigger);
     if (cueBlocked && !nativeWakeProducer) return;
-    if (g_s.episodeFinished) return;
+    if (g_s.episodeStatus == EpisodeStatus::Finished) return;
     if (!DriveTelegraphLocked(e, s)) return;
     if (!e->script.empty()) {
         DriveScriptLocked(e, s);
@@ -2498,7 +2504,7 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
             FullCleanupAfterToggle(2);
         };
         switch (g_s.episodePhase) {
-            case 0: {
+            case EpisodeDrivePhase::Start: {
                 const char* trig = e->kind == "rg_answer" ? "onRG" : "afterBlock";
                 if (g_s.epPrevP2Move >= 0 &&
                     DummyTriggerEdge(trig, g_s.epPrevP2Move, s.p2Move) &&
@@ -2512,12 +2518,12 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
                     }
                     g_s.episodeAnswerRgMove = e->kind == "rg_answer"
                         ? s.p2Move : static_cast<short>(-1);
-                    g_s.episodePhase = 1;
+                    g_s.episodePhase = EpisodeDrivePhase::ReactionDelay;
                     g_s.episodeTimer = 0;
                 }
                 break;
             }
-            case 1: {
+            case EpisodeDrivePhase::ReactionDelay: {
                 ++g_s.episodeTimer;
                 const bool delaySatisfied = e->kind != "rg_answer" ||
                     ::Mission::TutorialEpisodePolicy::RecoilGuardAnswerDelaySatisfied(
@@ -2533,18 +2539,18 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
                     } else {
                         InjectDummyMoveLocked(answer);
                     }
-                    g_s.episodePhase = 2;
+                    g_s.episodePhase = EpisodeDrivePhase::AwaitingAttack;
                     g_s.episodeTimer = 0;
                 }
                 break;
             }
-            case 2: {
+            case EpisodeDrivePhase::AwaitingAttack: {
                 ++g_s.episodeTimer;
                 if (g_s.episodeTimer >= kEpisodeFreezeHold) ReleaseDummyFreezeLocked();
                 if (::Mission::TutorialEpisodePolicy::IsScriptAttackInstanceEdge(
                         s.p2Move, s.p2FrameIdx,
                         g_s.epPrevP2Move, g_s.epPrevP2FrameIdx)) {
-                    g_s.episodePhase = 3;
+                    g_s.episodePhase = EpisodeDrivePhase::AttackActive;
                     g_s.episodeTimer = 0;
                 } else if (g_s.episodeTimer >= 480) {
                     FailEpisodeLeaseLocked(
@@ -2555,13 +2561,13 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
                 }
                 break;
             }
-            case 3: {
+            case EpisodeDrivePhase::AttackActive: {
                 ++g_s.episodeTimer;
                 if (g_s.episodeTimer >= kEpisodeFreezeHold) ReleaseDummyFreezeLocked();
                 const bool actionDone = s.p2Move < 200 && g_s.episodeTimer > 12;
                 if (actionDone) {
                     releaseAnswerPuppet();
-                    g_s.episodePhase = 4;
+                    g_s.episodePhase = EpisodeDrivePhase::Cooldown;
                     g_s.episodeTimer = 0;
                 } else if (g_s.episodeTimer >= 480) {
                     releaseAnswerPuppet();
@@ -2597,14 +2603,14 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
         const int watch = PredicateMoveId(e->predicate);
         ++g_s.episodeTimer;
         switch (g_s.episodePhase) {
-            case 0:
-                if (s.p1Move == watch && g_s.prevMove != watch) { g_s.episodePhase = 1; g_s.episodeTimer = 0; }
+            case EpisodeDrivePhase::Start:
+                if (s.p1Move == watch && g_s.prevMove != watch) { g_s.episodePhase = EpisodeDrivePhase::ReactionDelay; g_s.episodeTimer = 0; }
                 break;
-            case 1:
+            case EpisodeDrivePhase::ReactionDelay:
                 if (g_s.episodeTimer >= e->reactDelay &&
                     s.p2Move >= 0 && s.p2Move <= 3) {
                     InjectDummyMoveLocked(motion);
-                    g_s.episodePhase = 2; g_s.episodeTimer = 0;
+                    g_s.episodePhase = EpisodeDrivePhase::Cooldown; g_s.episodeTimer = 0;
                 } else if (g_s.episodeTimer >= 1152) {
                     FailEpisodeLeaseLocked(
                         "The dummy never became free for its scripted response.");
@@ -2626,10 +2632,10 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
         g_s.epPrevP2Move = s.p2Move;
         ++g_s.episodeTimer;
         switch (g_s.episodePhase) {
-            case 0:
+            case EpisodeDrivePhase::Start:
                 if (edge ||
                     (nativeWake && EpisodeExpectedAttack(e, s.p2Move))) {
-                    g_s.episodePhase = 1;
+                    g_s.episodePhase = EpisodeDrivePhase::AwaitingAttack;
                     g_s.episodeTimer = 0;
                     if (!nativeWake &&
                         ::Mission::TutorialEpisodePolicy::CueStartsOnTrigger(
@@ -2640,10 +2646,10 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
                     }
                 }
                 break;
-            case 1:
+            case EpisodeDrivePhase::AwaitingAttack:
                 if (nativeWake) {
                     if (EpisodeExpectedAttack(e, s.p2Move)) {
-                        g_s.episodePhase = 2;
+                        g_s.episodePhase = EpisodeDrivePhase::AttackActive;
                         g_s.episodeTimer = 0;
                     } else if (g_s.episodeTimer >= 480) {
                         FailEpisodeLeaseLocked(
@@ -2652,12 +2658,12 @@ void TickEpisodeLocked(const ::Mission::Engine::Snapshot& s) {
                     }
                 } else {
                     InjectDummyMoveLocked(motion);
-                    g_s.episodePhase = 2;
+                    g_s.episodePhase = EpisodeDrivePhase::AttackActive;
                     g_s.episodeTimer = 0;
                 }
                 break;
             default:
-                if (nativeWake && g_s.episodePhase == 2 &&
+                if (nativeWake && g_s.episodePhase == EpisodeDrivePhase::AttackActive &&
                     EpisodeExpectedAttack(e, s.p2Move)) {
                     g_s.episodeTimer = 0;
                     break;
@@ -2745,7 +2751,7 @@ void ArmTaskLocked(int index, bool carryState = false) {
     g_s.sinceP2Wake = -1;
     g_s.metricsLive = false;
     g_s.waitingComboEnd = false;
-    g_s.branchPhase = 0;
+    g_s.branchPhase = ::Mission::TutorialStatePolicy::BranchPhase::Starter;
     g_s.branchSeqIndex = 0;
     g_s.branchTicks = 0;
     g_s.branchComboBase = 0;
@@ -2753,7 +2759,7 @@ void ArmTaskLocked(int index, bool carryState = false) {
     g_s.goalBlockSeen = false;
     g_s.sinceP2Whiff = -1;
     g_s.p1TouchedByP2Attack = false;
-    g_s.absencePhase = 0;
+    g_s.absencePhase = AbsencePhase::AwaitingWindow;
     g_s.absenceElapsed = 0;
     g_s.absenceDummyAttackSeen = false;
     g_s.absenceBlockCount = 0;
@@ -3234,10 +3240,10 @@ std::string TraceSampleLocked() {
         " armedMove=" + std::to_string(g_s.armedMove) +
         " seqGap=" + std::to_string(g_s.sequenceGapTicks) +
         " commitGrace=" + std::to_string(g_s.inputCommitGrace) +
-        " episode=" + std::to_string(g_s.episodePhase) + '/' +
+        " episode=" + std::to_string(static_cast<int>(g_s.episodePhase)) + '/' +
         std::to_string(g_s.episodeTimer) + '/' +
         std::to_string(g_s.episodeScriptStep) + '/' +
-        std::to_string(g_s.scriptStepPhase);
+        std::to_string(static_cast<int>(g_s.scriptStepPhase));
 }
 
 bool IsTraceRelevantMove(short move) {
@@ -3633,7 +3639,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
             !(IsHitstun(g_s.prevP2Move) || IsLaunched(g_s.prevP2Move));
         const bool p2BlockEdgeB = IsBlockstunState(s.p2Move) &&
                                   !IsBlockstunState(g_s.prevP2Move);
-        if (g_s.branchPhase == 0) {
+        if (g_s.branchPhase == ::Mission::TutorialStatePolicy::BranchPhase::Starter) {
             bool starter = false;
             if (instanceEdgeB) {
                 for (int id : t->branchStarterIds) {
@@ -3650,18 +3656,18 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
             }
             return;
         }
-        if (g_s.branchPhase == 3) {
+        if (g_s.branchPhase == ::Mission::TutorialStatePolicy::BranchPhase::AwaitingContact) {
             if (p2HitEdgeB) {
-                g_s.branchPhase = 1;
+                g_s.branchPhase = ::Mission::TutorialStatePolicy::BranchPhase::HitRoute;
                 g_s.branchSeqIndex = 0;
                 g_s.branchTicks = 0;
                 g_s.branchActionCommitted = false;
             } else if (p2BlockEdgeB) {
-                g_s.branchPhase = 2;
+                g_s.branchPhase = ::Mission::TutorialStatePolicy::BranchPhase::BlockHold;
                 g_s.branchTicks = 0;
             } else if (s.p1Move >= 0 && s.p1Move <= 3 &&
                        !s.freezeActive && ++g_s.branchTicks > 30) {
-                g_s.branchPhase = 0;
+                g_s.branchPhase = ::Mission::TutorialStatePolicy::BranchPhase::Starter;
                 g_s.branchTicks = 0;
                 g_s.feedbackSuccess = false;
                 g_s.feedbackText = "It whiffed - get closer and start again.";
@@ -3669,7 +3675,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
             }
             return;
         }
-        if (g_s.branchPhase == 1) {
+        if (g_s.branchPhase == ::Mission::TutorialStatePolicy::BranchPhase::HitRoute) {
             if (g_s.branchSeqIndex >= static_cast<int>(t->branchOnHit.size())) {
                 if (t->endsCombo && (s.p2InStun || s.p1Combo > 0)) {
                     g_s.waitingComboEnd = true;
@@ -3750,7 +3756,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
         return;
     }
     if (t->hasAbsence) {
-        if (g_s.absencePhase == 0) {
+        if (g_s.absencePhase == AbsencePhase::AwaitingWindow) {
             double p2Untech = 0.0;
             const bool opens = t->absenceStart == "taskArmed" ||
                 (t->absenceStart == "launched" &&
@@ -3759,7 +3765,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
                  ReadStateValue(2, "untech", p2Untech) &&
                  ::Mission::TutorialStatePolicy::IsUntechActive(p2Untech));
             if (opens) {
-                g_s.absencePhase = 1;
+                g_s.absencePhase = AbsencePhase::WindowOpen;
                 g_s.absenceElapsed = 0;
                 g_s.absenceDummyAttackSeen = false;
                 g_s.absenceBlockCount =
@@ -3807,7 +3813,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
                 instanceEdge, static_cast<int>(s.p1Move));
         }
         if (forbidden) {
-            g_s.absencePhase = 0;
+            g_s.absencePhase = AbsencePhase::AwaitingWindow;
             FailCurrentTaskLocked(*t, t->failureText.empty()
                 ? std::string("Hold still - this task is about NOT doing that.")
                 : t->failureText);
@@ -3815,7 +3821,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
         }
         if ((t->absenceFailOnHit || t->absenceEnd == "dummyAttackEnd") &&
             (IsHitstun(s.p1Move) || IsLaunched(s.p1Move) || IsThrown(s.p1Move))) {
-            g_s.absencePhase = 0;
+            g_s.absencePhase = AbsencePhase::AwaitingWindow;
             FailCurrentTaskLocked(*t, t->failureText.empty()
                 ? std::string("You were hit. Block the authored attack without pressing an attack.")
                 : t->failureText);
@@ -3843,7 +3849,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
                     if (y < 0.0) {
                         closed = true;
                     } else {
-                        g_s.absencePhase = 0;
+                        g_s.absencePhase = AbsencePhase::AwaitingWindow;
                         FailCurrentTaskLocked(*t,
                             "The dummy landed before the gauge expired. Hit the next jump higher and watch again.");
                         return;
@@ -3860,7 +3866,7 @@ void TickCombat(const ::Mission::Engine::Snapshot& s) {
             closed = g_s.absenceElapsed >= t->absenceTicks;
         }
         if (closed) {
-            g_s.absencePhase = 0;
+            g_s.absencePhase = AbsencePhase::AwaitingWindow;
             LogOut("[TUTORIAL][ABSENCE] closed lesson=" +
                        g_s.lesson.lessonId + " task=" + t->id +
                        " blocks=" + std::to_string(g_s.absenceBlockCount) +
@@ -4786,7 +4792,7 @@ void Tick(const ::Mission::Engine::Snapshot& s) {
             break;
         }
         case Phase::NeutralGate: {
-            if (!g_s.episodePlaying && CurrentEpisodeLocked()) {
+            if (g_s.episodeStatus == EpisodeStatus::Stopped && CurrentEpisodeLocked()) {
                 StartTaskEpisodeLocked();
                 if (g_s.phase == Phase::Error) break;
             }

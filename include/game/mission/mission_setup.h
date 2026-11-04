@@ -58,6 +58,7 @@ inline Verification Classify(Family family, const std::string& key) {
 }
 
 namespace DeferredPolicy {
+enum class Phase { Idle, AwaitingValues, AwaitingStateRestore };
 enum class SettleEffect {
     Wait,
     Fail,
@@ -69,11 +70,12 @@ enum class SettleEffect {
 // only the matching completion receipt may release values or a state restore.
 constexpr SettleEffect DecideSettle(bool timedOut, bool reloadBusy,
                                     bool inMatch, bool matchingReceipt,
-                                    bool applyValues) {
+                                    Phase phase) {
+    if (phase == Phase::Idle) return SettleEffect::Wait;
     if (timedOut) return SettleEffect::Fail;
     if (reloadBusy || !inMatch) return SettleEffect::Wait;
     if (!matchingReceipt) return SettleEffect::Fail;
-    return applyValues ? SettleEffect::ApplyValues
+    return phase == Phase::AwaitingValues ? SettleEffect::ApplyValues
                        : SettleEffect::ReleaseForStateRestore;
 }
 }

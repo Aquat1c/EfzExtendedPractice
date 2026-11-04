@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #include "../include/gui/custom_menu/screens.h"
 #include "../include/gui/custom_menu/sound.h"
 #include "../include/gui/custom_menu/renderer.h"
@@ -3100,8 +3101,7 @@ Row* BuildDebugLoggingRows(int& count) {
 }
 
 struct MissionTextEditorState {
-    bool active = false;
-    bool wantFocus = false;
+    GuiLifecycle::TextEditor lifecycle;
     bool multiline = false;
     const char* title = "MISSION TEXT";
     const char* help = "Enter the text shown in the mission browser.";
@@ -3116,8 +3116,7 @@ void OpenMissionTextEditor(const char* title, const char* help,
                            std::string* target, bool multiline,
                            std::size_t maxBytes) {
     if (!target) return;
-    g_missionTextEditor.active = true;
-    g_missionTextEditor.wantFocus = true;
+    g_missionTextEditor.lifecycle.Open();
     g_missionTextEditor.multiline = multiline;
     g_missionTextEditor.title = (title && *title) ? title : "MISSION TEXT";
     g_missionTextEditor.help = (help && *help)
@@ -3135,7 +3134,7 @@ void OpenMissionTextEditor(const char* title, const char* help,
 }
 
 void CloseMissionTextEditor(bool commit) {
-    if (!g_missionTextEditor.active) return;
+    if (!g_missionTextEditor.lifecycle.IsOpen()) return;
     if (g_missionTextEditor.target) {
         *g_missionTextEditor.target = commit
             ? std::string(g_missionTextEditor.buffer.data())
@@ -7402,8 +7401,7 @@ std::vector<std::string> g_macroUndoStack;
 std::vector<std::string> g_macroRedoStack;
 
 struct MacroTextEditorState {
-    bool active = false;
-    bool wantFocus = false;
+    GuiLifecycle::TextEditor lifecycle;
     std::vector<char> buffer;
 };
 MacroTextEditorState g_macroEditor;
@@ -7454,11 +7452,11 @@ void MacroReloadFromSlot() {
     g_macroLastSlot = slot;
     g_macroLastInclude = g_macroIncludeBuffers;
     g_macroForceReload = false;
-    if (g_macroEditor.active) MacroEnsureEditorBuffer(g_macroText);
+    if (g_macroEditor.lifecycle.IsOpen()) MacroEnsureEditorBuffer(g_macroText);
 }
 
 void MacroMaybeReloadText() {
-    if (g_macroEditor.active && !g_macroForceReload) return;
+    if (g_macroEditor.lifecycle.IsOpen() && !g_macroForceReload) return;
     const int slot = MacroController::GetCurrentSlot();
     if (g_macroForceReload || g_macroLastSlot != slot || g_macroLastInclude != g_macroIncludeBuffers) {
         MacroReloadFromSlot();
@@ -7472,7 +7470,7 @@ void MacroSetText(const std::string& text, bool pushUndo) {
     }
     g_macroText = text;
     g_macroApplyError.clear();
-    if (g_macroEditor.active) MacroEnsureEditorBuffer(g_macroText);
+    if (g_macroEditor.lifecycle.IsOpen()) MacroEnsureEditorBuffer(g_macroText);
 }
 
 void MacroApplyTextToSlot() {
@@ -7492,7 +7490,7 @@ void MacroApplyTextToSlot() {
     g_macroLastSlot = slot;
     g_macroLastInclude = g_macroIncludeBuffers;
     g_macroForceReload = false;
-    if (g_macroEditor.active) MacroEnsureEditorBuffer(g_macroText);
+    if (g_macroEditor.lifecycle.IsOpen()) MacroEnsureEditorBuffer(g_macroText);
     DirectDrawHook::AddMessage("Applied macro to slot", "MACRO", RGB(180, 255, 180), 1000, 0, 120);
 }
 
@@ -7567,8 +7565,7 @@ void OnMacroIncludeBuffers() {
 void MacroOpenEditor() {
     MacroMaybeReloadText();
     MacroEnsureEditorBuffer(g_macroText);
-    g_macroEditor.active = true;
-    g_macroEditor.wantFocus = true;
+    g_macroEditor.lifecycle.Open();
     Input::ResetEdges();
 }
 
@@ -7596,7 +7593,7 @@ void MacroUndo() {
     g_macroText = g_macroUndoStack.back();
     g_macroUndoStack.pop_back();
     g_macroApplyError.clear();
-    if (g_macroEditor.active) MacroEnsureEditorBuffer(g_macroText);
+    if (g_macroEditor.lifecycle.IsOpen()) MacroEnsureEditorBuffer(g_macroText);
 }
 void MacroRedo() {
     if (g_macroRedoStack.empty()) return;
@@ -7604,7 +7601,7 @@ void MacroRedo() {
     g_macroText = g_macroRedoStack.back();
     g_macroRedoStack.pop_back();
     g_macroApplyError.clear();
-    if (g_macroEditor.active) MacroEnsureEditorBuffer(g_macroText);
+    if (g_macroEditor.lifecycle.IsOpen()) MacroEnsureEditorBuffer(g_macroText);
 }
 void MacroCopy() {
     MacroMaybeReloadText();
@@ -7854,7 +7851,7 @@ Row* BuildMacrosRows(int& count) {
 }
 
 static bool InlineTextEditorActive() {
-    return g_macroEditor.active || g_missionTextEditor.active;
+    return g_macroEditor.lifecycle.IsOpen() || g_missionTextEditor.lifecycle.IsOpen();
 }
 
 bool IsTextEditorActive() {
@@ -7866,14 +7863,13 @@ bool IsRawVkEditorActive() {
 }
 
 void ResetTextEditor() {
-    g_macroEditor.active = false;
-    g_macroEditor.wantFocus = false;
+    g_macroEditor.lifecycle.Close();
     g_missionTextEditor = MissionTextEditorState{};
     CloseManualKeybindEditor();
 }
 
 bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
-    if (g_missionTextEditor.active) {
+    if (g_missionTextEditor.lifecycle.IsOpen()) {
         const CustomMenu::Scale::Metrics& metrics = CustomMenu::Scale::Get();
         const float marginX = CustomMenu::Scale::Snap(38.0f * metrics.layoutScale);
         const float bottomPad = CustomMenu::Scale::Snap(8.0f * metrics.layoutScale);
@@ -7905,9 +7901,9 @@ bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
                 strnlen_s(g_missionTextEditor.buffer.data(),
                           g_missionTextEditor.buffer.size()),
                 g_missionTextEditor.maxBytes);
-            if (g_missionTextEditor.wantFocus) {
+            if (g_missionTextEditor.lifecycle.NeedsFocus()) {
                 ImGui::SetKeyboardFocusHere();
-                g_missionTextEditor.wantFocus = false;
+                g_missionTextEditor.lifecycle.Focused();
             }
             if (g_missionTextEditor.multiline) {
                 const float editorH = (std::max)(100.0f,
@@ -7934,7 +7930,7 @@ bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
         ImGui::PopStyleVar(2);
         return true;
     }
-    if (!g_macroEditor.active) return false;
+    if (!g_macroEditor.lifecycle.IsOpen()) return false;
 
     const CustomMenu::Scale::Metrics& metrics = CustomMenu::Scale::Get();
     const float marginX = CustomMenu::Scale::Snap(38.0f * metrics.layoutScale);
@@ -7973,9 +7969,9 @@ bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
 
         const float buttonH = 28.0f;
         const float editorH = (std::max)(100.0f, ImGui::GetContentRegionAvail().y - buttonH - 10.0f);
-        if (g_macroEditor.wantFocus) {
+        if (g_macroEditor.lifecycle.NeedsFocus()) {
             ImGui::SetKeyboardFocusHere();
-            g_macroEditor.wantFocus = false;
+            g_macroEditor.lifecycle.Focused();
         }
         if (ImGui::InputTextMultiline("##macro_text_editor",
                                       g_macroEditor.buffer.data(),
@@ -7998,29 +7994,29 @@ bool TickMacroTextEditorIfActive(ImDrawList*, const ScreenLayout& layout) {
         ImGui::SameLine();
         if (ImGui::Button(I18n::Tr("Done"))) {
             g_macroText = g_macroEditor.buffer.data();
-            g_macroEditor.active = false;
+            g_macroEditor.lifecycle.Close();
             Input::ResetEdges();
         }
         ImGui::SameLine();
         if (ImGui::Button(I18n::Tr("Cancel"))) {
             MacroReloadFromSlot();
-            g_macroEditor.active = false;
+            g_macroEditor.lifecycle.Close();
             Input::ResetEdges();
         }
         ImGui::SameLine();
         if (ImGui::Button(I18n::Tr("Reload"))) {
             MacroReloadFromSlot();
-            g_macroEditor.wantFocus = true;
+            g_macroEditor.lifecycle.RequestFocus();
         }
         ImGui::SameLine();
         if (ImGui::Button(I18n::Tr("Sample"))) {
             MacroInsertSample();
-            g_macroEditor.wantFocus = true;
+            g_macroEditor.lifecycle.RequestFocus();
         }
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             g_macroText = g_macroEditor.buffer.data();
-            g_macroEditor.active = false;
+            g_macroEditor.lifecycle.Close();
             Input::ResetEdges();
         }
     }

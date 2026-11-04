@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #include "../include/gui/custom_menu/input.h"
 #include "../include/core/logger.h"
 #include "../include/utils/config.h"
@@ -203,37 +204,14 @@ CurState SampleCurrent() {
 constexpr unsigned int kRepeatDelayFrames    = 18;
 constexpr unsigned int kRepeatIntervalFrames = 4;
 
-struct HoldState {
-    unsigned int heldFrames = 0;
-    unsigned int framesSinceFire = 0;
-};
+using HoldState = GuiLifecycle::RepeatInput;
 HoldState g_holdUp;
 HoldState g_holdDown;
 HoldState g_holdLeft;
 HoldState g_holdRight;
 
 bool TickHoldRepeat(HoldState& s, bool nowPressed, bool risingEdge) {
-    if (!nowPressed) {
-        s.heldFrames = 0;
-        s.framesSinceFire = 0;
-        return false;
-    }
-    if (risingEdge) {
-        s.heldFrames = 1;
-        s.framesSinceFire = 0;
-        return true;
-    }
-    s.heldFrames++;
-    if (s.heldFrames < kRepeatDelayFrames) {
-        s.framesSinceFire++;
-        return false;
-    }
-    s.framesSinceFire++;
-    if (s.framesSinceFire >= kRepeatIntervalFrames) {
-        s.framesSinceFire = 0;
-        return true;
-    }
-    return false;
+    return s.Tick(nowPressed, risingEdge, kRepeatDelayFrames, kRepeatIntervalFrames);
 }
 
 bool AnyBlockedRawHeld(const CurState& raw) {
@@ -360,14 +338,14 @@ const Edges& SampleEdges() {
             raw.subTabPrev ? 1 : 0,
             raw.subTabNext ? 1 : 0,
             blockedRawHeld ? 1 : 0,
-            g_holdUp.heldFrames,
-            g_holdUp.framesSinceFire,
-            g_holdDown.heldFrames,
-            g_holdDown.framesSinceFire,
-            g_holdLeft.heldFrames,
-            g_holdLeft.framesSinceFire,
-            g_holdRight.heldFrames,
-            g_holdRight.framesSinceFire,
+            g_holdUp.HeldFrames(),
+            g_holdUp.FramesSinceFire(),
+            g_holdDown.HeldFrames(),
+            g_holdDown.FramesSinceFire(),
+            g_holdLeft.HeldFrames(),
+            g_holdLeft.FramesSinceFire(),
+            g_holdRight.HeldFrames(),
+            g_holdRight.FramesSinceFire(),
             cfg.controllerIndex,
             padSnapshot.connectedMask,
             padSnapshot.nativeMask,

@@ -883,6 +883,12 @@ if(BUILD_TESTING)
                      "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata/nanase.json"
                      "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata/nanase2.json")
 
+    add_executable(gui_lifecycle_state_tests tests/gui_lifecycle_state_tests.cpp)
+    target_include_directories(gui_lifecycle_state_tests PRIVATE include)
+    set_property(TARGET gui_lifecycle_state_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME gui_lifecycle_state_tests COMMAND gui_lifecycle_state_tests)
+
     find_program(EFZ_PYTHON_EXECUTABLE NAMES python python3)
     # tools/ is local-only except the build wrapper.
     if(EFZ_PYTHON_EXECUTABLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/pat_movedata/entity_census.py")

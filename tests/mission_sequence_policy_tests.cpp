@@ -305,17 +305,20 @@ int main() {
 
     using SetupEffect = Mission::Setup::DeferredPolicy::SettleEffect;
     using Mission::Setup::DeferredPolicy::DecideSettle;
-    Check(DecideSettle(false, true, false, false, true) == SetupEffect::Wait &&
-          DecideSettle(false, false, false, false, false) == SetupEffect::Wait,
+    using SetupPhase = Mission::Setup::DeferredPolicy::Phase;
+    Check(DecideSettle(true, false, true, true, SetupPhase::Idle) == SetupEffect::Wait,
+          "an idle setup cannot consume a stale completion receipt");
+    Check(DecideSettle(false, true, false, false, SetupPhase::AwaitingValues) == SetupEffect::Wait &&
+          DecideSettle(false, false, false, false, SetupPhase::AwaitingStateRestore) == SetupEffect::Wait,
           "deferred setup waits while reload owns the transaction or before Match");
-    Check(DecideSettle(false, false, true, false, true) == SetupEffect::Fail,
+    Check(DecideSettle(false, false, true, false, SetupPhase::AwaitingValues) == SetupEffect::Fail,
           "not-busy Match without a matching receipt is a failed reload");
-    Check(DecideSettle(false, false, true, true, true) == SetupEffect::ApplyValues,
+    Check(DecideSettle(false, false, true, true, SetupPhase::AwaitingValues) == SetupEffect::ApplyValues,
           "a matching receipt releases value setup");
-    Check(DecideSettle(false, false, true, true, false) ==
+    Check(DecideSettle(false, false, true, true, SetupPhase::AwaitingStateRestore) ==
               SetupEffect::ReleaseForStateRestore,
           "a matching receipt releases an embedded-state restore without value writes");
-    Check(DecideSettle(true, true, false, false, true) == SetupEffect::Fail,
+    Check(DecideSettle(true, true, false, false, SetupPhase::AwaitingValues) == SetupEffect::Fail,
           "deferred setup timeout remains terminal even while reload reports busy");
 
     using ResourceFamily = Mission::Setup::ResourcePolicy::Family;

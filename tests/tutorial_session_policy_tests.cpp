@@ -506,9 +506,9 @@ int main() {
           !StatePolicy::IsWithinWakeWindow(6, 5) &&
           !StatePolicy::IsWithinWakeWindow(-1, 5),
           "a five-tick meaty window rejects two full actionable visual frames");
-    Check(StatePolicy::BranchPhaseForOutcomeEdge(true, false) == 1 &&
-          StatePolicy::BranchPhaseForOutcomeEdge(false, true) == 2 &&
-          StatePolicy::BranchPhaseForOutcomeEdge(false, false) == 3,
+    Check(StatePolicy::BranchPhaseForOutcomeEdge(true, false) == StatePolicy::BranchPhase::HitRoute &&
+          StatePolicy::BranchPhaseForOutcomeEdge(false, true) == StatePolicy::BranchPhase::BlockHold &&
+          StatePolicy::BranchPhaseForOutcomeEdge(false, false) == StatePolicy::BranchPhase::AwaitingContact,
           "hit-confirm starter consumes same-snapshot hit/block edges instead of losing them");
 
     DemoResumeTarget target = DecideDemoResumeTarget(

@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -64,10 +65,8 @@ static ULONG_PTR s_gdiplusToken = 0;
 static std::vector<Frame> s_frames;
 static size_t s_index = 0;
 static double s_accum = 0.0;
-static bool s_inited = false;
-static bool s_loadRequested = false;
+static GuiLifecycle::GifLoad s_load;
 static bool s_requestedThisFrame = false;
-static DWORD s_lastFailedLoadTick = 0;
 
 static bool EnsureGdiplus() {
     if (s_gdiplusToken) return true;
@@ -122,18 +121,16 @@ static bool BitmapFrameToTexture(LPDIRECT3DDEVICE9 dev, Gdiplus::Bitmap* bmp, Fr
 }
 
 bool ShouldAttemptLoad() {
-    if (s_inited || !s_loadRequested) return false;
-    if (s_lastFailedLoadTick == 0) return true;
-    return (GetTickCount() - s_lastFailedLoadTick) >= 5000;
+    return s_load.ShouldAttempt(GetTickCount());
 }
 
 bool Initialize(LPDIRECT3DDEVICE9 dev) {
-    if (s_inited) return true;
+    if (s_load.IsReady()) return true;
     if (!dev || !ShouldAttemptLoad()) return false;
 
     const DWORD start = GetTickCount();
     auto fail = [&]() -> bool {
-        s_lastFailedLoadTick = GetTickCount();
+        s_load.Failed(GetTickCount());
         return false;
     };
 
@@ -176,9 +173,7 @@ bool Initialize(LPDIRECT3DDEVICE9 dev) {
         if (BitmapFrameToTexture(dev, clone.get(), f)) s_frames.push_back(std::move(f));
     }
     if (s_frames.empty()) return fail();
-    s_index = 0; s_accum = 0.0; s_inited = true;
-    s_loadRequested = false;
-    s_lastFailedLoadTick = 0;
+    s_index = 0; s_accum = 0.0; s_load.Loaded();
     LogOut("[GIF] Embedded GIF loaded: " + std::to_string(s_frames.size()) +
            " frames in " + std::to_string(GetTickCount() - start) + "ms", true);
     return true;
@@ -188,8 +183,7 @@ void ReleaseDeviceResources() {
     s_frames.clear();
     s_index = 0;
     s_accum = 0.0;
-    s_inited = false;
-    s_lastFailedLoadTick = 0;
+    s_load.Release();
 }
 
 void Shutdown() {
@@ -198,14 +192,12 @@ void Shutdown() {
         Gdiplus::GdiplusShutdown(s_gdiplusToken);
         s_gdiplusToken = 0;
     }
-    s_inited = false;
-    s_loadRequested = false;
+    s_load.Reset();
     s_requestedThisFrame = false;
-    s_lastFailedLoadTick = 0;
 }
 
 void Update(double dtSeconds) {
-    if (!s_inited || s_frames.empty()) return;
+    if (!s_load.IsReady() || s_frames.empty()) return;
     s_accum += dtSeconds * 1000.0;
     UINT delay = s_frames[s_index].delayMs;
     while (s_accum >= delay) {
@@ -216,9 +208,9 @@ void Update(double dtSeconds) {
 }
 
 IDirect3DTexture9* GetTexture(UINT& w, UINT& h) {
-    s_loadRequested = true;
+    s_load.Request();
     s_requestedThisFrame = true;
-    if (!s_inited || s_frames.empty()) return nullptr;
+    if (!s_load.IsReady() || s_frames.empty()) return nullptr;
     w = s_frames[s_index].w; h = s_frames[s_index].h;
     return s_frames[s_index].tex;
 }

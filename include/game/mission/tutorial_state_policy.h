@@ -47,8 +47,12 @@ inline bool IsWithinWakeWindow(int elapsedTicks, int maxTicks) {
     return maxTicks > 0 && elapsedTicks >= 0 && elapsedTicks <= maxTicks;
 }
 
-inline int BranchPhaseForOutcomeEdge(bool hitEdge, bool blockEdge) {
-    return hitEdge ? 1 : blockEdge ? 2 : 3;
+enum class BranchPhase { Starter, HitRoute, BlockHold, AwaitingContact };
+
+inline BranchPhase BranchPhaseForOutcomeEdge(bool hitEdge, bool blockEdge) {
+    return hitEdge ? BranchPhase::HitRoute
+                  : blockEdge ? BranchPhase::BlockHold
+                              : BranchPhase::AwaitingContact;
 }
 
 }

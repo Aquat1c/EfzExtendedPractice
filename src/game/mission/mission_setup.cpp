@@ -246,10 +246,9 @@ bool ValidateResourceKeys(int charId, bool p1,
     return true;
 }
 
-bool  g_pending = false;
+DeferredPolicy::Phase g_phase = DeferredPolicy::Phase::Idle;
 int   g_pendingTimeout = 0;
 ::Mission::Mission g_pendingMission;
-bool g_pendingApplyValues = false;
 int g_pendingP1SelectId = -1;
 int g_pendingP2SelectId = -1;
 int g_pendingStage = -1;
@@ -428,7 +427,7 @@ void Capture(::Mission::Mission& m) {
 
 bool Apply(const ::Mission::Mission& m, bool applyValues, bool forceFreshMatch,
            bool allowReload, bool acceptPreparedSession) {
-    if (g_pending) {
+    if (g_phase != DeferredPolicy::Phase::Idle) {
         g_failure = "another lesson start is still being prepared";
         LogOut("[MISSION][SETUP] rejected overlapping setup transaction", true);
         return false;
@@ -533,10 +532,10 @@ bool Apply(const ::Mission::Mission& m, bool applyValues, bool forceFreshMatch,
                 p1SelectId, p2SelectId, stage, requestedPalette, bgm);
         }
         if (queued) {
-            g_pending = true;
+            g_phase = applyValues ? DeferredPolicy::Phase::AwaitingValues
+                                  : DeferredPolicy::Phase::AwaitingStateRestore;
             g_pendingTimeout = 0;
             g_pendingMission = m;
-            g_pendingApplyValues = applyValues;
             g_pendingP1SelectId = p1SelectId;
             g_pendingP2SelectId = p2SelectId;
             g_pendingStage = stage;
@@ -575,12 +574,12 @@ bool Apply(const ::Mission::Mission& m, bool applyValues, bool forceFreshMatch,
 }
 
 void Tick() {
-    if (!g_pending) return;
+    if (g_phase == DeferredPolicy::Phase::Idle) return;
     const bool timedOut = ++g_pendingTimeout > 192 * 30;
     const bool busy = CharacterHotswap::IsBusy();
     const bool inMatch = GetCurrentGamePhase() == GamePhase::Match;
     if (timedOut) {
-        g_pending = false;
+        g_phase = DeferredPolicy::Phase::Idle;
         g_failure = "the character/stage reload did not settle before setup timed out";
         LogOut("[MISSION][SETUP] deferred apply timed out", true);
         return;
@@ -591,8 +590,8 @@ void Tick() {
         g_pendingP1SelectId, g_pendingP2SelectId, g_pendingStage,
         g_pendingPalette, g_pendingBgm);
     const auto effect = DeferredPolicy::DecideSettle(
-        false, false, true, receiptMatched, g_pendingApplyValues);
-    g_pending = false;
+        false, false, true, receiptMatched, g_phase);
+    g_phase = DeferredPolicy::Phase::Idle;
     if (effect == DeferredPolicy::SettleEffect::Fail) {
         g_failure = "the character/stage reload did not produce the requested match";
         LogOut("[MISSION][SETUP] deferred apply rejected: matching completion receipt missing",
@@ -609,17 +608,16 @@ void Tick() {
     if (!ApplyValues(g_pendingMission, error)) g_failure = error;
 }
 
-bool IsPending() { return g_pending; }
+bool IsPending() { return g_phase != DeferredPolicy::Phase::Idle; }
 
 void Cancel(const char* reason) {
-    if (g_pending) {
+    if (g_phase != DeferredPolicy::Phase::Idle) {
         LogOut(std::string("[MISSION][SETUP] pending transaction canceled") +
                (reason && *reason ? std::string(": ") + reason : std::string()), true);
     }
-    g_pending = false;
+    g_phase = DeferredPolicy::Phase::Idle;
     g_pendingTimeout = 0;
     g_pendingMission = ::Mission::Mission{};
-    g_pendingApplyValues = false;
     g_pendingP1SelectId = -1;
     g_pendingP2SelectId = -1;
     g_pendingStage = -1;

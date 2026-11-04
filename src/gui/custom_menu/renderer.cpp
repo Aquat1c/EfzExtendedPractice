@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #include "../include/gui/custom_menu/renderer.h"
 #include "../include/gui/custom_menu/anim.h"
 #include "../include/gui/custom_menu/fonts.h"
@@ -269,6 +270,7 @@ void MoveFocusAboveContent(const char* reason) {
 }
 
 struct AnimState {
+    GuiLifecycle::MenuFadePhase phase = GuiLifecycle::MenuFadePhase::Opening;
     DWORD openTick = 0;
     DWORD closeTick = 0;
     DWORD paneTick = 0;
@@ -338,6 +340,7 @@ void HandleSettingsQuickSave() {
 }
 
 void EndCloseAnimation() {
+    g_anim.phase = GuiLifecycle::MenuFadePhase::Opening;
     g_anim.closeTick = 0;
     Input::SetSuspended(false);
 }
@@ -347,7 +350,8 @@ void BeginCloseAnimation() {
         ImGuiImpl::ToggleVisibility();
         return;
     }
-    if (g_anim.closeTick == 0) {
+    if (g_anim.phase != GuiLifecycle::MenuFadePhase::Closing) {
+        g_anim.phase = GuiLifecycle::MenuFadePhase::Closing;
         g_anim.closeTick = Anim::NowTick();
         Input::SetSuspended(true);
     }
@@ -372,7 +376,7 @@ float CurrentPaneOffsetX() {
 }
 
 float CurrentFadeAlpha() {
-    return g_anim.closeTick != 0 ? 1.0f - AnimT(g_anim.closeTick, kFadeAnimMs)
+    return g_anim.phase == GuiLifecycle::MenuFadePhase::Closing ? 1.0f - AnimT(g_anim.closeTick, kFadeAnimMs)
                                  : AnimT(g_anim.openTick, kFadeAnimMs);
 }
 
@@ -1800,7 +1804,7 @@ void Render() {
     if (g_closeRequested.exchange(false, std::memory_order_relaxed)) {
         BeginCloseAnimation();
     }
-    if (g_anim.closeTick != 0 && AnimT(g_anim.closeTick, kFadeAnimMs) >= 1.0f) {
+    if (g_anim.phase == GuiLifecycle::MenuFadePhase::Closing && AnimT(g_anim.closeTick, kFadeAnimMs) >= 1.0f) {
         EndCloseAnimation();
         ImGuiImpl::ToggleVisibility();
         return;

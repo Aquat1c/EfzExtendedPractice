@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #include "../include/gui/imgui_impl.h"
 #include "compat/overlay_reset_api.h"
 #include "compat/overlay_context_scope.h"
@@ -31,9 +32,8 @@ namespace PracticeOverlayGate { void SetMenuVisible(bool); }
 
 extern std::atomic<bool> g_isShuttingDown;
 
-static std::atomic<bool> s_imguiInitInProgress{false};
+static GuiLifecycle::ImGuiInitialization g_imguiInitialization;
 
-static bool g_imguiInitialized = false;
 static ImGuiContext* g_imguiContext = nullptr;
 static DWORD g_imguiContextThread = 0;
 static std::atomic<DWORD> g_imguiWorkThread{0};
@@ -74,10 +74,7 @@ private:
 };
 static HWND g_imguiHostWindow = nullptr;
 static bool g_externalFallbackHost = false;
-static std::atomic<bool> g_externalFallbackThreadRunning{false};
-static std::atomic<bool> g_externalFallbackReady{false};
-static std::atomic<bool> g_externalFallbackInitFailed{false};
-static std::atomic<bool> g_externalFallbackExit{false};
+static GuiLifecycle::FallbackWorker g_externalFallback;
 static HWND g_externalFallbackWindow = nullptr;
 static const char* kFallbackWindowClassName = "EFZ_TM_IMGUI_FALLBACK";
 
@@ -98,7 +95,7 @@ HRESULT __cdecl BeforeOverlayReset(void* device, uint32_t epoch) {
     const auto result = g_resetGate.BeforeReset(device, epoch, GetCurrentThreadId(), invalidate);
     if (result != EfzOverlayResetGate::Result::Ok) return ResetGateResult(result);
     if (invalidate) {
-        if (!g_imguiContext || !g_imguiInitialized) return E_UNEXPECTED;
+        if (!g_imguiContext || !g_imguiInitialization.IsReady()) return E_UNEXPECTED;
         EfzScopedImGuiContext context(g_imguiContext);
         // InvalidateDeviceObjects clears VB/IB/font pointers only; the context
         // and WndProc chain must survive the reset.
@@ -117,7 +114,7 @@ HRESULT __cdecl AfterOverlayReset(void* device, uint32_t epoch, uint32_t ready) 
     if (!ready) return S_OK;
     if (g_resetGate.BoundDevice() == device) {
         if (!g_resetGate.BackendInvalidatedFor(device)) return HRESULT_FROM_WIN32(ERROR_BUSY);
-        if (!g_imguiContext || !g_imguiInitialized) return E_UNEXPECTED;
+        if (!g_imguiContext || !g_imguiInitialization.IsReady()) return E_UNEXPECTED;
         const HRESULT cooperative = static_cast<IDirect3DDevice9*>(device)->TestCooperativeLevel();
         if (cooperative != D3D_OK) return cooperative;
         EfzScopedImGuiContext context(g_imguiContext);
@@ -725,7 +722,7 @@ LRESULT CALLBACK ImGuiWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             ? CallWindowProc(original, hWnd, msg, wParam, lParam)
             : DefWindowProc(hWnd, msg, wParam, lParam);
     };
-    if (!input.Admitted() || !g_imguiInitialized || !TrainingUiInputActive()) {
+    if (!input.Admitted() || !g_imguiInitialization.IsReady() || !TrainingUiInputActive()) {
         return forward();
     }
 
@@ -759,7 +756,7 @@ LRESULT CALLBACK FallbackWindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
         return 0;
     }
 
-    if (g_imguiInitialized && g_externalFallbackHost) {
+    if (g_imguiInitialization.IsReady() && g_externalFallbackHost) {
         const LRESULT handled = ImGuiImpl::WndProc(hWnd, msg, wParam, lParam);
         if (handled != 0) {
             return handled;
@@ -891,7 +888,7 @@ namespace ImGuiImpl {
     namespace {
         bool InitializeForHost(IDirect3DDevice9* device, HWND hostWindow, bool hookWndProc, bool externalFallback) {
             if (!g_resetGate.CanRender(device, GetCurrentThreadId())) return false;
-            if (g_imguiInitialized) {
+            if (g_imguiInitialization.IsReady()) {
                 if (g_externalFallbackHost != externalFallback || g_imguiHostWindow != hostWindow)
                     return false;
                 if (g_d3dDevice == device) return true;
@@ -904,26 +901,19 @@ namespace ImGuiImpl {
                 return g_resetGate.BindBackend(device, GetCurrentThreadId());
             }
 
-            bool expected = false;
-            if (!s_imguiInitInProgress.compare_exchange_strong(expected, true)) {
+            if (!g_imguiInitialization.TryBegin()) {
                 return false;
-            }
-
-            if (g_imguiInitialized) {
-                s_imguiInitInProgress.store(false);
-                return g_externalFallbackHost == externalFallback
-                    && g_d3dDevice == device && g_imguiHostWindow == hostWindow;
             }
 
             if (!device) {
                 LogOut("[IMGUI] Error: No valid D3D device provided", true);
-                s_imguiInitInProgress.store(false);
+                g_imguiInitialization.Finish(false);
                 return false;
             }
 
             if (!hostWindow) {
                 LogOut("[IMGUI] Error: No valid host window for ImGui", true);
-                s_imguiInitInProgress.store(false);
+                g_imguiInitialization.Finish(false);
                 return false;
             }
 
@@ -969,7 +959,7 @@ namespace ImGuiImpl {
                 g_d3dDevice = nullptr;
                 g_imguiHostWindow = nullptr;
                 g_externalFallbackHost = false;
-                s_imguiInitInProgress.store(false);
+                g_imguiInitialization.Finish(false);
                 return false;
             }
 
@@ -982,7 +972,7 @@ namespace ImGuiImpl {
                 g_d3dDevice = nullptr;
                 g_imguiHostWindow = nullptr;
                 g_externalFallbackHost = false;
-                s_imguiInitInProgress.store(false);
+                g_imguiInitialization.Finish(false);
                 return false;
             }
 
@@ -1009,7 +999,7 @@ namespace ImGuiImpl {
                     g_d3dDevice = nullptr;
                     g_imguiHostWindow = nullptr;
                     g_externalFallbackHost = false;
-                    s_imguiInitInProgress.store(false);
+                    g_imguiInitialization.Finish(false);
                     return false;
                 }
             }
@@ -1020,9 +1010,8 @@ namespace ImGuiImpl {
 
             ImGuiGui::Initialize();
 
-            g_imguiInitialized = true;
             g_resetGate.BindBackend(device, GetCurrentThreadId());
-            s_imguiInitInProgress.store(false);
+            g_imguiInitialization.Finish(true);
             LogOut(std::string("[IMGUI] ImGui initialized successfully for ") + (externalFallback ? "fallback window" : "game window"), true);
             return true;
         }
@@ -1113,9 +1102,6 @@ namespace ImGuiImpl {
         }
 
         void RunFallbackWindowThread() {
-            g_externalFallbackThreadRunning.store(true, std::memory_order_release);
-            g_externalFallbackReady.store(false, std::memory_order_release);
-            g_externalFallbackInitFailed.store(false, std::memory_order_release);
 
             const HINSTANCE instance = GetModuleHandleA(nullptr);
             WNDCLASSA wc = {};
@@ -1128,8 +1114,7 @@ namespace ImGuiImpl {
                 DWORD le = GetLastError();
                 if (le != ERROR_CLASS_ALREADY_EXISTS) {
                     LogOut("[IMGUI] Failed to register fallback window class", true);
-                    g_externalFallbackInitFailed.store(true, std::memory_order_release);
-                    g_externalFallbackThreadRunning.store(false, std::memory_order_release);
+                    g_externalFallback.Finish(true);
                     return;
                 }
             }
@@ -1152,9 +1137,8 @@ namespace ImGuiImpl {
                 nullptr);
             if (!hwnd) {
                 LogOut("[IMGUI] Failed to create fallback window", true);
-                g_externalFallbackInitFailed.store(true, std::memory_order_release);
-                g_externalFallbackThreadRunning.store(false, std::memory_order_release);
                 UnregisterClassA(kFallbackWindowClassName, instance);
+                g_externalFallback.Finish(true);
                 return;
             }
             g_externalFallbackWindow = hwnd;
@@ -1164,9 +1148,8 @@ namespace ImGuiImpl {
                 LogOut("[IMGUI] Failed to create D3D9 object for fallback window", true);
                 DestroyWindow(hwnd);
                 g_externalFallbackWindow = nullptr;
-                g_externalFallbackInitFailed.store(true, std::memory_order_release);
-                g_externalFallbackThreadRunning.store(false, std::memory_order_release);
                 UnregisterClassA(kFallbackWindowClassName, instance);
+                g_externalFallback.Finish(true);
                 return;
             }
 
@@ -1190,9 +1173,8 @@ namespace ImGuiImpl {
                 d3d9->Release();
                 DestroyWindow(hwnd);
                 g_externalFallbackWindow = nullptr;
-                g_externalFallbackInitFailed.store(true, std::memory_order_release);
-                g_externalFallbackThreadRunning.store(false, std::memory_order_release);
                 UnregisterClassA(kFallbackWindowClassName, instance);
+                g_externalFallback.Finish(true);
                 return;
             }
 
@@ -1208,15 +1190,14 @@ namespace ImGuiImpl {
                 d3d9->Release();
                 DestroyWindow(hwnd);
                 g_externalFallbackWindow = nullptr;
-                g_externalFallbackInitFailed.store(true, std::memory_order_release);
-                g_externalFallbackThreadRunning.store(false, std::memory_order_release);
                 UnregisterClassA(kFallbackWindowClassName, instance);
+                g_externalFallback.Finish(true);
                 return;
             }
 
             ShowWindow(hwnd, SW_HIDE);
             UpdateWindow(hwnd);
-            g_externalFallbackReady.store(true, std::memory_order_release);
+            (void)g_externalFallback.PublishReady();
             int idleFrames = 0;
             int notResetCount = 0;
             // Caller holds a DeviceRenderScope. The DX9 backend owns a device
@@ -1231,18 +1212,18 @@ namespace ImGuiImpl {
                 d3d9 = nullptr;
             };
 
-            while (!g_externalFallbackExit.load(std::memory_order_acquire) && !g_isShuttingDown.load(std::memory_order_relaxed)) {
+            while (!g_externalFallback.StopRequested() && !g_isShuttingDown.load(std::memory_order_relaxed)) {
                 MSG msg;
                 while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
                     if (msg.message == WM_QUIT) {
-                        g_externalFallbackExit.store(true, std::memory_order_release);
+                        g_externalFallback.RequestStop();
                         break;
                     }
                     TranslateMessage(&msg);
                     DispatchMessage(&msg);
                 }
 
-                if (g_externalFallbackExit.load(std::memory_order_acquire) || g_isShuttingDown.load(std::memory_order_relaxed)) {
+                if (g_externalFallback.StopRequested() || g_isShuttingDown.load(std::memory_order_relaxed)) {
                     break;
                 }
 
@@ -1334,24 +1315,21 @@ namespace ImGuiImpl {
                 device->Present(nullptr, nullptr, nullptr, nullptr);
             }
 
-            g_externalFallbackReady.store(false, std::memory_order_release);
+            g_externalFallback.RequestStop();
             // Shutdown try-locks the reset gate; a game-thread admission probe can hold it briefly.
             // A released host must not outlive its thread, so retry until it is gone unless the process is exiting.
-            for (unsigned attempt = 0; g_imguiInitialized && g_externalFallbackHost
+            for (unsigned attempt = 0; g_imguiInitialization.IsReady() && g_externalFallbackHost
                     && (attempt < 200 || !g_isShuttingDown.load(std::memory_order_relaxed)); ++attempt) {
                 Shutdown();
-                if (g_imguiInitialized && g_externalFallbackHost) Sleep(1);
+                if (g_imguiInitialization.IsReady() && g_externalFallbackHost) Sleep(1);
             }
 
             if (device) device->Release();
             if (d3d9) d3d9->Release();
             DestroyWindow(hwnd);
             g_externalFallbackWindow = nullptr;
-            g_externalFallbackReady.store(false, std::memory_order_release);
-            g_externalFallbackInitFailed.store(false, std::memory_order_release);
-            g_externalFallbackExit.store(false, std::memory_order_release);
-            g_externalFallbackThreadRunning.store(false, std::memory_order_release);
             UnregisterClassA(kFallbackWindowClassName, instance);
+            g_externalFallback.Finish(false);
         }
     }
 
@@ -1363,7 +1341,7 @@ namespace ImGuiImpl {
     }
 
     bool IsBoundToDevice(IDirect3DDevice9* device) {
-        return g_imguiInitialized && g_imguiContext && g_d3dDevice == device
+        return g_imguiInitialization.IsReady() && g_imguiContext && g_d3dDevice == device
             && !g_externalFallbackHost;
     }
     
@@ -1372,7 +1350,7 @@ namespace ImGuiImpl {
         if (!access.Acquired()
             || (g_imguiContext && g_imguiContextThread != GetCurrentThreadId()))
             return;
-        if (!g_imguiInitialized)
+        if (!g_imguiInitialization.IsReady())
             return;
 
         EfzScopedImGuiContext context(g_imguiContext);
@@ -1402,7 +1380,7 @@ namespace ImGuiImpl {
         g_lastFontScaleApplied = 0.0f;
         g_lastFontModeApplied = -1;
 
-        g_imguiInitialized = false;
+        g_imguiInitialization.Finish(false);
         g_imguiVisible = false;
         g_d3dDevice = nullptr;
         g_originalWndProc.store(nullptr, std::memory_order_release);
@@ -1413,7 +1391,7 @@ namespace ImGuiImpl {
 
     bool DetachWndProc() {
         const WNDPROC originalWndProc = g_originalWndProc.load(std::memory_order_acquire);
-        if (!g_imguiInitialized || g_externalFallbackHost
+        if (!g_imguiInitialization.IsReady() || g_externalFallbackHost
             || !g_wndProcAttached.load(std::memory_order_acquire) || !originalWndProc) {
             return false;
         }
@@ -1445,7 +1423,7 @@ namespace ImGuiImpl {
     }
 
     bool AttachWndProc() {
-        if (!g_imguiInitialized || g_externalFallbackHost) {
+        if (!g_imguiInitialization.IsReady() || g_externalFallbackHost) {
             return false;
         }
         HWND hostWindow = g_imguiHostWindow;
@@ -1494,7 +1472,7 @@ namespace ImGuiImpl {
     }
 
     bool IsInitialized() {
-        return g_imguiInitialized && g_d3dDevice;
+        return g_imguiInitialization.IsReady() && g_d3dDevice;
     }
 
     bool ShowFallbackWindow() {
@@ -1503,7 +1481,7 @@ namespace ImGuiImpl {
             return false;
         }
 
-        if (g_externalFallbackReady.load(std::memory_order_acquire) && g_externalFallbackHost) {
+        if (g_externalFallback.IsReady() && g_externalFallbackHost) {
             if (!g_imguiVisible) {
                 SetVisibilityInternal(true);
             } else if (g_externalFallbackWindow && IsWindow(g_externalFallbackWindow)) {
@@ -1513,19 +1491,23 @@ namespace ImGuiImpl {
             return true;
         }
 
-        if (!g_externalFallbackThreadRunning.load(std::memory_order_acquire)) {
-            g_externalFallbackExit.store(false, std::memory_order_release);
-            std::thread(RunFallbackWindowThread).detach();
+        if (g_externalFallback.TryStart()) {
+            try {
+                std::thread(RunFallbackWindowThread).detach();
+            } catch (const std::exception&) {
+                g_externalFallback.Finish(true);
+                return false;
+            }
         }
 
         const DWORD start = GetTickCount();
-        while (!g_externalFallbackReady.load(std::memory_order_acquire)
-            && !g_externalFallbackInitFailed.load(std::memory_order_acquire)
+        while (!g_externalFallback.IsReady()
+            && !g_externalFallback.HasFailed()
             && (GetTickCount() - start) < 3000) {
             Sleep(10);
         }
 
-        if (!g_externalFallbackReady.load(std::memory_order_acquire)) {
+        if (!g_externalFallback.IsReady()) {
             LogOut("[IMGUI] Fallback window did not become ready", true);
             return false;
         }
@@ -1539,18 +1521,18 @@ namespace ImGuiImpl {
     }
 
     bool ReleaseExternalFallbackHost(DWORD timeoutMs) {
-        if (!g_externalFallbackHost) return true;
+        if (!g_externalFallbackHost && !g_externalFallback.IsRunning()) return true;
         // The fallback thread shuts ImGui down itself; it cannot wait for its own exit.
         if (g_imguiVisible || g_imguiContextThread == GetCurrentThreadId()) return false;
-        if (g_externalFallbackThreadRunning.load(std::memory_order_acquire)) {
-            g_externalFallbackExit.store(true, std::memory_order_release);
+        if (g_externalFallback.IsRunning()) {
+            g_externalFallback.RequestStop();
             const DWORD start = GetTickCount();
-            while (g_externalFallbackThreadRunning.load(std::memory_order_acquire)
+            while (g_externalFallback.IsRunning()
                 && (GetTickCount() - start) < timeoutMs) {
                 Sleep(10);
             }
         }
-        return !g_externalFallbackThreadRunning.load(std::memory_order_acquire)
+        return !g_externalFallback.IsRunning()
             && !g_externalFallbackHost;
     }
     
@@ -1582,7 +1564,7 @@ namespace ImGuiImpl {
     
     LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         DeviceRenderScope input;
-        if (!input.Admitted() || !g_imguiInitialized || !TrainingUiInputActive()) return 0;
+        if (!input.Admitted() || !g_imguiInitialization.IsReady() || !TrainingUiInputActive()) return 0;
         ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
 
         if (g_imguiVisible) {
@@ -1597,7 +1579,7 @@ namespace ImGuiImpl {
     }
     
     void PreNewFrameInputs() {
-        if (!g_imguiInitialized || g_isShuttingDown.load()) return;
+        if (!g_imguiInitialization.IsReady() || g_isShuttingDown.load()) return;
         if (!ImGui::GetCurrentContext()) return;
 
         ImGuiIO& io = ImGui::GetIO();
@@ -1662,7 +1644,7 @@ namespace ImGuiImpl {
     void RenderFrame() {
         DeviceRenderScope render;
         if (!render.Admitted()) return;
-        if (!g_imguiInitialized || !g_d3dDevice || g_isShuttingDown.load()) {
+        if (!g_imguiInitialization.IsReady() || !g_d3dDevice || g_isShuttingDown.load()) {
             return;
         }
 
