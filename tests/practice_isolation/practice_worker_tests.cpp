@@ -48,4 +48,11 @@ int main(){
     Practice::RequestMonitorStop();
     CHECK(Practice::MonitorStopRequested());
     CHECK(Practice::WaitForMonitorSignal()==Practice::MonitorWait::Stopped);
+    Practice::RecordMonitorFailure();
+    CHECK(Practice::ReadMonitorStatus().waitFaulted);
+    CHECK(Practice::WaitForMonitorSignal(0)==Practice::MonitorWait::Failed);
+    Practice::RequestMonitorStop();
+    CHECK(Practice::MonitorStopRequested());
+    CHECK(Practice::WaitForMonitorSignal(0)==Practice::MonitorWait::Failed);
+    CHECK(!Practice::WaitForRetirementProgress());
 FailedTrainingTimerNeverReleasesANativeRequest();SuccessfulIntervalsPairOnceAndRestorePriorPriority();FailedReleaseRetainsTheExactOutstandingLease();FailedPriorityRestoreCannotWriteAReplacementThread();return failures?1:0;}

@@ -225,8 +225,8 @@ static int GetWakeupRisingTicks(int charID) {
     return VisualFramesToInternalTicks(20);
 }
 
-TriggerDelayState p1DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
-TriggerDelayState p2DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
+TriggerDelayState p1DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
+TriggerDelayState p2DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
 bool p1ActionApplied = false;
 bool p2ActionApplied = false;
 
@@ -522,7 +522,9 @@ void EndWakeMacroCleanup(int playerNum) {
 }
 }
 
+enum class DashFollowPhase { Idle, WaitingDash, AwaitingNormal };
 struct DashFollowDeferred {
+    std::atomic<DashFollowPhase> phase{DashFollowPhase::Idle};
     std::atomic<int> pendingSel{0};
     std::atomic<int> player{0};
     std::atomic<int> isBack{0};
@@ -596,7 +598,7 @@ static void EnsureCachedCharacterIDs(uintptr_t base) {
 static void ScheduleForwardDashFollowup(int playerNum, int sel,
                                         bool,
                                         uint64_t motionGeneration = 0) {
-    if (g_dashDeferred.pendingSel.load() > 0) {
+    if (g_dashDeferred.phase.load() != DashFollowPhase::Idle) {
         LogOut(std::string("[AUTO-ACTION] Forward dash follow-up schedule ignored; pending sel=") + std::to_string(g_dashDeferred.pendingSel.load()), true);
         return;
     }
@@ -607,12 +609,13 @@ static void ScheduleForwardDashFollowup(int playerNum, int sel,
     g_dashDeferred.normalGeneration.store(0);
     g_dashDeferred.normalDispatchAttempts.store(0);
     g_dashDeferred.expiryFrame.store(frameCounter.load() + 180);
+    g_dashDeferred.phase.store(DashFollowPhase::WaitingDash);
     LogOut(std::string("[AUTO-ACTION] Forward dash follow-up armed (sel=") + std::to_string(sel) + ")", true);
 }
 
 static void ScheduleBackDashFollowup(int playerNum, int sel,
                                      uint64_t motionGeneration = 0) {
-    if (g_dashDeferred.pendingSel.load() > 0) {
+    if (g_dashDeferred.phase.load() != DashFollowPhase::Idle) {
         LogOut(std::string("[AUTO-ACTION] Backdash follow-up schedule ignored; pending sel=") + std::to_string(g_dashDeferred.pendingSel.load()), true);
         return;
     }
@@ -623,12 +626,13 @@ static void ScheduleBackDashFollowup(int playerNum, int sel,
     g_dashDeferred.normalGeneration.store(0);
     g_dashDeferred.normalDispatchAttempts.store(0);
     g_dashDeferred.expiryFrame.store(frameCounter.load() + 180);
+    g_dashDeferred.phase.store(DashFollowPhase::WaitingDash);
     LogOut(std::string("[AUTO-ACTION] Backdash follow-up armed (sel=") + std::to_string(sel) + ")", true);
 }
 
 static void ProcessDeferredDashFollowups(short curP1, short prevP1, short curP2, short prevP2) {
+    if (g_dashDeferred.phase.load() == DashFollowPhase::Idle) return;
     int sel = g_dashDeferred.pendingSel.load();
-    if (sel <= 0) return;
     int targetP = g_dashDeferred.player.load();
     const uint64_t motionGeneration =
         g_dashDeferred.motionGeneration.load(std::memory_order_acquire);
@@ -678,7 +682,7 @@ static void ProcessDeferredDashFollowups(short curP1, short prevP1, short curP2,
     const bool backDashStart = back &&
         (curr == GROUND_BACKWARD_DASH_ID || curr == AIR_BACKWARD_DASH_ID);
 
-    if (normalGeneration != 0) {
+    if (g_dashDeferred.phase.load() == DashFollowPhase::AwaitingNormal) {
         const AutoActionNormalPulseOutcome outcome =
             GetAutoActionNormalPulseOutcome(targetP, normalGeneration);
         if (outcome == AutoActionNormalPulseOutcome::Pending) return;
@@ -700,6 +704,7 @@ static void ProcessDeferredDashFollowups(short curP1, short prevP1, short curP2,
             g_dashDeferred.normalDispatchAttempts.load(
                 std::memory_order_acquire);
         g_dashDeferred.normalGeneration.store(0, std::memory_order_release);
+        g_dashDeferred.phase.store(DashFollowPhase::WaitingDash, std::memory_order_release);
         if (attempts >= kMaxAutoActionDispatchAttempts ||
             (!forwardDashStart && !backDashStart)) {
             LogOut("[AUTO-ACTION] Dash-normal was not consumed and its retry window closed",
@@ -787,6 +792,7 @@ static void ProcessDeferredDashFollowups(short curP1, short prevP1, short curP2,
             
             g_dashDeferred.normalGeneration.store(
                 generation, std::memory_order_release);
+            g_dashDeferred.phase.store(DashFollowPhase::AwaitingNormal, std::memory_order_release);
             g_dashDeferred.normalDispatchAttempts.fetch_add(
                 1, std::memory_order_acq_rel);
         } else if (submit == NormalInputPolicy::SubmitResult::Busy) {
@@ -806,6 +812,7 @@ static std::atomic<bool> g_recentDashQueued(false);
 static std::atomic<int> g_recentDashQueuedFrame(0);
 
 static void ResetDeferredDashFollowupState() {
+    g_dashDeferred.phase.store(DashFollowPhase::Idle, std::memory_order_release);
     g_dashDeferred.pendingSel.store(0, std::memory_order_release);
     g_dashDeferred.player.store(0, std::memory_order_release);
     g_dashDeferred.isBack.store(0, std::memory_order_release);
@@ -855,10 +862,8 @@ static uint64_t s_p1WakeNormalGeneration = 0;
 static uint64_t s_p2WakeNormalGeneration = 0;
 static int s_p1WakeNormalAttempts = 0;
 static int s_p2WakeNormalAttempts = 0;
-static bool s_p1WakeHoldPrimed = false;
-static bool s_p2WakeHoldPrimed = false;
-static bool s_p1WakeHoldIssued = false;
-static bool s_p2WakeHoldIssued = false;
+static WakeHoldPhase s_p1WakeHoldPhase = WakeHoldPhase::Disabled;
+static WakeHoldPhase s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
 static int  s_p1WakeMacro96FrameCount = 0;
 static bool s_p1WakeMacroQueued       = false;
 static int  s_p1WakeMacroTargetFrame  = -1;
@@ -884,12 +889,12 @@ static void ResetWakeRuntimeState() {
     s_p1WakePrearmStrength = -1; s_p1WakePrearmIsSpecial = false; s_p1WakePrearmIsMacro = false;
     s_p1WakePrearmCharge = 0;
     s_p1WakeActionableWarning = false; s_p1WakeMoveID96FrameCount = 0;
-    s_p1WakeBufferFrozen = false; s_p1WakeHoldPrimed = false; s_p1WakeHoldIssued = false;
+    s_p1WakeBufferFrozen = false; s_p1WakeHoldPhase = WakeHoldPhase::Disabled;
     s_p2WakePrearmed = false; s_p2WakePrearmExpiry = 0; s_p2WakePrearmActionType = -1;
     s_p2WakePrearmStrength = -1; s_p2WakePrearmIsSpecial = false; s_p2WakePrearmIsMacro = false;
     s_p2WakePrearmCharge = 0;
     s_p2WakeActionableWarning = false; s_p2WakeMoveID96FrameCount = 0;
-    s_p2WakeBufferFrozen = false; s_p2WakeHoldPrimed = false; s_p2WakeHoldIssued = false;
+    s_p2WakeBufferFrozen = false; s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
     s_p1WakeMotionGeneration = 0; s_p2WakeMotionGeneration = 0;
     s_p1WakeChargeReservation = 0; s_p2WakeChargeReservation = 0;
     s_p1WakeNormalGeneration = 0; s_p2WakeNormalGeneration = 0;
@@ -1041,8 +1046,8 @@ static void TraceAppendPlayerWakeState(std::ostringstream& oss, int playerNum, s
             << " mQ=" << TraceBool(s_p1WakeMacroQueued)
             << " mTarget=" << s_p1WakeMacroTargetFrame
             << " frozen=" << TraceBool(s_p1WakeBufferFrozen)
-            << " hold=" << TraceBool(s_p1WakeHoldPrimed) << "/" << TraceBool(s_p1WakeHoldIssued)
-            << " dly=" << TraceBool(p1DelayState.isDelaying) << ":" << p1DelayState.delayFramesRemaining
+            << " hold=" << TraceBool((s_p1WakeHoldPhase != WakeHoldPhase::Disabled)) << "/" << TraceBool((s_p1WakeHoldPhase == WakeHoldPhase::Issued))
+            << " dly=" << TraceBool(p1DelayState.IsDelaying()) << ":" << p1DelayState.delayFramesRemaining
             << " dTrig=" << TriggerTypeLabel(p1DelayState.triggerType)
             << " trig=" << TraceBool(p1TriggerActive) << ":" << p1TriggerCooldown;
     } else {
@@ -1058,9 +1063,9 @@ static void TraceAppendPlayerWakeState(std::ostringstream& oss, int playerNum, s
             << " mSlot=" << s_p2WakeMacroSlot
             << " opt=" << TraceBool(s_p2WakeOptionPicked)
             << " frozen=" << TraceBool(s_p2WakeBufferFrozen)
-            << " hold=" << TraceBool(s_p2WakeHoldPrimed) << "/" << TraceBool(s_p2WakeHoldIssued)
+            << " hold=" << TraceBool((s_p2WakeHoldPhase != WakeHoldPhase::Disabled)) << "/" << TraceBool((s_p2WakeHoldPhase == WakeHoldPhase::Issued))
             << " tokenCd=" << s_wakeMacroTokenNeutralizeCountdown[2]
-            << " dly=" << TraceBool(p2DelayState.isDelaying) << ":" << p2DelayState.delayFramesRemaining
+            << " dly=" << TraceBool(p2DelayState.IsDelaying()) << ":" << p2DelayState.delayFramesRemaining
             << " dTrig=" << TriggerTypeLabel(p2DelayState.triggerType)
             << " trig=" << TraceBool(p2TriggerActive) << ":" << p2TriggerCooldown
             << " restore=" << TraceBool(g_pendingControlRestore.load())
@@ -1270,7 +1275,7 @@ static inline bool AutoActionWorkPending() {
             Mission::TutorialSession::IsActive(), tutorialWake);
     const bool triggersEnabled =
         !tutorialSuppressesTriggers && HasAnyAutoActionTriggerEnabled();
-    bool delaysActive = p1DelayState.isDelaying || p2DelayState.isDelaying;
+    bool delaysActive = p1DelayState.IsDelaying() || p2DelayState.IsDelaying();
     bool cooldownsActive = p1TriggerActive || p2TriggerActive || (p1TriggerCooldown > 0) || (p2TriggerCooldown > 0);
     bool wakePrearmed = s_p1WakePrearmed || s_p2WakePrearmed;
     bool restorePending = g_pendingControlRestore.load();
@@ -1354,7 +1359,7 @@ short GetActionMoveID(int actionType, int triggerType, int playerNum) {
 }
 
 static void ResetDelayState(TriggerDelayState& state) {
-    state.isDelaying = false;
+    state.phase = TriggerDelayPhase::Idle;
     state.delayFramesRemaining = 0;
     state.triggerType = TRIGGER_NONE;
     state.pendingMoveID = 0;
@@ -1364,9 +1369,7 @@ static void ResetDelayState(TriggerDelayState& state) {
     state.chosenCustomId = -1;
     state.chosenDelay = -1;
     state.chosenChargeFollowup = 0;
-    state.pendingMotionGeneration = 0;
-    state.pendingNormalGeneration = 0;
-    state.pendingRecipeGeneration = 0;
+    state.pendingGeneration = 0;
     state.dispatchAttempts = 0;
     state.pendingWaitTicks = 0;
 }
@@ -1379,17 +1382,17 @@ static constexpr int kMaxPendingNormalWaitTicks = 180;
 static void CancelPendingNormalPulseIfAny(int playerNum,
                                           TriggerDelayState& state,
                                           const char* why) {
-    if (state.pendingNormalGeneration == 0) return;
-    if (GetAutoActionNormalPulseOutcome(playerNum, state.pendingNormalGeneration) ==
+    if (state.phase != TriggerDelayPhase::AwaitingNormal) return;
+    if (GetAutoActionNormalPulseOutcome(playerNum, state.pendingGeneration) ==
         AutoActionNormalPulseOutcome::Pending) {
         CancelAutoActionNormalPulse(playerNum);
         LogOut("[AUTO-ACTION] P" + std::to_string(playerNum) +
                    " cancelled pending normal gen=" +
-                   std::to_string(state.pendingNormalGeneration) + ": " +
+                   std::to_string(state.pendingGeneration) + ": " +
                    (why ? why : "unspecified"),
                true);
     }
-    state.pendingNormalGeneration = 0;
+    state.RetryDispatch();
 }
 
 static const char* P2MotionOutcomeLabel(P2AutoActionMotionOutcome outcome) {
@@ -1718,15 +1721,15 @@ static inline bool PickRandomPoolOption(int triggerType, int playerNum, TriggerO
 }
 
 static bool ShouldCancelDelayForState(const TriggerDelayState& state, short prevMoveID, short moveID, std::string& reason) {
-    if (!state.isDelaying) {
+    if (!state.IsDelaying()) {
         return false;
     }
 
     // Once a native transaction is admitted, its attack or dash state is expected: keep the delay.
     // Hitstun, throw, launch, freeze or new blockstun are not: holding through them fires a stale action.
-    if (state.pendingMotionGeneration != 0 ||
-        state.pendingRecipeGeneration != 0 ||
-        state.pendingNormalGeneration != 0) {
+    if (state.phase == TriggerDelayPhase::AwaitingMotion ||
+        state.phase == TriggerDelayPhase::AwaitingRecipe ||
+        state.phase == TriggerDelayPhase::AwaitingNormal) {
         // Deliberately narrow: only unambiguous "this fighter was hit" states.
         // AFTER_AIRTECH and ON_WAKEUP legitimately span airtech and groundtech recovery.
         const bool freshBlockstun = IsBlockstun(moveID) && !IsBlockstun(prevMoveID);
@@ -1841,7 +1844,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
     uintptr_t base = GetEFZBase();
     if (!base) return;
 
-    if (p1DelayState.isDelaying) {
+    if (p1DelayState.IsDelaying()) {
         const int remainingBefore = p1DelayState.delayFramesRemaining;
         const int visualBefore = InternalTicksToVisualFramesCeil(remainingBefore);
         LogOut("[DELAY] P1 delaying: internalRemaining=" + std::to_string(remainingBefore) +
@@ -1861,9 +1864,9 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
             LogOut("[AUTO-ACTION] P1 delay expired, applying action", true);
             TraceAutoActionWakeEvent("p1-delay-expired", 1, prevMoveID1, moveID1);
             bool dispatchThisTick = true;
-            if (p1DelayState.pendingRecipeGeneration != 0) {
+            if (p1DelayState.phase == TriggerDelayPhase::AwaitingRecipe) {
                 const uint64_t generation =
-                    p1DelayState.pendingRecipeGeneration;
+                    p1DelayState.pendingGeneration;
                 const AutoActionMotionOutcome outcome =
                     KaoriRecoilDuck::GetOutcome(1, generation);
                 if (outcome == AutoActionMotionOutcome::Pending) {
@@ -1885,7 +1888,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                                std::to_string(generation) +
                                " ended before its exact destination",
                            true);
-                    p1DelayState.pendingRecipeGeneration = 0;
+                    p1DelayState.RetryDispatch();
                     if (p1DelayState.dispatchAttempts >=
                         kMaxAutoActionDispatchAttempts) {
                         ResetDelayState(p1DelayState);
@@ -1897,9 +1900,9 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
             }
 
             if (dispatchThisTick &&
-                p1DelayState.pendingNormalGeneration != 0) {
+                p1DelayState.phase == TriggerDelayPhase::AwaitingNormal) {
                 const uint64_t generation =
-                    p1DelayState.pendingNormalGeneration;
+                    p1DelayState.pendingGeneration;
                 const AutoActionNormalPulseOutcome outcome =
                     GetAutoActionNormalPulseOutcome(1, generation);
                 if (outcome == AutoActionNormalPulseOutcome::Pending) {
@@ -1942,7 +1945,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                            true);
                     CancelAutoActionChargeFollowup(
                         1, "primary normal was not accepted");
-                    p1DelayState.pendingNormalGeneration = 0;
+                    p1DelayState.RetryDispatch();
                     if (p1DelayState.dispatchAttempts >=
                         kMaxAutoActionDispatchAttempts) {
                         ResetDelayState(p1DelayState);
@@ -1954,9 +1957,9 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
             }
 
             if (dispatchThisTick &&
-                p1DelayState.pendingMotionGeneration != 0) {
+                p1DelayState.phase == TriggerDelayPhase::AwaitingMotion) {
                 const uint64_t generation =
-                    p1DelayState.pendingMotionGeneration;
+                    p1DelayState.pendingGeneration;
                 const AutoActionMotionOutcome outcome =
                     GetAutoActionMotionTransactionOutcome(1, generation);
                 if (outcome == AutoActionMotionOutcome::Pending) {
@@ -1986,7 +1989,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                            true);
                     CancelAutoActionChargeFollowup(
                         1, "primary motion was not accepted");
-                    p1DelayState.pendingMotionGeneration = 0;
+                    p1DelayState.RetryDispatch();
                     if (p1DelayState.dispatchAttempts >=
                         kMaxAutoActionDispatchAttempts) {
                         LogOut("[AUTO-ACTION] P1 native transaction exhausted its bounded retries; retiring trigger",
@@ -2054,7 +2057,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                 }
                 if (result == AutoActionApplyResult::Accepted) {
                     if (recipeGeneration != 0) {
-                        p1DelayState.pendingRecipeGeneration = recipeGeneration;
+                        p1DelayState.WaitFor(TriggerDelayPhase::AwaitingRecipe, recipeGeneration);
                         ++p1DelayState.dispatchAttempts;
                         p1DelayState.delayFramesRemaining = 1;
                         LogOut("[AUTO-ACTION] P1 staged recipe admitted gen=" +
@@ -2062,7 +2065,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                                    "; waiting for its exact destination",
                                true);
                     } else if (motionGeneration != 0) {
-                        p1DelayState.pendingMotionGeneration = motionGeneration;
+                        p1DelayState.WaitFor(TriggerDelayPhase::AwaitingMotion, motionGeneration);
                         ++p1DelayState.dispatchAttempts;
                         p1DelayState.delayFramesRemaining = 1;
                         LogOut("[AUTO-ACTION] P1 native transaction admitted gen=" +
@@ -2072,7 +2075,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                                    "; waiting for EFZ's command consumer",
                                true);
                     } else if (normalGeneration != 0) {
-                        p1DelayState.pendingNormalGeneration = normalGeneration;
+                        p1DelayState.WaitFor(TriggerDelayPhase::AwaitingNormal, normalGeneration);
                         p1DelayState.pendingWaitTicks = 0;
                         ++p1DelayState.dispatchAttempts;
                         p1DelayState.delayFramesRemaining = 1;
@@ -2101,7 +2104,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
         }
     }
     
-    if (p2DelayState.isDelaying) {
+    if (p2DelayState.IsDelaying()) {
         const int remainingBefore = p2DelayState.delayFramesRemaining;
         const int visualBefore = InternalTicksToVisualFramesCeil(remainingBefore);
         LogOut("[DELAY] P2 delaying: internalRemaining=" + std::to_string(remainingBefore) +
@@ -2121,9 +2124,9 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
             LogOut("[AUTO-ACTION] P2 delay expired, applying action", true);
             TraceAutoActionWakeEvent("p2-delay-expired", 2, prevMoveID2, moveID2);
 
-            if (p2DelayState.pendingRecipeGeneration != 0) {
+            if (p2DelayState.phase == TriggerDelayPhase::AwaitingRecipe) {
                 const uint64_t generation =
-                    p2DelayState.pendingRecipeGeneration;
+                    p2DelayState.pendingGeneration;
                 const AutoActionMotionOutcome outcome =
                     KaoriRecoilDuck::GetOutcome(2, generation);
                 if (outcome == AutoActionMotionOutcome::Pending) {
@@ -2152,7 +2155,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                            " ended before its exact destination after attempt " +
                            std::to_string(p2DelayState.dispatchAttempts),
                        true);
-                p2DelayState.pendingRecipeGeneration = 0;
+                p2DelayState.RetryDispatch();
                 if (p2DelayState.dispatchAttempts >=
                     kMaxAutoActionDispatchAttempts) {
                     ResetDelayState(p2DelayState);
@@ -2162,9 +2165,9 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                 }
             }
 
-            if (p2DelayState.pendingNormalGeneration != 0) {
+            if (p2DelayState.phase == TriggerDelayPhase::AwaitingNormal) {
                 const uint64_t generation =
-                    p2DelayState.pendingNormalGeneration;
+                    p2DelayState.pendingGeneration;
                 const AutoActionNormalPulseOutcome outcome =
                     GetAutoActionNormalPulseOutcome(2, generation);
                 if (outcome == AutoActionNormalPulseOutcome::Pending) {
@@ -2213,7 +2216,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                        true);
                 CancelAutoActionChargeFollowup(
                     2, "primary normal was not accepted");
-                p2DelayState.pendingNormalGeneration = 0;
+                p2DelayState.RetryDispatch();
                 if (p2DelayState.dispatchAttempts >=
                     kMaxAutoActionDispatchAttempts) {
                     LogOut("[AUTO-ACTION] P2 normal exhausted its bounded retries; retiring trigger",
@@ -2225,9 +2228,9 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                 }
             }
 
-            if (p2DelayState.pendingMotionGeneration != 0) {
+            if (p2DelayState.phase == TriggerDelayPhase::AwaitingMotion) {
                 const uint64_t generation =
-                    p2DelayState.pendingMotionGeneration;
+                    p2DelayState.pendingGeneration;
                 const P2AutoActionMotionOutcome outcome =
                     GetP2AutoActionMotionTransactionOutcome(generation);
                 if (outcome == P2AutoActionMotionOutcome::Pending) {
@@ -2259,7 +2262,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                        true);
                 CancelAutoActionChargeFollowup(
                     2, "primary motion was not accepted");
-                p2DelayState.pendingMotionGeneration = 0;
+                p2DelayState.RetryDispatch();
                 if (p2DelayState.dispatchAttempts >=
                     kMaxAutoActionDispatchAttempts) {
                     LogOut("[AUTO-ACTION] P2 native transaction exhausted its bounded retries; retiring trigger",
@@ -2330,7 +2333,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
             }
             if (result == AutoActionApplyResult::Accepted) {
                 if (recipeGeneration != 0) {
-                    p2DelayState.pendingRecipeGeneration = recipeGeneration;
+                    p2DelayState.WaitFor(TriggerDelayPhase::AwaitingRecipe, recipeGeneration);
                     ++p2DelayState.dispatchAttempts;
                     p2DelayState.delayFramesRemaining = 1;
                     LogOut("[AUTO-ACTION] P2 staged recipe admitted gen=" +
@@ -2340,7 +2343,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                                "; waiting for its exact destination",
                            true);
                 } else if (motionGeneration != 0) {
-                    p2DelayState.pendingMotionGeneration = motionGeneration;
+                    p2DelayState.WaitFor(TriggerDelayPhase::AwaitingMotion, motionGeneration);
                     ++p2DelayState.dispatchAttempts;
                     p2DelayState.delayFramesRemaining = 1;
                     LogOut("[AUTO-ACTION] P2 native transaction admitted gen=" +
@@ -2350,7 +2353,7 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
                                "; waiting for EFZ's command consumer",
                            true);
                 } else if (normalGeneration != 0) {
-                    p2DelayState.pendingNormalGeneration = normalGeneration;
+                    p2DelayState.WaitFor(TriggerDelayPhase::AwaitingNormal, normalGeneration);
                     p2DelayState.pendingWaitTicks = 0;
                     ++p2DelayState.dispatchAttempts;
                     p2DelayState.delayFramesRemaining = 1;
@@ -2444,9 +2447,7 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
     dstate.chosenDelay = -1;
     dstate.chosenChargeFollowup = CLAMP(
         TriggerChargeForType(triggerType), 0, 2);
-    dstate.pendingMotionGeneration = 0;
-    dstate.pendingNormalGeneration = 0;
-    dstate.pendingRecipeGeneration = 0;
+    dstate.pendingGeneration = 0;
     dstate.dispatchAttempts = 0;
     dstate.pendingWaitTicks = 0;
     
@@ -2546,7 +2547,7 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
                             MacroController::GetState() == MacroController::State::Replaying) {
                             return;
                         }
-                        dstate.isDelaying = true;
+                        dstate.RetryDispatch();
                         dstate.delayFramesRemaining = 1;
                         dstate.pendingMoveID = 0;
                         LogOut("[AUTO-ACTION][MACRO] Immediate playback owner busy; retaining the same slot", true);
@@ -2564,10 +2565,10 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
                             &recipeGeneration);
         if (result == AutoActionApplyResult::Accepted) {
             if (recipeGeneration != 0) {
-                dstate.isDelaying = true;
+                dstate.RetryDispatch();
                 dstate.delayFramesRemaining = 1;
                 dstate.pendingMoveID = 0;
-                dstate.pendingRecipeGeneration = recipeGeneration;
+                dstate.WaitFor(TriggerDelayPhase::AwaitingRecipe, recipeGeneration);
                 dstate.dispatchAttempts = 1;
                 LogOut(std::string("[AUTO-ACTION] Immediate P") +
                            std::to_string(playerNum) +
@@ -2576,10 +2577,10 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
                            "; waiting for its exact destination",
                        true);
             } else if (motionGeneration != 0) {
-                dstate.isDelaying = true;
+                dstate.RetryDispatch();
                 dstate.delayFramesRemaining = 1;
                 dstate.pendingMoveID = 0;
-                dstate.pendingMotionGeneration = motionGeneration;
+                dstate.WaitFor(TriggerDelayPhase::AwaitingMotion, motionGeneration);
                 dstate.dispatchAttempts = 1;
                 LogOut(std::string("[AUTO-ACTION] Immediate P") +
                            std::to_string(playerNum) +
@@ -2588,10 +2589,10 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
                            "; waiting for EFZ's command consumer",
                        true);
             } else if (normalGeneration != 0) {
-                dstate.isDelaying = true;
+                dstate.RetryDispatch();
                 dstate.delayFramesRemaining = 1;
                 dstate.pendingMoveID = 0;
-                dstate.pendingNormalGeneration = normalGeneration;
+                dstate.WaitFor(TriggerDelayPhase::AwaitingNormal, normalGeneration);
                 dstate.pendingWaitTicks = 0;
                 dstate.dispatchAttempts = 1;
                 LogOut(std::string("[AUTO-ACTION] Immediate P") +
@@ -2606,7 +2607,7 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
                        detailedLogging.load());
             }
         } else if (result == AutoActionApplyResult::Busy) {
-            dstate.isDelaying = true;
+            dstate.RetryDispatch();
             dstate.delayFramesRemaining = 1;
             dstate.pendingMoveID = 0;
             LogOut(std::string("[AUTO-ACTION] Immediate P") +
@@ -2632,7 +2633,7 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
         int internalFrames = VisualFramesToInternalTicks(delayFrames);
         
         if (playerNum == 1) {
-            p1DelayState.isDelaying = true;
+            p1DelayState.RetryDispatch();
             p1DelayState.delayFramesRemaining = internalFrames;
             p1DelayState.pendingMoveID = 0;
             LogOut("[DELAY] Armed P1 delay: visualFrames=" + std::to_string(delayFrames) +
@@ -2641,7 +2642,7 @@ void StartTriggerDelay(int playerNum, int triggerType, short moveID, int delayFr
                    ", expiresAtInternal=" + std::to_string(frameCounter.load() + internalFrames),
                    true);
         } else {
-            p2DelayState.isDelaying = true;
+            p2DelayState.RetryDispatch();
             p2DelayState.delayFramesRemaining = internalFrames;
             p2DelayState.pendingMoveID = 0;
             LogOut("[DELAY] Armed P2 delay: visualFrames=" + std::to_string(delayFrames) +
@@ -2668,7 +2669,7 @@ void ProcessTriggerCooldowns() {
         }
     }
     if (p1TriggerActive && p1TriggerCooldown > 0) {
-        if (!p1DelayState.isDelaying) {
+        if (!p1DelayState.IsDelaying()) {
             p1TriggerCooldown--;
             if (p1TriggerCooldown <= 0) {
                 p1TriggerActive = false;
@@ -2677,7 +2678,7 @@ void ProcessTriggerCooldowns() {
         }
     }
     if (p2TriggerActive && p2TriggerCooldown > 0) {
-        if (!p2DelayState.isDelaying) {
+        if (!p2DelayState.IsDelaying()) {
             p2TriggerCooldown--;
             if (p2TriggerCooldown <= 0) {
                 p2TriggerActive = false;
@@ -2697,8 +2698,8 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
     // Skip idle work while nothing is pending and both move IDs are unchanged.
     // Never skip during P2 groundtech: wake macro timing counts ticks there.
     bool p2InGroundtech = IsGroundtech(moveID2);
-    if (!p1DelayState.isDelaying && !p2DelayState.isDelaying &&
-        !g_pendingControlRestore.load() && g_dashDeferred.pendingSel.load() == 0 &&
+    if (!p1DelayState.IsDelaying() && !p2DelayState.IsDelaying() &&
+        !g_pendingControlRestore.load() && g_dashDeferred.phase.load() == DashFollowPhase::Idle &&
         !s_p1WakePrearmed && !s_p2WakePrearmed && !s_p1RGPrearmed && !s_p2RGPrearmed &&
         p1TriggerCooldown <= 0 && p2TriggerCooldown <= 0 &&
         !WakeCleanupWorkPending() &&
@@ -2730,7 +2731,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
         return false;
     };
     
-    if ((targetPlayer == 1 || targetPlayer == 3) && !p1DelayState.isDelaying && !p1ActionApplied) {
+    if ((targetPlayer == 1 || targetPlayer == 3) && !p1DelayState.IsDelaying() && !p1ActionApplied) {
         bool shouldTrigger = false;
         int triggerType = TRIGGER_NONE;
         int delay = 0;
@@ -2959,8 +2960,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                     s_p1WakeBufferFrozen = false;
                     s_p1WakeMotionGeneration = 0;
                     s_p1WakeChargeReservation = 0;
-                    s_p1WakeHoldPrimed = holdEligible;
-                    s_p1WakeHoldIssued = false;
+                    s_p1WakeHoldPhase = holdEligible ? WakeHoldPhase::Primed : WakeHoldPhase::Disabled;
                     s_p1WakeNormalGeneration = 0;
                     s_p1WakeNormalAttempts = 0;
                     s_p1WakeMacro96FrameCount = 0;
@@ -3119,11 +3119,11 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
             }
             // Must stay outside the moveID==96 block: this detects the 96 to 0 transition.
             if (!s_p1WakePrearmIsSpecial && !s_p1WakePrearmIsMacro &&
-                s_p1WakeHoldPrimed && !s_p1WakeHoldIssued) {
+                s_p1WakeHoldPhase == WakeHoldPhase::Primed) {
                 const bool leavingGroundtechThisFrame = (prevMoveID1 == GROUNDTECH_RECOVERY) && (moveID1 != GROUNDTECH_RECOVERY);
                 if (leavingGroundtechThisFrame) {
                     if (IssueWakeImmediateHold(1, s_p1WakePrearmActionType)) {
-                        s_p1WakeHoldIssued = true;
+                        s_p1WakeHoldPhase = WakeHoldPhase::Issued;
                         TraceAutoActionWakeEvent("p1-wake-hold-issued", 1, prevMoveID1, moveID1,
                                                  "action=" + std::to_string(s_p1WakePrearmActionType));
                     }
@@ -3156,8 +3156,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 s_p1WakeBufferFrozen = false;
                 s_p1WakeMotionGeneration = 0;
                 s_p1WakeChargeReservation = 0;
-                s_p1WakeHoldPrimed = false;
-                s_p1WakeHoldIssued = false;
+                s_p1WakeHoldPhase = WakeHoldPhase::Disabled;
                 s_p1WakeNormalGeneration = 0;
                 s_p1WakeNormalAttempts = 0;
                 s_p1WakeMacro96FrameCount = 0;
@@ -3182,7 +3181,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                                " was not consumed; retaining wake option for retry",
                            true);
                     s_p1WakeNormalGeneration = 0;
-                    s_p1WakeHoldIssued = false;
+                    s_p1WakeHoldPhase = WakeHoldAfterFailure(s_p1WakeHoldPhase);
                     if (s_p1WakeChargeReservation != 0) {
                         (void)CancelAutoActionChargeFollowupIfReservation(
                             1, s_p1WakeChargeReservation,
@@ -3269,7 +3268,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                     }
                 }
             } else if (s_p1WakePrearmed && !s_p1WakePrearmIsSpecial &&
-                       s_p1WakeHoldIssued &&
+                       (s_p1WakeHoldPhase == WakeHoldPhase::Issued) &&
                        s_p1WakeNormalGeneration == 0 &&
                        p1BecameActionableFromGroundtech) {
                 LogOut("[AUTO-ACTION] P1 wake hold exec (inputs maintained through wake)", true);
@@ -3414,7 +3413,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
         }
     }
     
-    if ((targetPlayer == 2 || targetPlayer == 3) && !p2DelayState.isDelaying && !p2ActionApplied) {
+    if ((targetPlayer == 2 || targetPlayer == 3) && !p2DelayState.IsDelaying() && !p2ActionApplied) {
         bool shouldTrigger = false;
         int triggerType = TRIGGER_NONE;
         int delay = 0;
@@ -3449,7 +3448,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
         p2_after_airtech_done: ;
         }
     if (!shouldTrigger && triggerAfterBlockEnabled.load()) {
-        bool dashFollowPending = (g_dashDeferred.pendingSel.load() > 0);
+        bool dashFollowPending = (g_dashDeferred.phase.load() != DashFollowPhase::Idle);
         bool restorePending = g_pendingControlRestore.load();
         if (dashFollowPending && detailedLogging.load() && canLogTrigDiag()) {
             LogOut("[TRIGGER_DIAG] Suppressing P2 After Block: dash follow-up pending", true);
@@ -3789,8 +3788,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                     s_p2WakeBufferFrozen = false;
                     s_p2WakeMotionGeneration = 0;
                     s_p2WakeChargeReservation = 0;
-                    s_p2WakeHoldPrimed = holdEligible;
-                    s_p2WakeHoldIssued = false;
+                    s_p2WakeHoldPhase = holdEligible ? WakeHoldPhase::Primed : WakeHoldPhase::Disabled;
                     s_p2WakeNormalGeneration = 0;
                     s_p2WakeNormalAttempts = 0;
                     const char* tag = isSpecial ? "special" : "hold";
@@ -3915,11 +3913,11 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 }
             }
             // Must stay outside the moveID==96 block: this detects the 96 to 0 transition.
-            if (!s_p2WakePrearmIsSpecial && !s_p2WakePrearmIsMacro && s_p2WakeHoldPrimed && !s_p2WakeHoldIssued) {
+            if (!s_p2WakePrearmIsSpecial && !s_p2WakePrearmIsMacro && s_p2WakeHoldPhase == WakeHoldPhase::Primed) {
                 const bool leavingGroundtechThisFrame = (prevMoveID2 == GROUNDTECH_RECOVERY) && (moveID2 != GROUNDTECH_RECOVERY);
                 if (leavingGroundtechThisFrame) {
                     if (IssueWakeImmediateHold(2, s_p2WakePrearmActionType)) {
-                        s_p2WakeHoldIssued = true;
+                        s_p2WakeHoldPhase = WakeHoldPhase::Issued;
                         TraceAutoActionWakeEvent("p2-wake-hold-issued", 2, prevMoveID2, moveID2,
                                                  "action=" + std::to_string(s_p2WakePrearmActionType));
                     }
@@ -3945,7 +3943,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                     wakeSrc = "macro";
                 } else if (s_p2WakePrearmed && s_p2WakePrearmIsSpecial) {
                     wakeSrc = "special";
-                } else if (s_p2WakePrearmed && s_p2WakeHoldIssued) {
+                } else if (s_p2WakePrearmed && (s_p2WakeHoldPhase == WakeHoldPhase::Issued)) {
                     wakeSrc = "hold";
                 } else if (s_p2WakePrearmed) {
                     wakeSrc = "prearmed";
@@ -3972,8 +3970,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 s_p2WakeBufferFrozen = false;
                 s_p2WakeMotionGeneration = 0;
                 s_p2WakeChargeReservation = 0;
-                s_p2WakeHoldPrimed = false;
-                s_p2WakeHoldIssued = false;
+                s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
                 s_p2WakeNormalGeneration = 0;
                 s_p2WakeNormalAttempts = 0;
             };
@@ -3993,7 +3990,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                                " was not consumed; retaining wake option for retry",
                            true);
                     s_p2WakeNormalGeneration = 0;
-                    s_p2WakeHoldIssued = false;
+                    s_p2WakeHoldPhase = WakeHoldAfterFailure(s_p2WakeHoldPhase);
                     if (s_p2WakeChargeReservation != 0) {
                         (void)CancelAutoActionChargeFollowupIfReservation(
                             2, s_p2WakeChargeReservation,
@@ -4054,7 +4051,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                            std::to_string(s_p2WakeMotionGeneration),
                        detailedLogging.load());
             } else if (s_p2WakePrearmed && !s_p2WakePrearmIsSpecial &&
-                       s_p2WakeHoldIssued &&
+                       (s_p2WakeHoldPhase == WakeHoldPhase::Issued) &&
                        s_p2WakeNormalGeneration == 0 &&
                        p2BecameActionableFromGroundtech) {
                 LogOut("[AUTO-ACTION] P2 wake hold exec (inputs maintained through wake)", true);
@@ -4401,8 +4398,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
         s_p1WakeMoveID96FrameCount = 0;
         s_p1WakeBufferFrozen = false;
         s_p1WakeMotionGeneration = 0;
-        s_p1WakeHoldPrimed = false;
-        s_p1WakeHoldIssued = false;
+        s_p1WakeHoldPhase = WakeHoldPhase::Disabled;
         s_p1WakeNormalGeneration = 0;
         s_p1WakeNormalAttempts = 0;
         s_p1WakeOptionPicked = false;
@@ -4443,8 +4439,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
         s_p2WakeMoveID96FrameCount = 0;
         s_p2WakeBufferFrozen = false;
         s_p2WakeMotionGeneration = 0;
-        s_p2WakeHoldPrimed = false;
-        s_p2WakeHoldIssued = false;
+        s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
         s_p2WakeNormalGeneration = 0;
         s_p2WakeNormalAttempts = 0;
         s_p2WakeOptionPicked = false;
@@ -4521,10 +4516,10 @@ bool DropPrearmWorkAtPracticeBoundary() {
     if (!stateLock.owns_lock()) return false;
     s_p1WakePrearmed = false; s_p1WakePrearmExpiry = 0; s_p1WakePrearmActionType = -1;
     s_p1WakePrearmStrength = -1; s_p1WakePrearmIsSpecial = false; s_p1WakePrearmIsMacro = false;
-    s_p1WakePrearmCharge = 0; s_p1WakeHoldPrimed = false; s_p1WakeHoldIssued = false;
+    s_p1WakePrearmCharge = 0; s_p1WakeHoldPhase = WakeHoldPhase::Disabled;
     s_p2WakePrearmed = false; s_p2WakePrearmExpiry = 0; s_p2WakePrearmActionType = -1;
     s_p2WakePrearmStrength = -1; s_p2WakePrearmIsSpecial = false; s_p2WakePrearmIsMacro = false;
-    s_p2WakePrearmCharge = 0; s_p2WakeHoldPrimed = false; s_p2WakeHoldIssued = false;
+    s_p2WakePrearmCharge = 0; s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
     s_p1RGPrearmed = false; s_p1RGPrearmIsSpecial = false; s_p1RGPrearmActionType = -1;
     s_p1RGPrearmExpiry = 0; s_p1RGPrearmGeneration = 0;
     s_p2RGPrearmed = false; s_p2RGPrearmIsSpecial = false; s_p2RGPrearmActionType = -1;
@@ -4542,13 +4537,13 @@ void ResetActionFlags() {
 
 void ClearDelayStatesIfNonActionable(short moveID1, short moveID2, short prevMoveID1, short prevMoveID2, const char* source) {
     std::lock_guard<std::recursive_mutex> stateLock(g_autoActionStateMutex);
-    if (!p1DelayState.isDelaying && !p2DelayState.isDelaying) return;
+    if (!p1DelayState.IsDelaying() && !p2DelayState.IsDelaying()) return;
     const std::string clearSource = source ? source : "unknown";
     std::string p1Reason;
     std::string p2Reason;
     const bool p1ShouldCancel = ShouldCancelDelayForState(p1DelayState, prevMoveID1, moveID1, p1Reason);
     const bool p2ShouldCancel = ShouldCancelDelayForState(p2DelayState, prevMoveID2, moveID2, p2Reason);
-    if (p1DelayState.isDelaying && p1ShouldCancel) {
+    if (p1DelayState.IsDelaying() && p1ShouldCancel) {
         const int clearedTriggerType = p1DelayState.triggerType;
         const int remainingInternal = p1DelayState.delayFramesRemaining;
         const int remainingVisual = InternalTicksToVisualFramesCeil(remainingInternal);
@@ -4573,7 +4568,7 @@ void ClearDelayStatesIfNonActionable(short moveID1, short moveID2, short prevMov
         p1TriggerActive = false;
         p1TriggerCooldown = 0;
     }
-    if (p2DelayState.isDelaying && p2ShouldCancel) {
+    if (p2DelayState.IsDelaying() && p2ShouldCancel) {
         const int clearedTriggerType = p2DelayState.triggerType;
         const int remainingInternal = p2DelayState.delayFramesRemaining;
         const int remainingVisual = InternalTicksToVisualFramesCeil(remainingInternal);
@@ -5578,8 +5573,8 @@ void ProcessAutoControlRestore() {
         if (g_recentDashQueued.load() && !dashStartNow && dashCancelled) {
             LogOut("[AUTO-ACTION][DASH] Pre-start interrupted (hit/block/airtech) - cancelling dash and restoring control", true);
             if (ValidationMetricsEnabled()) { GetValidationMetrics().dashPreStartInterrupts++; }
-            if (g_dashDeferred.pendingSel.load() > 0) {
-                g_dashDeferred.pendingSel.store(0);
+            if (g_dashDeferred.phase.load() != DashFollowPhase::Idle) {
+                g_dashDeferred.phase.store(DashFollowPhase::Idle);
             }
             g_recentDashQueued.store(false);
             RestoreP2ControlState();
@@ -5593,10 +5588,10 @@ void ProcessAutoControlRestore() {
             s_prevMoveID2 = moveID2;
             return;
         }
-        if (g_dashDeferred.pendingSel.load() > 0 && dashCancelled && !g_recentDashQueued.load()) {
+        if (g_dashDeferred.phase.load() != DashFollowPhase::Idle && dashCancelled && !g_recentDashQueued.load()) {
             LogOut("[AUTO-ACTION][DASH] Dash follow-up cancelled by interrupt before dash started", true);
             if (ValidationMetricsEnabled()) { GetValidationMetrics().dashFollowupCancelled++; }
-            g_dashDeferred.pendingSel.store(0);
+            g_dashDeferred.phase.store(DashFollowPhase::Idle);
         }
     int fdfSel = forwardDashFollowup.load();
         // Do not restore when the dash starts: wait until the whole dash state is left, whatever follows.
@@ -5738,7 +5733,7 @@ void ProcessAutoControlRestore() {
     bool queuedDashNoStart = waitingDashStart;
     bool dashQueueActiveNow = GetMotionQueueSnapshot(2).active;
     bool moveChangedCandidate = (moveID2 != g_lastP2MoveID.load() && moveID2 == 0 && sawNonZeroMoveID);
-    bool dashFollowPending = (g_dashDeferred.pendingSel.load() > 0);
+    bool dashFollowPending = (g_dashDeferred.phase.load() != DashFollowPhase::Idle);
     bool suppressGenericRestore = (moveChangedCandidate && dashFollowPending);
         if (suppressGenericRestore) {
             LogOut("[AUTO-ACTION][DASH] Suppressing generic restore (pending follow-up active)", detailedLogging.load());
@@ -5757,8 +5752,8 @@ void ProcessAutoControlRestore() {
             int ageSinceQueue = frameCounter.load() - g_recentDashQueuedFrame.load();
             if (ageSinceQueue >= 12) { // ~1/16 s at 192 Hz; enough to rule out 1F start IDs
                 LogOut("[AUTO-ACTION][DASH] Pre-start cancelled (no start observed, non-dash state persisted) - restoring", true);
-                if (g_dashDeferred.pendingSel.load() > 0) {
-                    g_dashDeferred.pendingSel.store(0);
+                if (g_dashDeferred.phase.load() != DashFollowPhase::Idle) {
+                    g_dashDeferred.phase.store(DashFollowPhase::Idle);
                 }
                 g_recentDashQueued.store(false);
                 RestoreP2ControlState();
@@ -5935,7 +5930,7 @@ static void ConsumeTutorialP2WakeCancel() {
     const bool hadWakeState =
         s_p2WakePrearmed || s_p2WakeMacroQueued ||
         s_wakeMacroTokenNeutralizeCountdown[2] > 0 ||
-        (p2DelayState.isDelaying &&
+        (p2DelayState.IsDelaying() &&
          p2DelayState.triggerType == TRIGGER_ON_WAKEUP) ||
         (g_bufferFreezingActive.load(std::memory_order_acquire) &&
          g_activeFreezePlayer.load(std::memory_order_acquire) == 2) ||
@@ -5951,7 +5946,7 @@ static void ConsumeTutorialP2WakeCancel() {
     CancelP2AutoActionMotionTransaction("tutorial wake producer cancelled");
     if (g_p2ControlOverridden) RestoreP2ControlState();
 
-    p2DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
+    p2DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
     p2ActionApplied = false;
     p2TriggerActive = false;
     p2TriggerCooldown = 0;
@@ -5972,8 +5967,7 @@ static void ConsumeTutorialP2WakeCancel() {
     s_p2WakeBufferFrozen = false;
     s_p2WakeChargeReservation = 0;
     s_p2WakeMotionGeneration = 0;
-    s_p2WakeHoldPrimed = false;
-    s_p2WakeHoldIssued = false;
+    s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
     s_p2WakeMacro96FrameCount = 0;
     s_p2WakeMacroQueued = false;
     s_p2WakeMacroTargetFrame = -1;
@@ -6151,19 +6145,19 @@ void CancelAutoActionsAndMacros() {
     }
 
     logStream.str(""); logStream.clear();
-    logStream << "[CANCEL][DELAY] P1: isDelaying=" << (p1DelayState.isDelaying ? "true" : "false")
+    logStream << "[CANCEL][DELAY] P1: isDelaying=" << (p1DelayState.IsDelaying() ? "true" : "false")
               << " framesRemaining=" << p1DelayState.delayFramesRemaining
               << " triggerType=" << p1DelayState.triggerType;
     LogOut(logStream.str(), true);
     
     logStream.str(""); logStream.clear();
-    logStream << "[CANCEL][DELAY] P2: isDelaying=" << (p2DelayState.isDelaying ? "true" : "false")
+    logStream << "[CANCEL][DELAY] P2: isDelaying=" << (p2DelayState.IsDelaying() ? "true" : "false")
               << " framesRemaining=" << p2DelayState.delayFramesRemaining
               << " triggerType=" << p2DelayState.triggerType;
     LogOut(logStream.str(), true);
     
-    p1DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
-    p2DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
+    p1DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
+    p2DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
     LogOut("[CANCEL][DELAY] Reset both delay states", true);
 
     logStream.str(""); logStream.clear();
@@ -6273,14 +6267,14 @@ void CancelAutoActionsAndMacros() {
     s_p1WakePrearmStrength = -1; s_p1WakePrearmIsSpecial = false; s_p1WakePrearmIsMacro = false;
     s_p1WakePrearmCharge = 0;
     s_p1WakeActionableWarning = false; s_p1WakeMoveID96FrameCount = 0;
-    s_p1WakeBufferFrozen = false; s_p1WakeHoldPrimed = false; s_p1WakeHoldIssued = false;
+    s_p1WakeBufferFrozen = false; s_p1WakeHoldPhase = WakeHoldPhase::Disabled;
     s_p1WakeMotionGeneration = 0; s_p1WakeChargeReservation = 0;
     
     s_p2WakePrearmed = false; s_p2WakePrearmExpiry = 0; s_p2WakePrearmActionType = -1;
     s_p2WakePrearmStrength = -1; s_p2WakePrearmIsSpecial = false; s_p2WakePrearmIsMacro = false;
     s_p2WakePrearmCharge = 0;
     s_p2WakeActionableWarning = false; s_p2WakeMoveID96FrameCount = 0;
-    s_p2WakeBufferFrozen = false; s_p2WakeHoldPrimed = false; s_p2WakeHoldIssued = false;
+    s_p2WakeBufferFrozen = false; s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
     s_p2WakeMotionGeneration = 0; s_p2WakeChargeReservation = 0;
 
     logStream.str(""); logStream.clear();
@@ -6367,8 +6361,8 @@ void ClearAllAutoActionTriggers() {
         s_lastClearFrame = nowF;
     }
 
-    p1DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
-    p2DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
+    p1DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
+    p2DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1, -1, 0, 0, 0};
 
     p1ActionApplied = false;
     p2ActionApplied = false;

@@ -266,10 +266,11 @@ bool ExactGuardPointBranch(const CollisionBranchFlags& flags,
 
 namespace {
 constexpr size_t kCollisionLayoutBytes=0x1200;
+enum class CapturePhase { Unattempted, Attempted, Captured };
 struct CapturedCollisionLayout {
     uintptr_t player=0,resource=0,frameData=0;
     short move=-1;
-    bool attempted=false,pending=false;
+    CapturePhase phase=CapturePhase::Unattempted;
     size_t bytes=0;
     std::array<uint8_t,kCollisionLayoutBytes> copied{};
 };
@@ -298,9 +299,9 @@ void CaptureCollisionFrameData(int playerNum,uintptr_t attacker,uintptr_t frameD
     std::unique_lock<std::mutex> lock(collisionLayoutMutex,std::try_to_lock);
     if(!lock.owns_lock())return;
     auto& capture=collisionLayouts[player];
-    if(known<0 && capture.attempted && capture.player==attacker && capture.resource==resource && capture.move==move)return;
+    if(known<0 && capture.phase!=CapturePhase::Unattempted && capture.player==attacker && capture.resource==resource && capture.move==move)return;
     capture.player=attacker;capture.resource=resource;capture.move=move;capture.frameData=frameData;
-    capture.attempted=true;capture.pending=false;capture.bytes=0;
+    capture.phase=CapturePhase::Attempted;capture.bytes=0;
     MEMORY_BASIC_INFORMATION info{};
     if(!VirtualQuery(reinterpret_cast<void*>(attacker),&info,sizeof(info)) || info.State!=MEM_COMMIT ||
        (info.Protect&(PAGE_GUARD|PAGE_NOACCESS)))return;
@@ -308,14 +309,14 @@ void CaptureCollisionFrameData(int playerNum,uintptr_t attacker,uintptr_t frameD
     if(end<=attacker)return;
     const size_t bytes=(std::min)(kCollisionLayoutBytes,static_cast<size_t>(end-attacker));
     if(!SafeReadMemory(attacker,capture.copied.data(),bytes))return;
-    capture.bytes=bytes;capture.pending=true;
+    capture.bytes=bytes;capture.phase=CapturePhase::Captured;
 }
 void ResolveCapturedCollisionLayout(int playerNum) {
     if(playerNum<1 || playerNum>2)return;
     std::lock_guard<std::mutex> lock(collisionLayoutMutex);
     auto& capture=collisionLayouts[playerNum-1];
-    if(!capture.pending)return;
-    capture.pending=false;
+    if(capture.phase!=CapturePhase::Captured)return;
+    capture.phase=CapturePhase::Attempted;
     int found=-1;
     for(size_t offset=0;offset+sizeof(uint32_t)<=capture.bytes;offset+=sizeof(uint32_t)) {
         uint32_t candidate=0;std::memcpy(&candidate,capture.copied.data()+offset,sizeof(candidate));

@@ -236,6 +236,8 @@ std::atomic<int> s_activeDiskSlot{kInitialSnapshotSlot};
 std::atomic<bool> s_hotswapRestoreApplied{false};
 std::atomic<bool> s_restoreInProgress{false};
 std::atomic<int> s_postRestoreStabilizationFrames{0};
+enum class SideRestorePhase { Idle, Delaying, Retrying };
+std::atomic<SideRestorePhase> s_sideRestorePhase{SideRestorePhase::Idle};
 std::atomic<int> s_deferredPracticeSideRestoreLocalSide{-1};
 std::atomic<int> s_deferredPracticeSideRestoreDelay{0};
 std::atomic<int> s_deferredPracticeSideRestoreRetries{0};
@@ -259,7 +261,7 @@ enum class DeferredRestoreKind : int {
     SelectedSlot = 2,
 };
 
-std::atomic<int> s_deferredRestoreKind{static_cast<int>(DeferredRestoreKind::None)};
+std::atomic<DeferredRestoreKind> s_deferredRestoreKind{DeferredRestoreKind::None};
 std::atomic<int> s_deferredRestoreSlot{kInitialSnapshotSlot};
 
 struct SehFailure {
@@ -273,7 +275,15 @@ void RestoreFpuState(const uint8_t* src);
 void RestoreModState(const PersistedModState& state, bool engineOnlyLocalSideRestore = false);
 void LogSavestateTrace(const char* step, const std::string& detail);
 
+void BeginDeferredPracticeSideRestoreRetry() {
+    auto expected = SideRestorePhase::Delaying;
+    (void)s_sideRestorePhase.compare_exchange_strong(
+        expected, SideRestorePhase::Retrying, std::memory_order_release,
+        std::memory_order_relaxed);
+}
+
 void ClearDeferredPracticeSideRestoreState() {
+    s_sideRestorePhase.store(SideRestorePhase::Idle, std::memory_order_release);
     s_deferredPracticeSideRestoreLocalSide.store(-1, std::memory_order_release);
     s_deferredPracticeSideRestoreDelay.store(0, std::memory_order_release);
     s_deferredPracticeSideRestoreRetries.store(0, std::memory_order_release);
@@ -297,6 +307,7 @@ void ArmDeferredPracticeSideRestore(int localSide) {
     s_deferredPracticeSideRestoreLocalSide.store(localSide, std::memory_order_release);
     s_deferredPracticeSideRestoreDelay.store(kDeferredPracticeSideRestoreDelayFrames, std::memory_order_release);
     s_deferredPracticeSideRestoreRetries.store(kDeferredPracticeSideRestoreRetryFrames, std::memory_order_release);
+    s_sideRestorePhase.store(SideRestorePhase::Delaying, std::memory_order_release);
 
     std::ostringstream oss;
     oss << "localSide=" << localSide
@@ -1076,7 +1087,7 @@ bool QueueDeferredRestoreRequest(DeferredRestoreKind kind,
     }
 
     s_deferredRestoreSlot.store(slot, std::memory_order_release);
-    s_deferredRestoreKind.store(static_cast<int>(kind), std::memory_order_release);
+    s_deferredRestoreKind.store(kind, std::memory_order_release);
 
     std::ostringstream oss;
     oss << "kind=" << DeferredRestoreKindName(kind)
@@ -4048,8 +4059,7 @@ bool RestoreWorkingSnapshot() {
 }
 
 bool ProcessQueuedRestoreAtFrameBoundaryImpl(bool inPracticeMatch, bool charactersInitialized) {
-    const DeferredRestoreKind kind = static_cast<DeferredRestoreKind>(
-        s_deferredRestoreKind.load(std::memory_order_acquire));
+    const DeferredRestoreKind kind = s_deferredRestoreKind.load(std::memory_order_acquire);
     if (kind == DeferredRestoreKind::None) {
         return false;
     }
@@ -4059,7 +4069,7 @@ bool ProcessQueuedRestoreAtFrameBoundaryImpl(bool inPracticeMatch, bool characte
     }
 
     const int slot = s_deferredRestoreSlot.load(std::memory_order_acquire);
-    s_deferredRestoreKind.store(static_cast<int>(DeferredRestoreKind::None), std::memory_order_release);
+    s_deferredRestoreKind.store(DeferredRestoreKind::None, std::memory_order_release);
     s_deferredRestoreSlot.store(kInitialSnapshotSlot, std::memory_order_release);
 
     {
@@ -4135,11 +4145,10 @@ bool ProcessQueuedRestoreAtFrameBoundary(bool inPracticeMatch, bool charactersIn
         std::ostringstream detail;
         detail << "inPracticeMatch=" << (inPracticeMatch ? 1 : 0)
                << " charactersInitialized=" << (charactersInitialized ? 1 : 0)
-               << " queuedKind=" << DeferredRestoreKindName(static_cast<DeferredRestoreKind>(
-                      s_deferredRestoreKind.load(std::memory_order_acquire)))
+               << " queuedKind=" << DeferredRestoreKindName(s_deferredRestoreKind.load(std::memory_order_acquire))
                << " queuedSlot=" << s_deferredRestoreSlot.load(std::memory_order_acquire);
         LogSavestateSehFailure("restore queue boundary", failure, detail.str());
-        s_deferredRestoreKind.store(static_cast<int>(DeferredRestoreKind::None), std::memory_order_release);
+        s_deferredRestoreKind.store(DeferredRestoreKind::None, std::memory_order_release);
         s_deferredRestoreSlot.store(kInitialSnapshotSlot, std::memory_order_release);
         return true;
     }
@@ -4148,6 +4157,7 @@ bool ProcessQueuedRestoreAtFrameBoundary(bool inPracticeMatch, bool charactersIn
 }
 
 void TickDeferredPracticeSideRestore(bool charactersInitialized) {
+    if (s_sideRestorePhase.load(std::memory_order_acquire) == SideRestorePhase::Idle) return;
     const int localSide = s_deferredPracticeSideRestoreLocalSide.load(std::memory_order_acquire);
     if (localSide != 0 && localSide != 1) {
         return;
@@ -4169,8 +4179,9 @@ void TickDeferredPracticeSideRestore(bool charactersInitialized) {
     }
 
     const int delay = s_deferredPracticeSideRestoreDelay.load(std::memory_order_acquire);
-    if (delay > 0) {
+    if (s_sideRestorePhase.load(std::memory_order_acquire) == SideRestorePhase::Delaying && delay > 0) {
         s_deferredPracticeSideRestoreDelay.store(delay - 1, std::memory_order_release);
+        if (delay == 1) BeginDeferredPracticeSideRestoreRetry();
         if (delay == kDeferredPracticeSideRestoreDelayFrames || delay == 1) {
             std::ostringstream oss;
             oss << "localSide=" << localSide
@@ -4181,6 +4192,7 @@ void TickDeferredPracticeSideRestore(bool charactersInitialized) {
         return;
     }
 
+    BeginDeferredPracticeSideRestoreRetry();
     int retries = s_deferredPracticeSideRestoreRetries.load(std::memory_order_acquire);
     if (retries <= 0) {
         LogSavestateTrace("restore practice reconcile fail",

@@ -140,8 +140,9 @@ struct JugglePreviewFields {
     std::uint32_t wallbounce = 0;
 };
 
+enum class JugglePreviewPhase { Unheld, Held, Refreshing };
 struct JugglePreviewLease {
-    bool held = false;
+    JugglePreviewPhase phase = JugglePreviewPhase::Unheld;
     uintptr_t playerBase = 0;
     std::uint32_t lifecycleGeneration = 0;
     HudPolicy::HudFocus focus = HudPolicy::HudFocus::None;
@@ -149,7 +150,6 @@ struct JugglePreviewLease {
     JugglePreviewFields applied;
     bool outlineValid = false;
     HudPolicy::Rect outline;
-    bool refreshActive = false;
     std::uint64_t refreshToken = 0;
     std::uint32_t refreshStartBatch = 0;
     int refreshWatchdogTicks = 0;
@@ -703,9 +703,9 @@ bool WriteJugglePreviewFields(uintptr_t player,
 }
 
 void AbandonJugglePreviewLocked() {
-    if (g_s.jugglePreview.refreshActive) {
+    if (g_s.jugglePreview.phase == JugglePreviewPhase::Refreshing) {
         const std::uint64_t token = g_s.jugglePreview.refreshToken;
-        g_s.jugglePreview.refreshActive = false;
+        g_s.jugglePreview.phase = JugglePreviewPhase::Held;
         g_s.jugglePreview.refreshToken = 0;
         (void)PauseIntegration::EndMenuSurfaceRefresh(
             PauseIntegration::MenuSurface::TutorialPage, token);
@@ -737,10 +737,10 @@ bool WaitForBattleBatchCompletionLocked(std::uint32_t targetBatch) {
 bool FinishJugglePreviewRefreshLocked(bool normalizePresentation);
 
 void RestoreJugglePreviewLocked() {
-    if (g_s.jugglePreview.refreshActive) {
+    if (g_s.jugglePreview.phase == JugglePreviewPhase::Refreshing) {
         (void)FinishJugglePreviewRefreshLocked(false);
     }
-    if (!g_s.jugglePreview.held) return;
+    if (g_s.jugglePreview.phase == JugglePreviewPhase::Unheld) return;
     const JugglePreviewLease lease = g_s.jugglePreview;
     AbandonJugglePreviewLocked();
 
@@ -816,7 +816,7 @@ bool SuppressAndReleaseJugglePreviewLocked(const char* reason,
                                            bool restoreOwnedState) {
     const JugglePreviewLease lease = g_s.jugglePreview;
     bool restored = false;
-    if (restoreOwnedState && lease.held &&
+    if (restoreOwnedState && lease.phase != JugglePreviewPhase::Unheld &&
         GetRuntimeLifecycleGeneration() == lease.lifecycleGeneration &&
         GetPlayerBase(2) == lease.playerBase &&
         PauseIntegration::IsPausedOrFrozen()) {
@@ -833,10 +833,10 @@ bool SuppressAndReleaseJugglePreviewLocked(const char* reason,
 }
 
 bool FinishJugglePreviewRefreshLocked(bool normalizePresentation) {
-    if (!g_s.jugglePreview.refreshActive) return true;
+    if (g_s.jugglePreview.phase != JugglePreviewPhase::Refreshing) return true;
 
     const std::uint64_t token = g_s.jugglePreview.refreshToken;
-    g_s.jugglePreview.refreshActive = false;
+    g_s.jugglePreview.phase = JugglePreviewPhase::Held;
     g_s.jugglePreview.refreshToken = 0;
     bool paused = PauseIntegration::EndMenuSurfaceRefresh(
         PauseIntegration::MenuSurface::TutorialPage, token);
@@ -925,7 +925,7 @@ bool StageJugglePreviewLocked(HudPolicy::HudFocus focus) {
     if (g_s.jugglePreviewSuppressedPage == g_s.page) {
         return false;
     }
-    if (g_s.jugglePreview.held && g_s.jugglePreview.focus == focus) return true;
+    if (g_s.jugglePreview.phase != JugglePreviewPhase::Unheld && g_s.jugglePreview.focus == focus) return true;
     if (!g_s.freezeConfirmed || !PauseIntegration::IsPausedOrFrozen()) {
         RestoreJugglePreviewLocked();
         return false;
@@ -1004,7 +1004,7 @@ bool StageJugglePreviewLocked(HudPolicy::HudFocus focus) {
         return false;
     }
 
-    g_s.jugglePreview.held = true;
+    g_s.jugglePreview.phase = JugglePreviewPhase::Held;
     g_s.jugglePreview.playerBase = player;
     g_s.jugglePreview.lifecycleGeneration =
         GetRuntimeLifecycleGeneration();
@@ -1023,7 +1023,7 @@ bool StageJugglePreviewLocked(HudPolicy::HudFocus focus) {
                 refreshToken)) {
             g_s.jugglePreview.refreshStartBatch =
                 GetCurrentBattleUpdateBatch();
-            g_s.jugglePreview.refreshActive = true;
+            g_s.jugglePreview.phase = JugglePreviewPhase::Refreshing;
             g_s.jugglePreview.refreshToken = refreshToken;
             g_s.jugglePreview.refreshWatchdogTicks = 0;
             g_s.freezeConfirmed = false;
@@ -1044,7 +1044,7 @@ void SetNeutralInputLease(bool on);
 
 void SetFreeze(bool on) {
     if (on) SetNeutralInputLease(true);
-    if (on && g_s.jugglePreview.refreshActive) {
+    if (on && g_s.jugglePreview.phase == JugglePreviewPhase::Refreshing) {
         (void)FinishJugglePreviewRefreshLocked(true);
     }
     if (!on) RestoreJugglePreviewLocked();
@@ -1107,7 +1107,7 @@ void SetNeutralInputLease(bool on) {
 }
 
 void EnsureFreezeLocked() {
-    if (g_s.jugglePreview.refreshActive) {
+    if (g_s.jugglePreview.phase == JugglePreviewPhase::Refreshing) {
         g_s.freezeConfirmed = false;
         return;
     }
@@ -1135,7 +1135,7 @@ void EnsureFreezeLocked() {
 }
 
 bool TickJugglePreviewRefreshLocked() {
-    if (!g_s.jugglePreview.refreshActive) return false;
+    if (g_s.jugglePreview.phase != JugglePreviewPhase::Refreshing) return false;
     ++g_s.jugglePreview.refreshWatchdogTicks;
     g_s.freezeConfirmed = false;
 
@@ -4636,11 +4636,11 @@ void Tick(const ::Mission::Engine::Snapshot& s) {
     bool refreshSuppressesInput = false;
     if (FrozenPhase(g_s.phase)) {
         SetNeutralInputLease(true);
-        if (g_s.jugglePreview.refreshActive) {
+        if (g_s.jugglePreview.phase == JugglePreviewPhase::Refreshing) {
             refreshSuppressesInput = TickJugglePreviewRefreshLocked();
         }
         if (!::Mission::PauseMenu::IsOpen() &&
-            !g_s.jugglePreview.refreshActive) {
+            g_s.jugglePreview.phase != JugglePreviewPhase::Refreshing) {
             EnsureFreezeLocked();
         }
     }
@@ -5172,8 +5172,8 @@ void Draw(void* device, ImDrawList* dl) {
             s.sequenceArmed = g_s.armedCommitted;
             s.freezeConfirmed = g_s.freezeConfirmed;
             s.juggleOutlineValid =
-                g_s.jugglePreview.held &&
-                !g_s.jugglePreview.refreshActive &&
+                g_s.jugglePreview.phase != JugglePreviewPhase::Unheld &&
+                g_s.jugglePreview.phase != JugglePreviewPhase::Refreshing &&
                 g_s.jugglePreview.outlineValid;
             s.juggleOutline = g_s.jugglePreview.outline;
         }

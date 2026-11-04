@@ -32,8 +32,8 @@ namespace {
     
     std::atomic<Framestep::StepMode> s_stepMode{Framestep::StepMode::FullFrame};
     std::atomic<int> s_pendingVanillaSubsteps{0};
-    std::atomic<bool> s_vanillaHookStepActive{false};
-    std::atomic<bool> s_vanillaStepInBattleUpdate{false};
+    enum class EngineStepPhase { Idle, Queued, Updating, Finishing };
+    std::atomic<EngineStepPhase> s_engineStepPhase{EngineStepPhase::Idle};
     std::atomic<uint8_t> s_vanillaStepSpeed{0};
     std::atomic<int> s_pendingRevivalNativeSteps{0};
     std::atomic<uint32_t> s_lastRevivalStepCounter{0};
@@ -159,8 +159,7 @@ namespace {
 
     void ResetVanillaStepTracking() {
         s_pendingVanillaSubsteps.store(0);
-        s_vanillaHookStepActive.store(false);
-        s_vanillaStepInBattleUpdate.store(false);
+        s_engineStepPhase.store(EngineStepPhase::Idle);
         s_vanillaStepSpeed.store(0);
         s_inFrameStep.store(false);
     }
@@ -264,7 +263,7 @@ namespace {
             || s_inFrameStep.load()
             || s_stepRequested.load()
             || s_visualPatchesApplied.load()
-            || s_vanillaHookStepActive.load()
+            || s_engineStepPhase.load() != EngineStepPhase::Idle
             || s_pendingVanillaSubsteps.load() > 0;
     }
 
@@ -317,8 +316,7 @@ namespace {
 
         s_stepRequested.store(false);
         s_pendingVanillaSubsteps.store(subframes);
-        s_vanillaHookStepActive.store(true);
-        s_vanillaStepInBattleUpdate.store(false);
+        s_engineStepPhase.store(EngineStepPhase::Queued);
         s_vanillaStepSpeed.store(0);
 
         std::ostringstream oss;
@@ -332,7 +330,7 @@ namespace {
         const uintptr_t battle = reinterpret_cast<uintptr_t>(battleContext);
         s_lastBattleContext.store(battle);
 
-        if (!s_vanillaHookStepActive.load()
+        if (s_engineStepPhase.load() == EngineStepPhase::Idle
             || !s_inFrameStep.load()
             || !s_paused.load()
             || !UsesEngineStep(GetBackend())
@@ -360,7 +358,7 @@ namespace {
 
         if (WriteBattleGamespeed(battle, speed)) {
             s_vanillaStepSpeed.store(speed);
-            s_vanillaStepInBattleUpdate.store(true);
+            s_engineStepPhase.store(EngineStepPhase::Updating);
         }
     }
 
@@ -368,7 +366,8 @@ namespace {
         const uintptr_t battle = reinterpret_cast<uintptr_t>(battleContext);
         s_lastBattleContext.store(battle);
 
-        if (!s_vanillaStepInBattleUpdate.exchange(false)) {
+        auto expected = EngineStepPhase::Updating;
+        if (!s_engineStepPhase.compare_exchange_strong(expected, EngineStepPhase::Finishing)) {
             return;
         }
 
@@ -382,7 +381,7 @@ namespace {
         }
 
         s_pendingVanillaSubsteps.store(0);
-        s_vanillaHookStepActive.store(false);
+        s_engineStepPhase.store(EngineStepPhase::Idle);
         s_inFrameStep.store(false);
         s_stepCounter.fetch_add(1);
 

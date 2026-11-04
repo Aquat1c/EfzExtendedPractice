@@ -1293,7 +1293,7 @@ void FrameDataMonitor() {
                 StopBufferFreezing();
             }
             
-            if (p1DelayState.isDelaying || p2DelayState.isDelaying) {
+            if (p1DelayState.IsDelaying() || p2DelayState.IsDelaying()) {
                 ClearAllAutoActionTriggers();
                 LogOut("[FRAME MONITOR] Cleared delay states due to phase change", true);
             }

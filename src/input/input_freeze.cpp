@@ -31,7 +31,6 @@ std::atomic<uint64_t> g_tutorialFreezeToken{0};
 std::atomic<uint64_t> g_nextTutorialFreezeToken{1};
 struct FreezeSessionState {
     std::atomic<bool> active{false};
-    std::atomic<bool> threadRunning{false};
     uint16_t originalIndex{0};
     bool originalIndexValid{false};
 };
@@ -598,7 +597,6 @@ void BeginBufferFreezeSession(int playerNum, std::string_view label) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     auto &s = g_freezeSession[playerNum];
     s.active.store(true);
-    s.threadRunning.store(false);
     s.originalIndexValid = false;
     uintptr_t playerPtr = GetPlayerPointer(playerNum);
     if (playerPtr) {
@@ -620,7 +618,6 @@ void EndBufferFreezeSession(int playerNum, const char* reason, bool clearGlobals
     if (!s.active.load()) return;
     if (g_onlineModeActive.load(std::memory_order_acquire)) {
         s.active.store(false, std::memory_order_release);
-        s.threadRunning.store(false, std::memory_order_release);
         s.originalIndexValid = false;
         if (clearGlobals) {
             g_frozenBufferLength = 0;
@@ -635,9 +632,6 @@ void EndBufferFreezeSession(int playerNum, const char* reason, bool clearGlobals
     StopBufferFreezingIgnoringTutorialLease();
 
     auto tWaitStart = clock::now();
-    for (int i=0; i<20 && s.threadRunning.load(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
     auto tWaitEnd = clock::now();
 
     // Neutralize only the written region and a small tail; a full clear causes a frame hitch.
@@ -671,7 +665,6 @@ void EndBufferFreezeSession(int playerNum, const char* reason, bool clearGlobals
     auto tCleanEnd = clock::now();
 
     s.active.store(false);
-    s.threadRunning.store(false);
 
     if (clearGlobals) {
         g_frozenBufferLength = 0;

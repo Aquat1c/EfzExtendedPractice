@@ -138,9 +138,9 @@ bool IsAutoActionActiveForPlayer(int playerNum) {
     }
     
     if (playerNum == 1) {
-        return p1DelayState.isDelaying || p1ActionApplied;
+        return p1DelayState.IsDelaying() || p1ActionApplied;
     } else if (playerNum == 2) {
-        return p2DelayState.isDelaying || p2ActionApplied;
+        return p2DelayState.IsDelaying() || p2ActionApplied;
     }
     
     return false;

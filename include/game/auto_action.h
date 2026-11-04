@@ -6,8 +6,15 @@
 #include <string>  
 #include "../include/core/constants.h"
 
+enum class WakeHoldPhase { Disabled, Primed, Issued };
+constexpr WakeHoldPhase WakeHoldAfterFailure(WakeHoldPhase phase) {
+    return phase == WakeHoldPhase::Issued ? WakeHoldPhase::Primed : phase;
+}
+
+enum class TriggerDelayPhase { Idle, WaitingDispatch, AwaitingMotion, AwaitingNormal, AwaitingRecipe };
+
 struct TriggerDelayState {
-    bool isDelaying;
+    TriggerDelayPhase phase;
     int delayFramesRemaining;
     int triggerType;
     short pendingMoveID;
@@ -17,11 +24,19 @@ struct TriggerDelayState {
     int  chosenCustomId;
     int  chosenDelay;      // visual-frame delay for the chosen option, or -1 if inherited
     int  chosenChargeFollowup; // 0=Off, 1=IC on contact, 2=FIC window
-    uint64_t pendingMotionGeneration;
-    uint64_t pendingNormalGeneration;
-    uint64_t pendingRecipeGeneration;
+    uint64_t pendingGeneration;
     int      dispatchAttempts;
     int      pendingWaitTicks;
+
+    bool IsDelaying() const { return phase != TriggerDelayPhase::Idle; }
+    void RetryDispatch() {
+        phase = TriggerDelayPhase::WaitingDispatch;
+        pendingGeneration = 0;
+    }
+    void WaitFor(TriggerDelayPhase consumer, uint64_t generation) {
+        phase = consumer;
+        pendingGeneration = generation;
+    }
 };
 
 enum class AutoActionApplyResult : uint8_t {

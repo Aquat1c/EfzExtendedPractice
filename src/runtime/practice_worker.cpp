@@ -12,7 +12,8 @@ std::condition_variable signalChanged;
 bool pendingSignal=false;
 std::condition_variable retirementChanged;
 bool pendingRetirementProgress=false;
-std::atomic<bool> stopRequested{false},waitFaulted{false};
+enum class MonitorPhase { Running, StopRequested, Faulted };
+std::atomic<MonitorPhase> monitorPhase{MonitorPhase::Running};
 }
 void MonitorThreadStarted(MonitorTimingLease& timing) noexcept {
     monitorTiming.store(&timing,std::memory_order_release);runningMonitors.fetch_add(1);monitorParked.store(false,std::memory_order_release);
@@ -25,7 +26,7 @@ void SetMonitorParked(bool parked) noexcept {
 bool MonitorParked() noexcept {return monitorParked.load(std::memory_order_acquire);}
 MonitorStatus ReadMonitorStatus() noexcept {
     const auto* timing=monitorTiming.load(std::memory_order_acquire);
-    return {runningMonitors.load(),timing&&timing->TimerHeld(),timing&&timing->PriorityHeld(),waitFaulted.load()};
+    return {runningMonitors.load(),timing&&timing->TimerHeld(),timing&&timing->PriorityHeld(),monitorPhase.load()==MonitorPhase::Faulted};
 }
 void MonitorTimingLease::BeginInterval() noexcept {
     if(interval_)return;
@@ -52,21 +53,25 @@ bool MonitorTimingLease::EndInterval() noexcept {
 }
 
 namespace Practice {
-void RecordMonitorFailure() noexcept {waitFaulted.store(true,std::memory_order_release);stopRequested.store(true,std::memory_order_release);signalChanged.notify_all();retirementChanged.notify_all();}
+void RecordMonitorFailure() noexcept {monitorPhase.store(MonitorPhase::Faulted,std::memory_order_release);signalChanged.notify_all();retirementChanged.notify_all();}
 void NotifyMonitorScopeChanged() noexcept {
     try {{std::lock_guard<std::mutex> lock(signalMutex);pendingSignal=true;}signalChanged.notify_one();}
     catch(...) {RecordMonitorFailure();}
 }
-void RequestMonitorStop() noexcept {stopRequested.store(true,std::memory_order_release);NotifyMonitorScopeChanged();}
-bool MonitorStopRequested() noexcept {return stopRequested.load(std::memory_order_acquire);}
+void RequestMonitorStop() noexcept {
+    auto expected=MonitorPhase::Running;
+    (void)monitorPhase.compare_exchange_strong(expected,MonitorPhase::StopRequested,std::memory_order_release,std::memory_order_relaxed);
+    NotifyMonitorScopeChanged();
+}
+bool MonitorStopRequested() noexcept {return monitorPhase.load(std::memory_order_acquire)!=MonitorPhase::Running;}
 MonitorWait WaitForMonitorSignal(uint64_t nanoseconds) noexcept {
     try {
         std::unique_lock<std::mutex> lock(signalMutex);
-        const auto ready=[] {return pendingSignal || stopRequested.load(std::memory_order_acquire) || waitFaulted.load(std::memory_order_acquire);};
+        const auto ready=[] {return pendingSignal || monitorPhase.load(std::memory_order_acquire)!=MonitorPhase::Running;};
         if(nanoseconds==UINT64_MAX)signalChanged.wait(lock,ready);
         else if(!signalChanged.wait_for(lock,std::chrono::nanoseconds(nanoseconds),ready))return MonitorWait::Deadline;
-        if(waitFaulted.load(std::memory_order_acquire))return MonitorWait::Failed;
-        if(stopRequested.load(std::memory_order_acquire))return MonitorWait::Stopped;
+        if(monitorPhase.load(std::memory_order_acquire)==MonitorPhase::Faulted)return MonitorWait::Failed;
+        if(monitorPhase.load(std::memory_order_acquire)!=MonitorPhase::Running)return MonitorWait::Stopped;
         pendingSignal=false;return MonitorWait::Signaled;
     }catch(...) {RecordMonitorFailure();return MonitorWait::Failed;}
 }
@@ -81,8 +86,8 @@ bool WaitForRetirementProgress() noexcept {
     try {
         std::unique_lock<std::mutex> lock(signalMutex);
         // Bounded: this blocks the native thread, and the caller re-polls on a timeout.
-        retirementChanged.wait_for(lock,std::chrono::milliseconds(250),[]{return pendingRetirementProgress || waitFaulted.load(std::memory_order_acquire);});
-        if(waitFaulted.load(std::memory_order_acquire))return false;
+        retirementChanged.wait_for(lock,std::chrono::milliseconds(250),[]{return pendingRetirementProgress || monitorPhase.load(std::memory_order_acquire)==MonitorPhase::Faulted;});
+        if(monitorPhase.load(std::memory_order_acquire)==MonitorPhase::Faulted)return false;
         pendingRetirementProgress=false;return true;
     }catch(...) {RecordMonitorFailure();return false;}
 }

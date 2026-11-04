@@ -832,8 +832,8 @@ void DisableFeatures() {
 
     ResetFrameAdvantageState();
     ResetActionFlags();
-    p1DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
-    p2DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
+    p1DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
+    p2DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
 
     g_featuresEnabled.store(false);
     
@@ -922,8 +922,8 @@ void ClearTransientInputOverrides() {
 }
 
 void ResetDelayStatesForSuspend() {
-    p1DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
-    p2DelayState = {false, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
+    p1DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
+    p2DelayState = {TriggerDelayPhase::Idle, 0, TRIGGER_NONE, 0, -1, -1, 0, -1};
 }
 
 bool OverlayTrackingIdsAreClear() {
