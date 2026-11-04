@@ -1843,9 +1843,26 @@ void Render() {
 
     const int activePane = ActivePane();
     if (g_shell.activeTopTab == TT_PALETTE) {
-        const bool contentInput = g_shell.focusRegion == FocusRegion::Content &&
+        const float paneT = AnimT(g_anim.paneTick, kPaneAnimMs);
+        const float offsetX = CurrentPaneOffsetX();
+        const bool contentInput = paneT >= 1.0f && g_shell.focusRegion == FocusRegion::Content &&
             !tabClickConsumed && !tabFocusConsumed;
+        const int contentFirstVertex = dl->VtxBuffer.Size;
+        if (paneT < 1.0f) {
+            dl->ChannelsSplit(2);
+            dl->ChannelsSetCurrent(1);
+        }
         PaletteEditorPanel::Render(dl, L.dataStartY, contentInput);
+        if (paneT < 1.0f) {
+            for (int i = contentFirstVertex; i < dl->VtxBuffer.Size; ++i)
+                dl->VtxBuffer[i].pos.x += offsetX;
+            for (ImDrawCmd& cmd : dl->CmdBuffer) {
+                cmd.ClipRect.x += offsetX;
+                cmd.ClipRect.z += offsetX;
+            }
+            Anim::ScaleVertexAlpha(dl, contentFirstVertex, paneT);
+            dl->ChannelsMerge();
+        }
         if (PaletteEditorPanel::ConsumeFocusAboveRequest()) MoveFocusAboveContent("palette top nav up");
         if (PaletteEditorPanel::ConsumeCloseRequest()) BeginCloseAnimation();
         SyncPalettePreview();

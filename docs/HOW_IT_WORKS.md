@@ -839,16 +839,21 @@ seam, so they always pass through. All six hooks are refused as a unit if any en
 
 ## Palette editing
 
-Both menu styles expose a top-level Palette tab. Colour controls sit beside
-an animated preview, with player selection, Save, Save As and Load inside
-the palette content. Files opens the secondary file operations using the
-custom menu's controls. The shared menu header is unchanged.
+Both menu styles expose a top-level Palette tab. Compact colour controls sit
+beside an animated preview. Load, Save, Save As, Apply and Restore form the
+bottom action row; the shared menu header is unchanged. Palette uses the
+same pane transition as other tabs, including its clip rectangles, and
+waits for the transition to finish before accepting input. Each control
+has a description for mouse hover and keyboard/gamepad focus.
 Shade groups are selected initially, and opaque control backgrounds keep
 the underlying match from obscuring the editor.
-Back closes the editor without discarding the draft. It first returns from
-Files, cancels an open dialog or finishes panning when any of those is active.
-Individual colours accept RGB, HSV or three/six-digit hex;
-numbered shade groups preserve the stock palette's lightness relationships.
+Back closes the editor without discarding the draft. It first cancels an
+open dialog or finishes colour adjustment or panning when those are active.
+The visual picker edits saturation/value and hue in the existing colour
+control area. RGB/HSV sliders and three/six-digit hex entry are also available.
+The sprite eyedropper selects the clicked index in Shade mode and its group
+in Ramp mode; transparent and shared effect colours remain uneditable.
+Numbered shade groups preserve the stock palette's lightness relationships.
 Pins protect individual edits from group changes. Undo keeps sixteen edits,
 with a slider drag or held adjustment recorded as one edit. Hue remains editable on black and
 gray even when changing it does not change the visible RGB value.
@@ -857,7 +862,7 @@ gray even when changing it does not change the visible RGB value.
 mod-owned assets. Six stock palettes supply forty colours each. Transparency
 comes from the sprite data, and shared effect colours come from the stage
 palette rather than the editable fighter bank. Animation choices use PAT
-IDs, the embedded move classifications, and the move/entity notation catalogues,
+IDs, classification subtabs and the move/entity notation catalogues,
 including sparse IDs and the native last-definition rule for duplicates.
 Nanase and Ikumi also expose their alternate PATs. Preview playback uses visual frame durations at 64 Hz and
 never executes a move or advances the match. Dynamic default-pool D3D9 textures
@@ -870,17 +875,18 @@ Nanase and Ikumi's alternate tables. External move-data files are not required
 or read; resource filenames remain internal keys while menus use character
 display names.
 
-`palette_editor.cpp` owns the document and file library. The immutable stock
-baseline, edited colours, pins and group targets are stored together in
-JSON under `palettes` beside the configuration file. Invalid imports leave
-the current document intact. **Save** updates the loaded library entry after
-confirmation, or asks for a name for a new draft. **Save As** creates a new
-named entry and refuses collisions; replacing an entry verifies that the
-scanned file has not changed. Writes use a
-flushed temporary file and atomic rename. Deleted entries move to a
-recoverable per-character trash folder, accessible from the Files menu's
-recovery view. Native PAL export contains only the
-forty BGR colour triples and their count; library metadata stays in JSON.
+`palette_editor.cpp` owns the document and file operations. Windows Open and
+Save As choose JSON or native PAL files at a user-selected path. The initial
+directory is `palettes` beside the configuration file; older library JSON
+files remain readable. JSON stores the immutable stock baseline, edited
+colours, pins and group targets. Native PAL stores forty BGR colour triples
+and their count. Invalid or wrong-character imports leave the draft intact.
+Save checks the loaded file's fingerprint before replacement; Save As uses
+the native overwrite confirmation. Writes use a flushed temporary file and
+atomic rename. Cancelling either dialog preserves the draft and source path.
+Japanese labels, descriptions and move names use the shared translation
+table and embedded font. A language change rebuilds cached move labels
+without discarding the palette draft.
 
 `palette_live.cpp` owns temporary fighter recolouring. The panel requests a
 snapshot; the existing admitted battle update applies it on the game thread,
@@ -896,8 +902,8 @@ Restoration requires that identity and the last-written bytes to still match.
 Leaving the editor restores uncommitted preview colours. **Apply** retains
 the edited colours for the current match without writing a file; later preview
 edits restore to those applied colours. **Restore** cancels temporary preview.
-**Export + apply** also writes the chosen native slot for later use through
-the existing custom-palette selection. Savestate writes
+Saving a PAL to a native character slot makes it available through the
+existing custom-palette selection. Savestate writes
 suspend the panel, invalidate its old ownership, and refresh the complete
 restored palette after simulation state has been restored. An unavailable
 graphics device defers presentation refresh without failing the savestate.

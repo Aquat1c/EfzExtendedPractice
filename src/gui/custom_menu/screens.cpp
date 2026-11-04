@@ -1297,11 +1297,11 @@ struct PopupState {
     DWORD openTick = 0;
     int slideDir = 1;
     int selectedCategory = 0;
-    const char* filteredChoices[128]{};
-    int filteredChoiceValues[128]{};
-    const char* filteredHeaders[128]{};
-    bool filteredIndented[128]{};
-    int filteredRows[128]{};
+    std::vector<const char*> filteredChoices;
+    std::vector<int> filteredChoiceValues;
+    std::vector<const char*> filteredHeaders;
+    std::vector<bool> filteredIndented;
+    std::vector<int> filteredRows;
     int filteredRowCount = 0;
     int filteredChoiceCount = 0;
     int focusIdx = 0;
@@ -1756,6 +1756,9 @@ bool PopupSameGroup(const char* a, const char* b) {
 void PopupLayoutGroups() {
     const RowChoiceValueFormatter groupOf = g_popup.sourceRow.choiceGroupFormatter;
     const int count = g_popup.filteredChoiceCount;
+    g_popup.filteredHeaders.resize(count);
+    g_popup.filteredIndented.resize(count);
+    g_popup.filteredRows.resize(count);
     const char* previous = nullptr;
     int row = 0;
     for (int i = 0; i < count; ++i) {
@@ -1786,7 +1789,9 @@ void PopupOpenCategory(int category) {
     }
     g_popup.selectedCategory = category;
     g_popup.filteredChoiceCount = 0;
-    for (int i = 0; i < g_popup.allChoiceCount && g_popup.filteredChoiceCount < 128; ++i) {
+    g_popup.filteredChoices.resize(g_popup.allChoiceCount);
+    g_popup.filteredChoiceValues.resize(g_popup.allChoiceCount);
+    for (int i = 0; i < g_popup.allChoiceCount; ++i) {
         if (g_popup.choiceCategoryMap[i] != category) continue;
         if (!RowChoiceVisible(g_popup.sourceRow, i)) continue;
         const int local = g_popup.filteredChoiceCount++;
@@ -1795,8 +1800,8 @@ void PopupOpenCategory(int category) {
     }
     PopupLayoutGroups();
     PopupStartSlide(+1);
-    g_popup.choices = g_popup.filteredChoices;
-    g_popup.choiceValueMap = g_popup.filteredChoiceValues;
+    g_popup.choices = g_popup.filteredChoices.data();
+    g_popup.choiceValueMap = g_popup.filteredChoiceValues.data();
     g_popup.choiceCount = g_popup.filteredChoiceCount;
     g_popup.focusIdx = 0;
     if (g_popup.choiceIdxPtr) {
@@ -1837,19 +1842,14 @@ bool AdjustCategorizedRowChoice(const Row& r, int direction) {
     if (!r.choiceIdxPtr || direction == 0 || !RowUsesCategorizedChoices(r)) return false;
     const int current = ClampPopupIndex(*r.choiceIdxPtr, r.choiceCount);
     const int category = ClampPopupIndex(r.choiceCategoryMap[current], r.categoryCount);
-    int matches[128];
-    int count = 0;
-    int currentLocal = -1;
-    for (int i = 0; i < r.choiceCount && count < 128; ++i) {
-        if (r.choiceCategoryMap[i] != category) continue;
-        if (i == current) currentLocal = count;
-        matches[count++] = i;
+    const int step = direction > 0 ? 1 : -1;
+    for (int offset = 1; offset <= r.choiceCount; ++offset) {
+        const int candidate = (current + step * offset + r.choiceCount) % r.choiceCount;
+        if (r.choiceCategoryMap[candidate] != category || !RowChoiceVisible(r, candidate)) continue;
+        *r.choiceIdxPtr = candidate;
+        return candidate != current;
     }
-    if (count <= 0) return false;
-    if (currentLocal < 0) currentLocal = 0;
-    currentLocal = (currentLocal + direction + count) % count;
-    *r.choiceIdxPtr = matches[currentLocal];
-    return true;
+    return false;
 }
 
 void OpenDropdownPopup(const Row& r) {
@@ -1931,6 +1931,8 @@ void OpenMaskPopup(const Row& r) {
         PopupOpenCategory(focusCategory);
     } else {
         if (r.choiceFilter) {
+            g_popup.filteredChoices.resize(128);
+            g_popup.filteredChoiceValues.resize(128);
             g_popup.filteredChoiceCount = 0;
             for (int i = 0; i < r.choiceCount && g_popup.filteredChoiceCount < 128; ++i) {
                 if (!RowChoiceVisible(r, i)) continue;
@@ -1938,8 +1940,8 @@ void OpenMaskPopup(const Row& r) {
                 g_popup.filteredChoices[local] = r.choices[i];
                 g_popup.filteredChoiceValues[local] = i;
             }
-            g_popup.choices = g_popup.filteredChoices;
-            g_popup.choiceValueMap = g_popup.filteredChoiceValues;
+            g_popup.choices = g_popup.filteredChoices.data();
+            g_popup.choiceValueMap = g_popup.filteredChoiceValues.data();
             g_popup.choiceCount = g_popup.filteredChoiceCount;
         } else {
             g_popup.choices = r.choices;

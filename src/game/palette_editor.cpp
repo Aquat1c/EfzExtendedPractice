@@ -97,8 +97,11 @@ Color Shade(const Palette& original, Ramp ramp, unsigned index, Color target) {
     const double hue = std::hypot(c.a, c.b) < 1e-4 ? th : th+weight*std::remainder(std::atan2(c.b,c.a)-kh,2*pi);
     return FromLab({lightness, chroma*std::cos(hue), chroma*std::sin(hue)});
 }
-bool Valid(const SavedPalette& p, std::string& error) {
-    if (!SafePart(p.name, true) || !SafePart(p.character, false) || p.stockSlot >= 6) {
+bool Valid(const SavedPalette& p, std::string& error, bool libraryName = true) {
+    const bool validName = libraryName ? SafePart(p.name,true) :
+        !p.name.empty() && p.name.size() <= 1024 &&
+        std::none_of(p.name.begin(),p.name.end(),[](unsigned char c) { return c < 32 || c == 127; });
+    if (!validName || !SafePart(p.character, false) || p.stockSlot >= 6) {
         error = "Invalid palette name, character or stock slot."; return false;
     }
     try { (void)Json(p.name).dump(); }
@@ -137,7 +140,7 @@ Color DecodeColor(const Json& j) {
     if (!j.is_array() || j.size() != 3) throw std::runtime_error("Invalid RGB color.");
     return {std::uint8_t(Integer(j[0],255)),std::uint8_t(Integer(j[1],255)),std::uint8_t(Integer(j[2],255))};
 }
-bool Decode(const std::vector<std::uint8_t>& bytes, SavedPalette& out, std::string& error) {
+bool Decode(const std::vector<std::uint8_t>& bytes, SavedPalette& out, std::string& error, bool libraryName = true) {
     try {
         std::vector<std::set<std::string>> objects;
         bool duplicate = false;
@@ -166,7 +169,7 @@ bool Decode(const std::vector<std::uint8_t>& bytes, SavedPalette& out, std::stri
             if (!r.is_array() || r.size() != 3) throw std::runtime_error("Invalid ramp.");
             p.ramps.push_back({Integer(r[0],39),Integer(r[1],39),Integer(r[2],39)});
         }
-        if (!Valid(p,error)) return false;
+        if (!Valid(p,error,libraryName)) return false;
         out = std::move(p); return true;
     } catch (const std::exception&) { error = "Invalid or truncated palette file."; return false; }
 }
@@ -256,6 +259,19 @@ std::vector<std::uint8_t> Bytes(const SavedPalette& p) {
     const auto text = Encode(p).dump(2)+"\n";
     return {text.begin(),text.end()};
 }
+
+bool FilePath(const std::filesystem::path& path, PaletteFile& file, std::string& error) {
+    std::error_code ec;
+    file.path=std::filesystem::absolute(path,ec).lexically_normal();
+    if(ec) {error="Invalid palette path.";return false;}
+    try {
+        auto extension=file.path.extension().u8string();
+        std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c) {return char(std::tolower(c));});
+        if(extension!=".json"&&extension!=".pal") {error="Choose a .json or .pal palette file.";return false;}
+        file.native=extension==".pal";file.palette.name=file.path.stem().u8string();
+    } catch(const std::exception&) {error="Invalid palette path.";return false;}
+    return true;
+}
 }
 
 Hsv RgbToHsv(Color color) {
@@ -331,7 +347,7 @@ void Document::LoadStock(const std::string& character, unsigned slot, const Pale
 }
 bool Document::LoadSaved(const SavedPalette& saved, const Palette& stock, std::string& error) {
     error.clear();
-    if (!Valid(saved,error)) return false;
+    if (!Valid(saved,error,false)) return false;
     state_=saved;
     if (stock!=saved.baseline) {
         state_.baseline=stock; state_.ramps=DetectRamps(stock); state_.targets={}; state_.pins.reset();
@@ -536,6 +552,42 @@ bool Library::Restore(const LibraryEntry& deleted,LibraryEntry& restored,std::st
     if(!CheckPath(target,error)||!MoveNew(deleted.path,target.path,error)) return false;
     restored=target;return true;
 }
+bool ReadPaletteFileIdentity(const std::filesystem::path& path,std::uint64_t& fingerprint,std::string& error) {
+    error.clear();std::vector<std::uint8_t> bytes;
+    if(!ReadBytes(path,bytes,error)) return false;
+    fingerprint=Fingerprint(bytes);return true;
+}
+bool ReadPaletteFile(const std::filesystem::path& path,PaletteFile& out,std::string& error) {
+    error.clear();PaletteFile candidate;
+    if(!FilePath(path,candidate,error)) return false;
+    std::vector<std::uint8_t> bytes;
+    if(!ReadBytes(candidate.path,bytes,error,candidate.native?121:65536)) return false;
+    if(candidate.native) {
+        if(!DecodeNativePalette(bytes,candidate.palette.colors,error)) return false;
+    } else if(!Decode(bytes,candidate.palette,error,false)) return false;
+    candidate.fingerprint=Fingerprint(bytes);out=std::move(candidate);return true;
+}
+bool SavePaletteFile(const std::filesystem::path& path,const SavedPalette& palette,
+    std::optional<std::uint64_t> expectedFingerprint,PaletteFile& out,std::string& error) {
+    error.clear();PaletteFile candidate;
+    if(!FilePath(path,candidate,error)) return false;
+    const auto name=candidate.palette.name;candidate.palette=palette;candidate.palette.name=name;
+    std::vector<std::uint8_t> bytes;
+    if(candidate.native) {
+        const auto native=EncodeNativePalette(palette.colors);bytes.assign(native.begin(),native.end());
+    } else {
+        if(!Valid(candidate.palette,error,false)) return false;
+        bytes=Bytes(candidate.palette);
+    }
+    if(expectedFingerprint) {
+        std::uint64_t current=0;
+        if(!ReadPaletteFileIdentity(candidate.path,current,error)) return false;
+        if(current!=*expectedFingerprint) {error="Palette changed on disk; open it again before saving.";return false;}
+    }
+    if(!AtomicWrite(candidate.path,bytes,expectedFingerprint.has_value(),error)) return false;
+    candidate.fingerprint=Fingerprint(bytes);out=std::move(candidate);return true;
+}
+
 bool ReadNativePalette(const std::filesystem::path& path,Palette& out,std::string& error) {
     error.clear();std::vector<std::uint8_t> bytes;
     return ReadBytes(path,bytes,error,121)&&DecodeNativePalette(bytes,out,error);

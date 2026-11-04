@@ -86,6 +86,18 @@ private:
     bool CheckPath(const LibraryEntry& entry, std::string& error) const;
     std::filesystem::path directory_;
 };
+struct PaletteFile {
+    std::filesystem::path path;
+    SavedPalette palette;
+    bool native = false;
+    std::uint64_t fingerprint = 0;
+};
+bool ReadPaletteFileIdentity(const std::filesystem::path& path, std::uint64_t& fingerprint, std::string& error);
+bool ReadPaletteFile(const std::filesystem::path& path, PaletteFile& out, std::string& error);
+// A missing expected fingerprint permits creation only.
+bool SavePaletteFile(const std::filesystem::path& path, const SavedPalette& palette,
+    std::optional<std::uint64_t> expectedFingerprint, PaletteFile& out, std::string& error);
+
 bool ReadNativePalette(const std::filesystem::path& path, Palette& out, std::string& error);
 bool ExportNativePalette(const std::filesystem::path& path, const Palette& colors, bool replace, std::string& error);
 }

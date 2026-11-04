@@ -605,7 +605,7 @@ if(BUILD_TESTING)
         tests/palette_editor_ui_tests.cpp
         src/game/palette_editor.cpp src/game/palette_assets.cpp
         src/gui/custom_menu/screens.cpp src/gui/custom_menu/layout.cpp src/gui/custom_menu/scale.cpp
-        src/gui/custom_menu/fonts.cpp ${RESOURCE_SOURCES}
+        src/gui/custom_menu/fonts.cpp src/utils/i18n.cpp ${RESOURCE_SOURCES}
         ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/imgui_tables.cpp
         ${IMGUI_DIR}/backends/imgui_impl_dx9.cpp)

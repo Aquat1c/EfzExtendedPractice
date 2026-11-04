@@ -86,6 +86,80 @@ void DocumentTests() {
 void Write(const std::filesystem::path& path,const std::string& bytes) {
     std::ofstream out(path,std::ios::binary|std::ios::trunc);out<<bytes;out.close();Check(bool(out),"write fixture");
 }
+void PaletteFileTests(const std::filesystem::path& root) {
+    Document d;d.LoadStock("misaki",3,Stock());
+    d.SetName("Old name");d.SetRampColor(0,{20,50,180});d.SetPinned(0,true);
+    const auto path=root/"user selected folder"/"Selected name.JSON";
+    PaletteFile saved,loaded;std::string error;
+    Check(SavePaletteFile(path,d.State(),std::nullopt,saved,error),"external JSON create");
+    Check(saved.path==path&&!saved.native&&saved.palette.name=="Selected name","selected filename sets name");
+    Check(ReadPaletteFile(path,loaded,error)&&loaded.fingerprint==saved.fingerprint&&
+        loaded.palette.name=="Selected name"&&loaded.palette.character=="misaki"&&loaded.palette.stockSlot==3&&
+        loaded.palette.baseline==d.Original()&&loaded.palette.colors==d.Colors()&&
+        loaded.palette.pins==d.State().pins&&loaded.palette.targets==d.State().targets&&
+        loaded.palette.ramps.size()==d.Ramps().size(),"external JSON metadata round trip");
+    Document reopened;
+    Check(reopened.LoadSaved(loaded.palette,Stock(),error)&&reopened.Colors()==d.Colors(),"external JSON loads document");
+    auto result=saved;
+    Check(!SavePaletteFile(path,d.State(),std::nullopt,result,error)&&!error.empty()&&result.fingerprint==saved.fingerprint,
+        "external create collision leaves result");
+    d.SetColor(2,{4,6,8});
+    Check(SavePaletteFile(path,d.State(),saved.fingerprint,result,error)&&result.fingerprint!=saved.fingerprint,
+        "external replacement updates fingerprint");
+    Check(!SavePaletteFile(path,saved.palette,saved.fingerprint,loaded,error)&&!error.empty(),"stale save refused");
+    Check(ReadPaletteFile(path,loaded,error)&&loaded.palette.colors==d.Colors(),"stale save preserves disk");
+    const auto native=root/"user selected folder"/"Native colors.PAL";
+    Check(SavePaletteFile(native,d.State(),std::nullopt,saved,error)&&saved.native,"external native create");
+    Check(std::filesystem::file_size(native)==121,"external native format size");
+    Check(ReadPaletteFile(native,loaded,error)&&loaded.native&&loaded.fingerprint==saved.fingerprint&&
+        loaded.palette.colors==d.Colors()&&loaded.palette.character.empty()&&loaded.palette.name=="Native colors",
+        "external native round trip has colors without invented metadata");
+    auto changed=d.State();changed.colors[0]={7,8,9};
+    Check(!SavePaletteFile(native,changed,std::nullopt,result,error),"external native collision refused");
+    Check(SavePaletteFile(native,changed,saved.fingerprint,result,error),"external native replacement");
+    Check(!SavePaletteFile(native,d.State(),saved.fingerprint,result,error),"external native stale save refused");
+    Check(ReadPaletteFile(native,loaded,error)&&loaded.palette.colors==changed.colors,"native stale save preserves disk");
+    const auto before=loaded;
+    Write(native,"bad");
+    Check(!ReadPaletteFile(native,loaded,error)&&!error.empty()&&loaded.fingerprint==before.fingerprint&&
+        loaded.palette.colors==before.palette.colors,"malformed native leaves output");
+    Write(path,"{}");
+    Check(!ReadPaletteFile(path,loaded,error)&&!error.empty()&&loaded.fingerprint==before.fingerprint,
+        "malformed JSON leaves output");
+    std::uint64_t identity=0;
+    Check(ReadPaletteFileIdentity(path,identity,error)&&SavePaletteFile(path,d.State(),identity,result,error)&&
+        ReadPaletteFile(path,loaded,error)&&loaded.palette.colors==d.Colors(),"explicit malformed JSON replacement");
+    Check(ReadPaletteFileIdentity(native,identity,error)&&SavePaletteFile(native,d.State(),identity,result,error)&&
+        ReadPaletteFile(native,loaded,error)&&loaded.palette.colors==d.Colors(),"explicit malformed native replacement");
+    const auto unicodeName=std::string(40,'a')+u8"\u9752\u8272\u306e\u30d1\u30ec\u30c3\u30c8";
+    const auto unicodePath=root/std::filesystem::u8path(u8"\u30d1\u30ec\u30c3\u30c8")/std::filesystem::u8path(unicodeName+".json");
+    Check(SavePaletteFile(unicodePath,d.State(),std::nullopt,saved,error)&&ReadPaletteFile(unicodePath,loaded,error)&&
+        loaded.palette.name==unicodeName&&loaded.palette.colors==d.Colors(),"long Japanese filename round trip");
+    Check(reopened.LoadSaved(loaded.palette,Stock(),error)&&reopened.State().name==unicodeName,
+        "document accepts long Japanese display name");
+    Library legacy(root/"legacy");LibraryEntry legacyEntry;
+    Check(!legacy.SaveNew(loaded.palette,legacyEntry,error),"legacy library keeps name length restriction");
+    auto badName=loaded.palette;badName.name="bad\nname";
+    Check(!reopened.LoadSaved(badName,Stock(),error),"document rejects control characters in display name");
+    badName.name=std::string(1,char(-1));
+    Check(!reopened.LoadSaved(badName,Stock(),error),"document rejects invalid UTF-8 display name");
+    Write(path,std::string(65537,'x'));
+    Check(!ReadPaletteFile(path,loaded,error),"oversized external file refused");
+    const auto previousIdentity=identity;
+    Check(!ReadPaletteFileIdentity(path,identity,error)&&identity==previousIdentity,
+        "oversized identity probe leaves fingerprint");
+    Check(!SavePaletteFile(path,d.State(),previousIdentity,result,error)&&std::filesystem::file_size(path)==65537,
+        "oversized replacement preserves existing file");
+    Check(!ReadPaletteFile(root/"missing.json",loaded,error)&&!error.empty(),"missing external file refused");
+    Check(!SavePaletteFile(root/"unknown.txt",d.State(),std::nullopt,result,error)&&!error.empty()&&
+        !std::filesystem::exists(root/"unknown.txt"),"unsupported extension refused");
+    Check(!SavePaletteFile(root/"missing.json",d.State(),saved.fingerprint,result,error)&&
+        !std::filesystem::exists(root/"missing.json"),"replacement of deleted file refused");
+    auto invalid=d.State();invalid.ramps.clear();
+    Check(!SavePaletteFile(root/"invalid.json",invalid,std::nullopt,result,error)&&
+        !std::filesystem::exists(root/"invalid.json"),"invalid metadata cannot be saved");
+}
+
 void LibraryTests(const std::filesystem::path& root) {
     Library library(root);Document d;d.LoadStock("misaki",3,Stock());
     d.SetName("Blue");d.SetRampColor(0,{20,50,180});d.SetPinned(0,true);
@@ -153,7 +227,7 @@ void LibraryTests(const std::filesystem::path& root) {
 int main() {
     const auto root=std::filesystem::temp_directory_path()/("efz_palette_editor_tests_"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
     try {
-        ColorTests();ScopedHsvTests();DocumentTests();LibraryTests(root);
+        ColorTests();ScopedHsvTests();DocumentTests();PaletteFileTests(root);LibraryTests(root);
         std::error_code ec;std::filesystem::remove_all(root,ec);
         std::cout<<"Palette colors, gestures, ramps, persistence and recovery passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<"\nFixtures: "<<root<<'\n';return 1;}

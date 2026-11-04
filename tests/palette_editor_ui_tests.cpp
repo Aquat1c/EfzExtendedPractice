@@ -20,6 +20,7 @@ struct TestInput {
     bool switchPlayer=false,previous=false,next=false,click=false,rightClick=false;
     float x=-100,y=-100,wheel=0;
 } input;
+bool inputSuspended=false;
 void Require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 bool Inside(float x,float y,float w,float h) {return input.x>=x && input.x<x+w && input.y>=y && input.y<y+h;}
 }
@@ -30,8 +31,8 @@ void ResetEdges(){
     input.click=previous.click;input.rightClick=previous.rightClick;
     input.x=previous.x;input.y=previous.y;input.wheel=previous.wheel;
 }
-void SetSuspended(bool){}
-bool IsSuspended(){return false;}
+void SetSuspended(bool value){inputSuspended=value;}
+bool IsSuspended(){return inputSuspended;}
 bool NavUp(){return input.up;} bool NavDown(){return input.down;}
 bool NavLeft(){return input.left;} bool NavRight(){return input.right;}
 bool NavLeftHeld(){return input.leftHeld;} bool NavRightHeld(){return input.rightHeld;}
@@ -62,11 +63,6 @@ const char* ClassName(Cls type){static const char* labels[]={"","System","A","B"
 HMODULE g_hSelfModule=GetModuleHandleW(nullptr);
 void LogOut(const std::string&,bool){}
 namespace Mission::Render {void InvalidateTextLayouts(){}}
-namespace I18n {
-const char* Tr(const char* text){return text;}
-Language GetLanguage(){return English;}
-const unsigned short* JapaneseGlyphRanges(){static const unsigned short ranges[]={0x20,0x7E,0};return ranges;}
-}
 KeyBindings detectedBindings{};
 namespace Config {
 const Settings& GetSettings(){static Settings settings{};return settings;}
@@ -95,8 +91,20 @@ void SetFonts(float scale) {
     bodyFont=Fonts::Body();headerFont=Fonts::Header();
     Require(bodyFont && headerFont && Fonts::IsLoaded(),"Production menu fonts unavailable");
 }
+std::filesystem::path dialogSelection,dialogInitial;
+std::string dialogError;
+bool dialogAccepted=false,dialogSave=false;
+int dialogCalls=0;
+bool TestFileDialog(bool save,const std::filesystem::path& initial,std::filesystem::path& selected,std::string& error) {
+    ++dialogCalls;dialogSave=save;dialogInitial=initial;error=dialogError;
+    if(dialogAccepted) selected=dialogSelection;
+    return dialogAccepted;
+}
+
 void Seed() {
     Panel::g=Panel::State{};
+    Panel::g_fileDialog=TestFileDialog;
+    dialogSelection.clear();dialogInitial.clear();dialogError.clear();dialogAccepted=false;dialogCalls=0;
     Panel::g.open=Panel::g.loaded=true;
     Panel::g_open.store(true);
     Panel::g.context.resourceName="ayu";
@@ -110,8 +118,8 @@ void Seed() {
     Panel::g.assets.animations.push_back({0,{{0,0,1,2,2,2},{0,4,1,2,2,2}}});
     Panel::g.assets.animations.push_back({105,{{0,4,1,2,2,2}}});
     Panel::BuildMoveChoices();Panel::SyncColor();
-    Panel::g.status="Draft changes remain separate from saved palettes.";
-    Panel::g.liveStatus="Live preview applied.";
+    Panel::g.status=I18n::Tr("Palette changed on disk; open it again before saving.");
+    Panel::g.liveStatus=I18n::Tr("Live preview applied");
     input={};
 }
 void DrawPalettePage(bool inputEnabled=true) {
@@ -127,7 +135,8 @@ void DrawPalettePage(bool inputEnabled=true) {
     Panel::Render(dl,top,inputEnabled);
     if(!hadOverlay && !Panel::Modal() && !Screens::IsPopupActive())
         for(int i=firstVertex;i<dl->VtxBuffer.Size;++i)
-            Require(dl->VtxBuffer[i].pos.y>=top-2,"Palette content drew over the shared header or top tabs");
+            Require(dl->VtxBuffer[i].pos.y>=top-2 && dl->VtxBuffer[i].pos.y<=480,
+                "Palette content escaped the shared content bounds");
 }
 void BeginFrame() {
     input={};
@@ -174,7 +183,7 @@ void WriteBytes(const std::filesystem::path& path,const std::vector<uint8_t>& by
     Require(bool(stream),"Fixture write failed");
 }
 void CheckSources(const std::filesystem::path& directory) {
-    contextFixture=directory/("fixture-"+std::to_string(GetCurrentProcessId()));
+    contextFixture=std::filesystem::absolute(directory)/("fixture-"+std::to_string(GetCurrentProcessId()));
     std::vector<uint8_t> dat(721);dat[0]=240;dat[1]=255;dat[2]=128;dat[3]=17;
     const uint8_t sprite[]={3,0,1,0,15,0x82};dat.insert(dat.end(),std::begin(sprite),std::end(sprite));
     WriteBytes(contextFixture/"ayu"/"ayu.dat",dat);
@@ -191,74 +200,77 @@ void CheckSources(const std::filesystem::path& directory) {
     auto* queuedTexture=Panel::g_workingTexture.value;
     Panel::LoadPlayer(1);
     Require(Panel::g.loaded && Panel::g.document.Colors()==native,"Opening active custom PAL substituted stock colors");
-    Require(!Panel::g.document.Dirty(),"Loaded native PAL was incorrectly dirty");
+    Require(!Panel::g.document.Dirty() && !Panel::g.source,"Active game PAL became dirty or writable source");
     Require(Panel::g.document.Original()!=native,"Native import overwrote immutable stock baseline");
     Require(Panel::g_workingTexture.value==queuedTexture,"Source switch released a queued texture");
-    BeginFrame();
-    Panel::Save();
-    Require(Panel::g.textKind==Panel::State::TextKind::SaveAs,"Saving a new palette did not ask for its name");
-    Panel::g.text="UI Test";Panel::CommitText();
-    Require(Panel::g.source.has_value() && !Panel::g.document.Dirty(),"Save new failed");
+    Panel::g_fileDialog=TestFileDialog;dialogAccepted=true;dialogSelection=contextFixture/"UI Test.json";
+    BeginFrame();Panel::Save();
+    Require(dialogSave && Panel::g.source && Panel::g.source->path==dialogSelection && !Panel::g.document.Dirty(),
+        "Saving a new palette did not use Save As");
+    const int saveDialogs=dialogCalls;
     Panel::g.document.SetColor(1,{99,88,77});Panel::Save();
-    Require(bool(Panel::g.confirm) && Panel::g.confirmFocus==0,"Replace confirmation was not safe by default");
-    NextFrame();input.activate=true;Panel::DrawConfirmation(ImGui::GetForegroundDrawList());
-    Require(Panel::g.document.Dirty(),"Keep editing committed replacement");
-    Panel::Save();NextFrame();Panel::g.confirmFocus=1;input.activate=true;
-    Panel::DrawConfirmation(ImGui::GetForegroundDrawList());
-    Require(!Panel::g.document.Dirty(),"Confirmed replacement failed");
-    ::PaletteEditor::SavedPalette saved;std::string error;
-    Require(Panel::g.library->Read(*Panel::g.source,saved,error) && saved.colors[1]==::PaletteEditor::Color{99,88,77},"Replacement did not persist colors");
-    Panel::DeleteOrRestore();NextFrame();Panel::g.confirmFocus=1;input.activate=true;
-    Panel::DrawConfirmation(ImGui::GetForegroundDrawList());
-    Panel::g.trash=true;Panel::ScanLibrary();Require(Panel::g.entries.size()==1,"Trash did not retain palette");
-    Panel::DeleteOrRestore();NextFrame();Panel::g.confirmFocus=1;input.activate=true;
-    Panel::DrawConfirmation(ImGui::GetForegroundDrawList());
-    Panel::g.trash=false;Panel::ScanLibrary();Require(Panel::g.entries.size()==1,"Restore lost palette");
+    Require(dialogCalls==saveDialogs && !Panel::g.document.Dirty(),"Plain Save reopened the dialog or failed");
+    ::PaletteEditor::PaletteFile saved;std::string error;
+    Require(::PaletteEditor::ReadPaletteFile(dialogSelection,saved,error) && saved.palette.colors[1]==::PaletteEditor::Color{99,88,77},
+        "Plain Save did not persist colors");
     const auto originalEntry=*Panel::g.source;
     Panel::g.document.SetColor(2,{55,66,77});const auto copyColors=Panel::g.document.Colors();
-    Panel::SaveAs();
-    Require(Panel::g.textKind==Panel::State::TextKind::SaveAs && Panel::g.text.empty(),"Save As did not ask for a different name");
-    Panel::g.text="UI Test copy";Panel::CommitText();
-    Require(Panel::g.source->path!=originalEntry.path && Panel::g.document.State().name=="UI Test copy" && !Panel::g.document.Dirty(),
+    dialogSelection=contextFixture/"UI Test copy.json";Panel::SaveAs();
+    Require(Panel::g.source->path==dialogSelection && Panel::g.document.State().name=="UI Test copy" && !Panel::g.document.Dirty(),
         "Save As did not create a separate named palette");
     const auto copyEntry=*Panel::g.source;
-    Require(Panel::g.library->Read(copyEntry,saved,error) && saved.colors==copyColors,"Save As colors did not round-trip");
-    Require(Panel::g.library->Read(originalEntry,saved,error) && saved.colors[2]!=copyColors[2],"Save As overwrote the original palette");
-    Panel::g.document.SetColor(3,{22,44,88});const auto collisionDraft=Panel::g.document.Colors();
-    Panel::SaveAs();Panel::g.text="UI Test";Panel::CommitText();
-    Require(Panel::g.textKind==Panel::State::TextKind::SaveAs && Panel::g.source->path==copyEntry.path &&
-        Panel::g.document.State().name=="UI Test copy" && Panel::g.document.Colors()==collisionDraft && Panel::g.document.Dirty(),
-        "A Save As name collision replaced the source or lost draft edits");
-    Require(Panel::g.library->Read(originalEntry,saved,error) && saved.colors[2]!=copyColors[2],"Save As name collision overwrote the existing file");
-    NextFrame();input.back=true;Panel::DrawTextEditor(ImGui::GetForegroundDrawList());
-    Require(Panel::g.textKind==Panel::State::TextKind::None && Panel::g.document.Colors()==collisionDraft,
-        "Cancelling Save As lost the draft");
-    ::PaletteEditor::SavedPalette originalPalette;
-    ::PaletteEditor::LibraryEntry trashedEntry,occupiedEntry,restoreResult;
-    Require(Panel::g.library->Read(originalEntry,originalPalette,error),"Original palette fixture could not be read");
-    Require(Panel::g.library->Delete(originalEntry,trashedEntry,error),"Original palette could not move to trash");
-    auto replacement=originalPalette;replacement.colors[0]={15,25,35};
-    Require(Panel::g.library->SaveNew(replacement,occupiedEntry,error),"Replacement palette could not occupy the original filename");
-    Require(!Panel::g.library->Restore(trashedEntry,restoreResult,error),"Restore unexpectedly overwrote an occupied filename");
-    Panel::g.trash=true;Panel::ScanLibrary();Panel::g.libraryIndex=0;
-    auto recoveryRows=Panel::FilesRows();
-    const auto loadDeleted=std::find_if(recoveryRows.begin(),recoveryRows.end(),[](const auto& row){return std::string(row.label)=="Load selected";});
-    Require(loadDeleted!=recoveryRows.end() && loadDeleted->action,"Trash recovery has no load action after a filename collision");
-    loadDeleted->action();
-    Require(bool(Panel::g.confirm) && Panel::g.document.Colors()==collisionDraft,"Loading a deleted palette bypassed the draft guard");
-    NextFrame();Panel::g.confirmFocus=1;input.activate=true;Panel::DrawConfirmation(ImGui::GetForegroundDrawList());
-    Require(!Panel::g.trash && Panel::g.source->deleted && Panel::g.document.Colors()==originalPalette.colors,
-        "Deleted palette did not load into the Save As workflow");
-    Panel::SaveAs();Panel::g.text="Recovered original";Panel::CommitText();
-    Require(Panel::g.library->Read(*Panel::g.source,saved,error) && saved.colors==originalPalette.colors,
-        "Recovering a deleted palette with Save As changed its colors");
-    Require(Panel::g.library->Read(trashedEntry,saved,error) && saved.colors==originalPalette.colors,
-        "Recovery removed or changed the original trashed palette");
-    Require(Panel::g.library->Read(occupiedEntry,saved,error) && saved.colors==replacement.colors,
-        "Recovery overwrote the palette occupying the original filename");
-    Panel::g.document.SetColor(2,{11,22,33});const auto draft=Panel::g.document.Colors();
+    Require(::PaletteEditor::ReadPaletteFile(copyEntry.path,saved,error) && saved.palette.colors==copyColors,"Save As colors did not round-trip");
+    Require(::PaletteEditor::ReadPaletteFile(originalEntry.path,saved,error) && saved.palette.colors[2]!=copyColors[2],
+        "Save As overwrote the original palette");
+    Panel::g.document.SetColor(3,{22,44,88});const auto draft=Panel::g.document.Colors();
+    dialogAccepted=false;Panel::SaveAs();
+    Require(Panel::g.source->path==copyEntry.path && Panel::g.source->fingerprint==copyEntry.fingerprint &&
+        Panel::g.document.State().name=="UI Test copy" && Panel::g.document.Colors()==draft && Panel::g.document.Dirty(),
+        "Cancelled Save As changed source, name, or draft");
+    dialogError="Dialog fixture failed";Panel::SaveAs();dialogError.clear();
+    Require(Panel::g.source->path==copyEntry.path && Panel::g.document.Colors()==draft && Panel::g.document.Dirty(),
+        "Failed Save As changed source or draft");
+    dialogAccepted=true;dialogSelection=contextFixture/"unsupported.txt";Panel::SaveAs();
+    Require(Panel::g.source->path==copyEntry.path && Panel::g.document.State().name=="UI Test copy" &&
+        Panel::g.document.Colors()==draft && Panel::g.document.Dirty(),"Rejected Save As changed source, name, or draft");
+    auto external=Panel::g.document.State();external.colors[1]={9,8,7};
+    Require(::PaletteEditor::SavePaletteFile(copyEntry.path,external,copyEntry.fingerprint,saved,error),"External edit fixture failed");
+    Panel::Save();
+    Require(Panel::g.document.Dirty() && Panel::g.document.Colors()==draft && Panel::g.source->fingerprint==copyEntry.fingerprint,
+        "Stale Save lost its draft or adopted changed disk contents");
+    Require(::PaletteEditor::ReadPaletteFile(copyEntry.path,saved,error) && saved.palette.colors==external.colors,
+        "Stale Save overwrote external changes");
+    dialogAccepted=true;dialogSelection=contextFixture/"Malformed.json";WriteBytes(dialogSelection,{'{','}'});Panel::SaveAs();
+    Require(Panel::g.source->path==dialogSelection && !Panel::g.document.Dirty() &&
+        ::PaletteEditor::ReadPaletteFile(dialogSelection,saved,error) && saved.palette.colors==draft,
+        "Approved Save As could not replace malformed destination");
+    dialogSelection=contextFixture/"Native copy.pal";Panel::SaveAs();
+    Require(Panel::g.source->native && !Panel::g.document.Dirty(),"Native Save As failed");
+    Panel::g.document.SetColor(4,{25,50,75});const auto nativeDraft=Panel::g.document.Colors();Panel::Save();
+    Require(::PaletteEditor::ReadPaletteFile(dialogSelection,saved,error) && saved.native && saved.palette.colors==nativeDraft,
+        "Plain Save did not preserve native format");
+    const auto nativeSource=*Panel::g.source;
+    WriteBytes(contextFixture/"invalid.json",{'{','}'});
+    Require(!Panel::LoadPalettePath(contextFixture/"invalid.json") && Panel::g.source->path==nativeSource.path &&
+        Panel::g.document.Colors()==nativeDraft,"Failed load changed source or colors");
+    dialogAccepted=false;Panel::LoadFile();
+    Require(!dialogSave && Panel::g.source->path==nativeSource.path && Panel::g.document.Colors()==nativeDraft,
+        "Cancelled Load changed source or colors");
+    const auto baseline=Panel::g.document.Original();
+    Require(Panel::LoadPalettePath(originalEntry.path) && Panel::g.source->path==originalEntry.path &&
+        Panel::g.document.Colors()[1]==::PaletteEditor::Color{99,88,77},"External JSON load failed");
+    Require(Panel::LoadPalettePath(nativeSource.path) && Panel::g.source->native && Panel::g.document.Colors()==nativeDraft &&
+        Panel::g.document.Original()==baseline && !Panel::g.document.Dirty(),"Native load lost stock baseline or source");
+    Panel::g.document.SetColor(2,{11,22,33});const auto retained=Panel::g.document.Colors();
     contextStage=2;Panel::Open(1);
-    Require(Panel::g.context.stageId==2 && Panel::g.document.Colors()==draft,"Reopen did not refresh context while retaining draft");
+    Require(Panel::g.context.stageId==2 && Panel::g.document.Colors()==retained,"Reopen did not refresh context while retaining draft");
+    const auto englishMove=Panel::g.moveLabels[0];
+    I18n::SetLanguage(I18n::Japanese);Panel::Open(1);DrawPalettePage();
+    Require(Panel::g.document.Colors()==retained && Panel::g.moveLabels[0]!=englishMove,
+        "Changing language did not refresh move labels while preserving the draft");
+    I18n::SetLanguage(I18n::English);Panel::Open(1);DrawPalettePage();
+    Require(Panel::g.document.Colors()==retained && Panel::g.moveLabels[0]==englishMove,
+        "Returning to English lost the draft or retained Japanese move labels");
     Panel::g.document.Revert();Panel::Open(2);
     Require(Panel::g.player==2 && !Panel::g.confirm,"P2 editor did not open");
     Panel::g.document.SetColor(5,{19,87,143});const auto p2Draft=Panel::g.document.Colors();
@@ -271,49 +283,37 @@ void CheckSources(const std::filesystem::path& directory) {
 }
 void CheckOpeningClicks(const std::filesystem::path& directory) {
     SetFonts(1.5f);Seed();
-    Panel::g.library=std::make_unique<::PaletteEditor::Library>(directory/("modal-"+std::to_string(GetCurrentProcessId())));
-    ::PaletteEditor::LibraryEntry entry;std::string error;
-    Require(Panel::g.library->SaveNew(Panel::g.document.State(),entry,error),"Modal fixture could not be saved");
+    const auto path=std::filesystem::absolute(directory)/("modal-"+std::to_string(GetCurrentProcessId()))/"Selected.json";
+    ::PaletteEditor::PaletteFile saved;std::string error;
+    Require(::PaletteEditor::SavePaletteFile(path,Panel::g.document.State(),std::nullopt,saved,error),"Modal fixture could not be saved");
     const auto savedColors=Panel::g.document.Colors();
-    Panel::ScanLibrary();Panel::g.document.SetColor(3,{10,20,30});
-    BeginFrame();input.click=true;input.x=430;input.y=110;DrawPalettePage();
-    Require(Screens::IsPopupActive(),"Toolbar Load did not open saved palettes");
-    NextFrame();input.activate=true;DrawPalettePage();
-    Require(bool(Panel::g.confirm) && Panel::g.document.Dirty(),"Toolbar Load bypassed the draft guard");
-    NextFrame();input.back=true;DrawPalettePage();EndFrame(nullptr);
-    ::PaletteEditor::LibraryEntry deleted;
-    Require(Panel::g.library->Delete(entry,deleted,error),"Recovery modal fixture could not move to trash");
-    Panel::g.trash=true;Panel::ScanLibrary();Panel::g.view=Panel::State::View::Files;
     Panel::g.document.SetColor(3,{10,20,30});const auto draft=Panel::g.document.Colors();
-    BeginFrame();input.click=true;input.x=400;input.y=295;DrawPalettePage();
+    dialogAccepted=true;dialogSelection=path;
+    BeginFrame();input.click=true;input.x=80;input.y=400;DrawPalettePage();
     Require(bool(Panel::g.confirm) && Panel::g.document.Dirty() && Panel::g.document.Colors()==draft,
-        "Clicking Load selected activated DISCARD in the newly opened confirmation");
-    EndFrame(nullptr);BeginFrame();input.click=true;input.x=400;input.y=295;DrawPalettePage();
-    Require(!Panel::g.confirm && Panel::g.document.Colors()==savedColors,"A later DISCARD click did not load the selected palette");
-    EndFrame(nullptr);BeginFrame();input.click=true;input.x=300;input.y=110;DrawPalettePage();
-    Require(Panel::g.textKind==Panel::State::TextKind::SaveAs && Panel::g.text.empty(),
-        "Clicking Save As typed into the newly opened keyboard");
-    EndFrame(nullptr);BeginFrame();input.click=true;input.x=100;input.y=240;DrawPalettePage();
-    Require(Panel::g.text=="K","A later keyboard click did not type the selected letter");
-    EndFrame(nullptr);BeginFrame();input.back=true;DrawPalettePage();EndFrame(nullptr);
-    ::PaletteEditor::LibraryEntry replacement;
-    auto saved=Panel::g.document.State();saved.name="Active saved palette";
-    Require(Panel::g.library->SaveNew(saved,replacement,error),"Saved palette load fixture could not be written");
-    Panel::g.view=Panel::State::View::Files;Panel::g.trash=true;Panel::ScanLibrary();
-    BeginFrame();input.click=true;input.x=430;input.y=110;DrawPalettePage();
-    Require(Screens::IsPopupActive() && !Panel::g.trash && Panel::g.view==Panel::State::View::Editor &&
-        Panel::g.entries.size()==1 && !Panel::g.entries[0].deleted,
-        "Toolbar Load offered trash instead of active saved palettes");
-    NextFrame();input.activate=true;DrawPalettePage();
-    Require(Panel::g.source && Panel::g.source->path==replacement.path,"Toolbar Load did not load the selected saved file");
-    EndFrame(nullptr);SetFonts(1);
+        "Load click bypassed the draft guard or activated its new confirmation");
+    NextFrame();input.back=true;DrawPalettePage();
+    Require(!Panel::g.confirm && Panel::g.document.Colors()==draft,"Cancelling Load confirmation changed the draft");
+    NextFrame();input.click=true;input.x=80;input.y=400;DrawPalettePage();
+    NextFrame();Panel::g.confirmFocus=1;input.activate=true;DrawPalettePage();
+    Require(!Panel::g.confirm && Panel::g.source && Panel::g.source->path==path && Panel::g.document.Colors()==savedColors,
+        "Confirmed Load did not load the selected file");
+    dialogAccepted=false;const int before=dialogCalls;
+    NextFrame();input.click=true;input.x=320;input.y=400;DrawPalettePage();
+    Require(dialogCalls==before+1 && dialogSave && !Panel::Modal() && Panel::g.source->path==path,
+        "Save As action did not use the dialog or leaked cancellation");
+    NextFrame();Panel::StartText(Panel::State::TextKind::Hex);
+    input.click=true;input.x=320;input.y=400;DrawPalettePage();
+    Require(Panel::g.textKind==Panel::State::TextKind::Hex && dialogCalls==before+1,
+        "Bottom Save As clicked through a text modal");
+    NextFrame();input.back=true;DrawPalettePage();EndFrame(nullptr);SetFonts(1);
 }
 void CaptureClasses(const std::filesystem::path& directory,const std::string& character) {
     using Cls=Mission::MoveData::Cls;
     const std::map<std::string,Cls> classes{{"system",Cls::System},{"a",Cls::A},{"b",Cls::B},{"c",Cls::C},{"command",Cls::Command},
         {"special",Cls::Special},{"super",Cls::Super},{"projectile",Cls::Projectile},{"super_entity",Cls::SuperEntity},{"entity",Cls::Entity}};
     testMoveClasses.clear();
-    std::vector<std::string> profiles{character};if(character=="ikumi") profiles.push_back("ikumi2");
+    std::vector<std::string> profiles{character};if(::PaletteEditor::HasAlternateAnimations(character)) profiles.push_back(character+"2");
     for(const auto& profile:profiles) {
         std::ifstream inputFile(directory/(profile+".json"));Require(bool(inputFile),"Capture move classifications missing");
         nlohmann::json data;inputFile>>data;
@@ -325,6 +325,26 @@ void CaptureClasses(const std::filesystem::path& directory,const std::string& ch
     }
 }
 void CaptureRealAssets(IDirect3DDevice9* device,const std::filesystem::path& game,const std::filesystem::path& output,const std::filesystem::path& classifications) {
+    unsigned largestCategory=0;int packs=0;
+    for(const auto& entry:std::filesystem::directory_iterator(game)) {
+        const auto character=entry.path().filename().string();
+        if(!entry.is_directory() || !std::filesystem::exists(entry.path()/(character+".pat"))) continue;
+        CaptureClasses(classifications,character);
+        for(const auto variant:{::PaletteEditor::AnimationVariant::Standard,::PaletteEditor::AnimationVariant::Alternate}) {
+            if(variant==::PaletteEditor::AnimationVariant::Alternate && !::PaletteEditor::HasAlternateAnimations(character)) continue;
+            ::PaletteEditor::CharacterAssets assets;std::string error;
+            Require(::PaletteEditor::LoadCharacterAssets(game,character,assets,error,variant),error.c_str());
+            std::array<unsigned,7> categories{};
+            for(const auto& animation:assets.animations)
+                if(!animation.frames.empty()) ++categories[Panel::Category(Mission::MoveData::GetClass(0,animation.id))];
+            largestCategory=(std::max)(largestCategory,*std::max_element(categories.begin(),categories.end()));
+            ++packs;
+        }
+    }
+    std::cout<<"Checked "<<packs<<" PAT tables; largest move category: "<<largestCategory<<'\n';
+    Require(packs>0 && largestCategory>0,"No classified local animations were checked");
+    for(const auto language:{I18n::English,I18n::Japanese}) {
+    I18n::SetLanguage(language);
     for(const std::string character:{"ayu","nayukib","ikumi"}) {
         CaptureClasses(classifications,character);
         for(float scale:{0.7f,1.0f,1.5f}) {
@@ -356,21 +376,31 @@ void CaptureRealAssets(IDirect3DDevice9* device,const std::filesystem::path& gam
             state.status="File preview: original left / working right. No live game in this harness.";
             state.liveStatus=state.moveLabels[state.animation];
             for(int target:{0,1}) {
-                state.view=Panel::State::View::Editor;state.target=target;state.autoFit=true;BeginFrame();DrawPalettePage();EndFrame(device);
-                SaveBitmap(device,output/(character+"-"+std::to_string(int(scale*100))+(target?"-ramps.bmp":"-editor.bmp")));
+                state.target=target;state.autoFit=true;BeginFrame();DrawPalettePage();EndFrame(device);
+                SaveBitmap(device,output/(std::string(language==I18n::Japanese?"ja-":"en-")+character+"-"+std::to_string(int(scale*100))+(target?"-ramps.bmp":"-editor.bmp")));
             }
+            state.editorFocus=10;BeginFrame();input.activate=true;DrawPalettePage();EndFrame(device);
+            Require(Screens::IsPopupActive(),"Real move picker did not open");
+            BeginFrame();DrawPalettePage();EndFrame(device);
+            SaveBitmap(device,output/(std::string(language==I18n::Japanese?"ja-":"en-")+character+"-"+std::to_string(int(scale*100))+"-moves.bmp"));
+            Screens::ClosePopup();
         }
+    }
     }
 }
 void CheckFontFit() {
-    const std::pair<const char*,int> labels[]={{"RGB > HSV",132},{"HSV > RGB",132},{"#FFFFFF",144},{"UNPIN",80},{"RESET",90},
-        {"UNDO 16",100},{"400%",102},{"PAN*",78},{"CENTER",90},{"ORIGINAL",104},{"MARK",67},{"PREVIEW",99},{"APPLY",137},{"RESTORE",137},{"ALT",76},
-        {"PAUSE 999 / 999",186},{"ALL / NO CLASS DATA",284},{"P1  <>",112},{"SAVE",112},{"SAVE AS",112},{"LOAD",112},{"FILES",112},{"EDITOR",112}};
-    for(const auto& label:labels)
-        Require(Layout::MeasureTextW(bodyFont,bodyFont->FontSize,label.first)<=label.second-16,
-            (std::string(label.first)+" width="+std::to_string(Layout::MeasureTextW(bodyFont,bodyFont->FontSize,label.first))+" limit="+std::to_string(label.second-16)).c_str());
-    for(const char* label:{"DEL","aA","OK","ESC"})
-        Require(Layout::MeasureTextW(bodyFont,bodyFont->FontSize,label)<=45,label);
+    const std::pair<std::string,int> labels[]={{"PICKER",88},{"RGB",88},{"HSV",88},{"#FFFFFF",158},{"UNPIN",76},{"RESET",76},
+        {"400%",96},{"PAN*",100},{"CENTER",108},{"ORIGINAL",110},{"MARK",80},{"PREVIEW",114},{"APPLY",112},{"RESTORE",112},
+        {"ALT",64},{"SAVE",112},{"SAVE AS",112},{"LOAD",112},
+        {I18n::TrFormat("UNDO %zu",size_t(16)),88},{I18n::TrFormat("Stock %d",6),182},
+        {I18n::TrFormat("PAUSE  %d / %d",999,999),228}};
+    for(const auto& label:labels) {
+        const auto* translated=I18n::Tr(label.first.c_str());
+        Require(Layout::MeasureTextW(bodyFont,bodyFont->FontSize,translated)<=label.second-16,
+            (std::string(label.first)+" width="+std::to_string(Layout::MeasureTextW(bodyFont,bodyFont->FontSize,translated))+" limit="+std::to_string(label.second-16)).c_str());
+    }
+    for(const char* label:{"DEL","OK","ESC"})
+        Require(Layout::MeasureTextW(bodyFont,bodyFont->FontSize,I18n::Tr(label))<=45,label);
     const auto fitted=Panel::ButtonLabel("999 - Long projectile animation label",130);
     Require(fitted.find("999 - ")==0 && fitted.substr(fitted.size()-3)=="...","Long move label lost its leading PAT ID");
     Require(Layout::MeasureTextW(bodyFont,bodyFont->FontSize,fitted.c_str())<=130,"Fitted label exceeds glyph budget");
@@ -431,15 +461,15 @@ void CheckPreviewTexture(IDirect3DDevice9* device) {
 void CheckEditorNavigation() {
     for(float scale:{0.7f,1.0f,1.5f}) {
         SetFonts(scale);Seed();BeginFrame();
-        for(float y:{95.0f,123.0f}) {
-            input={};input.x=350;input.y=y;input.click=true;
+        for(float x:{180.0f,350.0f}) {
+            input={};input.x=x;input.y=90;input.click=true;
             Panel::DrawEditor(ImGui::GetForegroundDrawList(),72,true);
             Require(Screens::IsPopupActive(),"Bottom of editor picker button did not open its dropdown");
             Screens::ClosePopup();
         }
         EndFrame(nullptr);
     }
-    SetFonts(1);Seed();Panel::g.target=0;Panel::g.color=5;Panel::SyncColor();Panel::g.editorFocus=3;
+    SetFonts(1);Seed();Panel::g.colorControls=Panel::State::ColorControls::RGB;Panel::g.target=0;Panel::g.color=5;Panel::SyncColor();Panel::g.editorFocus=3;
     const auto baseline=Panel::g.document.Colors();
     for(int step=0;step<21;++step) {
         BeginFrame();input.right=input.rightHeld=true;
@@ -460,7 +490,7 @@ void CheckEditorNavigation() {
     Panel::g.editorFocus=3;input={};input.right=input.rightHeld=true;
     Panel::DrawEditor(ImGui::GetForegroundDrawList(),72,true);
     const auto beforeMousePin=Panel::g.document.Colors();
-    input={};input.rightHeld=input.rightClick=true;input.x=28+5.5f*35.5f;input.y=110;
+    input={};input.rightHeld=input.rightClick=true;input.x=28+5.5f*31.5f;input.y=130;
     Panel::DrawEditor(ImGui::GetForegroundDrawList(),72,true);
     Require(!Panel::g.document.Pinned(5),"Swatch right-click did not toggle the pin");
     Panel::g.document.Undo();
@@ -490,15 +520,7 @@ void CheckTabContent() {
         std::string(Panel::CommonStateLabel(98))=="Ground recovery" &&
         std::string(Panel::CommonStateLabel(100))=="Thrown" && Panel::CommonStateLabel(149)==nullptr,
         "Known recovery or thrown states were unnamed, or an unknown state was guessed");
-    const auto filesRows=Panel::FilesRows();
-    for(const auto& row:filesRows) Require(row.action!=Panel::Save && row.action!=Panel::SaveAs && row.action!=Panel::LoadCustom,
-        "Files duplicated a primary toolbar action");
-    Panel::g.trash=true;const auto recoveryRows=Panel::FilesRows();
-    Require(!recoveryRows.empty() && std::string(recoveryRows[0].label)=="Back to files", "Recovery has no return to Files");
-    Panel::g.trash=false;
     Panel::g.document.SetColor(5,{210,90,20});const auto draft=Panel::g.document.Colors();
-    input.next=true;DrawPalettePage();
-    Require(Panel::g.view==Panel::State::View::Editor,"Palette content consumed top-tab navigation");
     for(float x:{100.0f,550.0f}) {
         input={};input.click=true;input.x=x;input.y=10;DrawPalettePage(false);
         Require(!Panel::g.confirm && !Panel::ConsumeCloseRequest() && Panel::g.player==1,
@@ -506,38 +528,33 @@ void CheckTabContent() {
     }
     Panel::g.editorFocus=3;input={};input.right=true;DrawPalettePage(false);
     Require(Panel::g.document.Colors()==draft,"Tab focus adjusted palette content");
-    input={};input.click=true;input.x=100;input.y=76;DrawPalettePage(false);
+    input={};input.click=true;input.x=80;input.y=76;DrawPalettePage(false);
+    Require(!Panel::g.confirm && Panel::g.player==1,"Disabled content accepted a player switch click");
+    input={};input.click=true;input.x=80;input.y=76;DrawPalettePage();
     Require(bool(Panel::g.confirm),"Content player selector ignored a mouse click");
     NextFrame();input.back=true;DrawPalettePage();
     Require(!Panel::g.confirm && Panel::g.document.Colors()==draft,"Player switch cancellation lost the draft");
-    NextFrame();input.click=true;input.x=300;input.y=76;DrawPalettePage();
-    Require(Panel::g.textKind==Panel::State::TextKind::SaveAs && Panel::g.text.empty(),"Toolbar Save As did not open a fresh naming prompt");
-    NextFrame();input.back=true;DrawPalettePage();
-    NextFrame();input.click=true;input.x=550;input.y=76;DrawPalettePage();
-    Require(Panel::g.view==Panel::State::View::Files && !Panel::Modal() && !Panel::ConsumeCloseRequest(),
-        "Files toolbar action leaked its opening click");
-    NextFrame();input.back=true;DrawPalettePage();
-    Require(Panel::g.view==Panel::State::View::Editor && !Panel::ConsumeCloseRequest() && Panel::g.document.Colors()==draft,
-        "Files Back did not return to the editor with the draft");
+    NextFrame();input.click=true;input.x=320;input.y=400;DrawPalettePage();
+    Require(dialogCalls==1 && dialogSave && !Panel::Modal() && Panel::g.document.Colors()==draft,
+        "Bottom Save As did not use the dialog or retain cancelled draft");
     NextFrame();input.back=true;DrawPalettePage();
     Require(Panel::ConsumeCloseRequest() && Panel::IsOpen() && Panel::g.document.Colors()==draft && !Panel::g.confirm,
         "Editor Back lost the draft or failed to return to game");
-    NextFrame();Panel::g.editorFocus=0;input.up=true;DrawPalettePage();
-    Require(Panel::g.editorFocus==-5 && !Panel::ConsumeFocusAboveRequest(),"Editor Up skipped the local toolbar");
-    NextFrame();input.up=true;DrawPalettePage();
-    Require(Panel::ConsumeFocusAboveRequest() && !Panel::ConsumeCloseRequest(),"Toolbar Up did not focus shell tabs");
+    NextFrame();Panel::g.editorFocus=22;input.up=true;DrawPalettePage();
+    Require(Panel::ConsumeFocusAboveRequest() && !Panel::ConsumeCloseRequest(),"Player-row Up did not focus shell tabs");
     NextFrame();Panel::g.editorFocus=0;Panel::g.panMode=true;input.back=true;DrawPalettePage();
     Require(!Panel::g.panMode && !Panel::ConsumeCloseRequest(),"Back while panning closed the menu");
-    Panel::StartText(Panel::State::TextKind::Name);
-    input={};input.click=true;input.x=550;input.y=76;DrawPalettePage();
-    Require(Panel::BlocksNavigation() && Panel::g.view==Panel::State::View::Editor,"Files clicked through text entry");
+    Panel::StartText(Panel::State::TextKind::Hex);
+    const int before=dialogCalls;
+    input={};input.click=true;input.x=320;input.y=400;DrawPalettePage();
+    Require(Panel::BlocksNavigation() && dialogCalls==before,"Save As clicked through text entry");
     NextFrame();input.back=true;DrawPalettePage();
     Require(!Panel::BlocksNavigation() && !input.back,"Closing text entry leaked its input");
     Panel::Confirm("TEST","Keep draft?","DISCARD",[]{});
     Require(Panel::BlocksNavigation(),"Confirmation did not block shell navigation");
     NextFrame();input.click=true;input.x=100;input.y=280;DrawPalettePage();
     Require(!Panel::BlocksNavigation() && Panel::g.document.Colors()==draft,"Closing confirmation changed the draft");
-    Panel::OpenEditorChoice(Screens::DropdownRow("Category",&Panel::g.category,Panel::kMoveCategories,7,Panel::FilterMoves));
+    Panel::OpenEditorChoice(Screens::DropdownRow("Move",&Panel::g.moveChoice,Panel::g.moveOptions.data(),int(Panel::g.moveOptions.size()),Panel::MoveChoiceChanged));
     Require(Panel::BlocksNavigation(),"Dropdown did not block shell navigation");
     Screens::ClosePopup();input={};
     Panel::Configure(nullptr,nullptr,ApplyFixture,RestoreFixture);
@@ -551,14 +568,115 @@ void CheckTabContent() {
         "Leaving palette failed to restore preview and retain draft");
     Panel::Configure(nullptr,nullptr);EndFrame(nullptr);
 }
-void CheckControls() {
+void CheckColorPicker() {
+    using Pick=Panel::State::PickerInput;
     Seed();BeginFrame();
+    Panel::g.target=0;Panel::g.color=5;
+    Panel::g.document.SetHsv(5,{0,100,100});Panel::SyncColor();
+    const auto before=Panel::g.document.Colors();const auto undos=Panel::g.document.UndoCount();
+    auto& io=ImGui::GetIO();auto* dl=ImGui::GetForegroundDrawList();
+    const auto draw=[&]{Panel::DrawColorPicker(dl,28,200,252,true);};
+    io.MouseDown[0]=true;input.click=true;input.x=260;input.y=206+72.0f*120/359;
+    draw();
+    Require(Panel::g.pickerInput==Pick::DragHue && Panel::g.document.Colors()[5]==::PaletteEditor::Color{0,255,0},
+        "Visual hue picker did not recolor the selected shade");
+    for(unsigned i=0;i<40;++i) if(i!=5) Require(Panel::g.document.Colors()[i]==before[i],"Shade picker recolored another entry");
+    input.click=false;input.y=1000;draw();
+    Require(Panel::g.document.ColorHsv(5).h==359,"Hue drag did not clamp below the picker");
+    input.y=-1000;draw();Require(Panel::g.document.ColorHsv(5).h==0,"Hue drag did not clamp above the picker");
+    io.MouseDown[0]=false;input={};draw();
+    Require(Panel::g.pickerInput==Pick::Idle && Panel::g.document.UndoCount()==undos+1,"Hue drag did not end as one undo gesture");
+    Panel::g.document.Undo();Require(Panel::g.document.Colors()==before,"Hue picker undo lost the shade baseline");
+    Panel::SyncColor();io.MouseDown[0]=true;input.click=true;input.x=100;input.y=230;draw();
+    Require(Panel::g.pickerInput==Pick::DragSV,"SV picker did not capture drag");
+    input.click=false;input.x=-1000;input.y=1000;draw();
+    Require(Panel::g.document.ColorHsv(5).s==0 && Panel::g.document.ColorHsv(5).v==0,"SV drag did not clamp to black");
+    input.x=1000;input.y=-1000;draw();
+    Require(Panel::g.document.ColorHsv(5).s==100 && Panel::g.document.ColorHsv(5).v==100,"SV drag lost capture beyond its bounds");
+    io.MouseDown[0]=false;input={};draw();
+    Require(Panel::g.document.UndoCount()==undos+1,"SV drag created multiple undo checkpoints");
+    Panel::g.document.Undo();Require(Panel::g.document.Colors()==before,"SV undo lost baseline");
+    for(const auto hsv:{::PaletteEditor::Hsv{73,0,50},::PaletteEditor::Hsv{73,88,0}}) {
+        Panel::g.document.SetHsv(5,hsv);Panel::SyncColor();const auto baseline=Panel::g.document.Colors();
+        const auto count=Panel::g.document.UndoCount();Panel::g.editorFocus=4;
+        input.activate=true;draw();Require(Panel::g.pickerInput==Pick::AdjustHue,"Confirm did not start keyboard hue adjustment");
+        input={};input.right=true;draw();input={};input.right=true;draw();
+        Require(Panel::g.document.ColorHsv(5).h==75 && Panel::g.document.Colors()==baseline,
+            "Hue-only keyboard edit lost black or gray HSV state");
+        input={};input.back=true;Panel::DrawEditor(dl,72,true);
+        Require(Panel::g.pickerInput==Pick::Idle && !input.back && !Panel::ConsumeCloseRequest(),"Picker Back leaked into menu close");
+        Require(Panel::g.document.UndoCount()==count+1,"Keyboard hue adjustment created multiple undo checkpoints");
+        Panel::g.document.Undo();Require(Panel::g.document.ColorHsv(5).h==73,"Hue-only undo lost retained HSV");
+    }
+    Panel::g.document.SetHsv(5,{120,40,40});Panel::SyncColor();Panel::g.editorFocus=3;
+    input={};input.activate=true;draw();input={};input.right=input.up=true;draw();
+    Require(Panel::g.document.ColorHsv(5).s==41 && Panel::g.document.ColorHsv(5).v==41,"Keyboard SV adjustment did not change both axes");
+    input={};input.back=true;draw();EndFrame(nullptr);
+    Seed();BeginFrame();dl=ImGui::GetForegroundDrawList();
+    auto state=Panel::g.document.State();state.ramps={{0,39,20}};std::string error;
+    Require(Panel::g.document.LoadSaved(state,state.baseline,error),"Ramp picker fixture invalid");
+    Panel::g.document.SetPinned(5,true);Panel::g.document.SetRampHsv(0,{0,100,100});
+    Panel::g.target=1;Panel::g.ramp=0;Panel::SyncColor();
+    const auto pinned=Panel::g.document.Colors()[5];const auto pinnedHsv=Panel::g.document.ColorHsv(5);
+    const auto rampBefore=Panel::g.document.Colors();const auto rampUndos=Panel::g.document.UndoCount();
+    io.MouseDown[0]=true;input.click=true;input.x=260;input.y=206+72.0f*120/359;draw();
+    Require(Panel::g.document.RampColor(0)==::PaletteEditor::Color{0,255,0} && Panel::g.document.Colors()[20]==::PaletteEditor::Color{0,255,0},
+        "Ramp hue picker did not apply the ramp target");
+    Require(Panel::g.document.Pinned(5) && Panel::g.document.Colors()[5]==pinned && Panel::g.document.ColorHsv(5).h==pinnedHsv.h,
+        "Ramp picker changed a pinned shade or its HSV state");
+    io.MouseDown[0]=false;input={};draw();
+    Require(Panel::g.document.UndoCount()==rampUndos+1,"Ramp picker did not create one undo checkpoint");
+    Panel::g.document.Undo();Require(Panel::g.document.Colors()==rampBefore,"Ramp picker undo lost pinned composition");
+    Panel::g.animation=0;Panel::g.frame=0;Panel::g.playing=false;Panel::g.zoom=100;Panel::g.autoFit=false;
+    const auto pick=[&](float x,float y){input={};input.click=true;input.x=x;input.y=y;Panel::DrawPreview(dl,28,90,200,120,true);};
+    pick(128,184);Require(Panel::g.target==1,"Sprite eyedropper silently changed Ramp mode to Shade mode");
+    const auto ramp=Panel::g.document.Ramps()[Panel::g.ramp];
+    Require(ramp.first<=1 && ramp.last>=1,"Sprite eyedropper selected the wrong ramp");
+    Panel::g.target=0;Panel::g.color=5;Panel::SyncColor();pick(128,184);
+    Require(Panel::g.target==0 && Panel::g.color==1,"Shade eyedropper did not select its clicked shade");
+    const auto pickedColors=Panel::g.document.Colors();pick(127,184);
+    Require(Panel::g.color==1 && Panel::g.document.Colors()==pickedColors,"Transparent eyedropper changed selection or colors");
+    Panel::g.assets.sprites[0].indices[1]=40;pick(128,184);
+    Require(Panel::g.color==1 && Panel::g.document.Colors()==pickedColors,"Shared-effect eyedropper changed editable palette");
+    EndFrame(nullptr);
+}
+void CheckLargeMoveCategory() {
+    Seed();Panel::g.assets.animations.clear();
+    for(int id=1000;id<1200;++id) Panel::g.assets.animations.push_back({id,{{0,4,1,2,2,2}}});
+    Panel::BuildMoveChoices();Panel::g.moveChoice=199;Panel::MoveChoiceChanged();Panel::g.editorFocus=10;
+    BeginFrame();input.activate=true;DrawPalettePage();
+    Require(Screens::IsPopupActive(),"Large move category did not open");
+    NextFrame();input.activate=true;DrawPalettePage();
+    Require(!Screens::IsPopupActive() && Panel::g.animation==199,"Categorized popup truncated its final move");
+    EndFrame(nullptr);
+}
+void CheckClosingInput() {
+    Seed();BeginFrame();Panel::EditHex();NextFrame();Panel::g.text.clear();
+    const auto text=Panel::g.text;const auto colors=Panel::g.document.Colors();
+    Input::SetSuspended(true);ImGui::GetIO().InputQueueCharacters.push_back(ImWchar('1'));
+    DrawPalettePage();
+    Require(Panel::g.text==text && Panel::g.document.Colors()==colors,"Closing menu still accepted raw hex text input");
+    Input::SetSuspended(false);Panel::g.textKind=Panel::State::TextKind::None;EndFrame(nullptr);
+}
+void CheckRampHoverHelp() {
+    Seed();BeginFrame();Panel::g.editorFocus=24;Panel::g.helpControl=-1;Panel::g.mouseHelp=true;
+    input.x=30;input.y=102;
+    Panel::DrawRampGrid(ImGui::GetForegroundDrawList(),28,100,252,80,true);
+    Require(Panel::g.helpControl==0,"Ramp swatch hover retained unrelated Save description");
+    const auto geometry=Panel::RampGridGeometry(Panel::g.document.Ramps(),Panel::g.ramp,80);
+    Panel::g.helpControl=-1;input.y=100+geometry.shadeY+2;
+    Panel::DrawRampGrid(ImGui::GetForegroundDrawList(),28,100,252,80,true);
+    Require(Panel::g.helpControl==0,"Shade swatch hover retained unrelated Save description");
+    EndFrame(nullptr);
+}
+void CheckControls() {
+    Seed();Panel::g.colorControls=Panel::State::ColorControls::RGB;BeginFrame();
     Panel::g.target=0;Panel::g.color=5;Panel::SyncColor();
     const auto before=Panel::g.document.Colors();
 
     auto& io=ImGui::GetIO();
-    const float right=28+31+284-87;
-    input.x=28+31;input.y=113;
+    const float right=28+27+284-76;
+    input.x=28+27;input.y=110;
     input.click=true;io.MouseDown[0]=true;
     Panel::CompactSlider(ImGui::GetForegroundDrawList(),0,28,100,284,true);
     Require(Panel::g.sliderRow==3,"Slider did not capture click");
@@ -587,27 +705,28 @@ void CheckControls() {
         "Closing the panel discarded its draft or forced a discard prompt");
     EndFrame(nullptr);
     Seed();BeginFrame();
-    Require(Panel::g.moveLabels[1].find("105 - ")==0 && Panel::g.moveIndices==std::vector<int>{1},"Classified sparse move picker did not preserve actual PAT indices");
+    Require(Panel::g.moveLabels[1].find("105 - ")==0 && Panel::g.moveIndices==std::vector<int>{0,1},
+        "Classified move picker did not retain all drawable PAT indices");
     Panel::g.assets.animations.push_back({999,{{0,4,1,2,2,2}}});
     Panel::g.assets.animations.push_back({233,{}});Panel::BuildMoveChoices();
-    Panel::g.category=5;Panel::FilterMoves();Require(Panel::g.moveIndices==std::vector<int>{0},"System filter selected a non-system move");
-    Panel::g.category=6;Panel::FilterMoves();Require(Panel::g.moveIndices==std::vector<int>{2},"Unclassified filter included an empty PAT animation");
+    Require(Panel::g.moveIndices==std::vector<int>{0,1,2} && Panel::g.choiceCategories.size()==Panel::g.moveIndices.size(),
+        "Single move picker omitted a class or included an empty animation");
+    for(unsigned i=0;i<Panel::g.moveIndices.size();++i)
+        Require(Panel::g.choiceCategories[i]==Panel::g.moveCategories[Panel::g.moveIndices[i]],"Move category lost its animation mapping");
     Require(Panel::g.moveLabels[2]=="999 - Unclassified" && Panel::g.moveLabels[0]!="0 - ","Move fallback label was blank");
-    Panel::g.moveChoice=99;Panel::MoveChoiceChanged();Require(Panel::g.animation==2,"Filtered move selection was not clamped");
-    Panel::g.category=3;Panel::FilterMoves();Require(Panel::g.category==3 && Panel::g.moveIndices.empty() && Panel::Animation()==nullptr,"Empty category silently changed category or retained another preview");
-    Panel::StartText(Panel::State::TextKind::Name);Panel::g.text.clear();
+    Panel::g.moveChoice=99;Panel::MoveChoiceChanged();Require(Panel::g.animation==2,"Move selection was not clamped");
+    Panel::StartText(Panel::State::TextKind::Hex);Panel::g.text.clear();
     NextFrame();input.activate=true;Panel::DrawTextEditor(ImGui::GetForegroundDrawList());
-    Require(Panel::g.text=="A","Controller keyboard did not enter selected character");
+    Require(Panel::g.text=="0","Controller keyboard did not enter selected hex digit");
     ImGui::GetIO().InputQueueCharacters.push_back('B');input.activate=input.back=true;
     Panel::DrawTextEditor(ImGui::GetForegroundDrawList());
-    Require(Panel::g.text=="AB" && Panel::g.textKind==Panel::State::TextKind::Name,"Typed fighter bindings activated or cancelled the text editor");
-    input={};
-    EndFrame(nullptr);
-    ImGui::GetIO().AddInputCharactersUTF8("bcdefghijklmnopqrstuvwxyz0123456789");
-    BeginFrame();
+    Require(Panel::g.text=="0B" && Panel::g.textKind==Panel::State::TextKind::Hex,"Typed fighter bindings activated or cancelled the hex editor");
+    input={};EndFrame(nullptr);
+    ImGui::GetIO().AddInputCharactersUTF8("cdef0123456789z");BeginFrame();
     Panel::DrawTextEditor(ImGui::GetForegroundDrawList());
-    Require(Panel::g.text.size()==32,"Palette name limit was not enforced");
-    Panel::CommitText();Require(Panel::g.document.State().name.size()==32,"Palette name commit failed");
+    Require(Panel::g.text.size()==7 && Panel::g.text.find('z')==std::string::npos,"Hex input limit or character validation failed");
+    Panel::g.text="#123456";Panel::CommitText();
+    Require(Panel::g.textKind==Panel::State::TextKind::None && std::string(Panel::HexValue())=="#123456","Hex color commit failed");
     EndFrame(nullptr);
     Seed();BeginFrame();
     Panel::g.document.SetColor(1,{220,110,55});
@@ -649,25 +768,25 @@ int main(int argc,char** argv) {
         }
         Require(SUCCEEDED(result),"Hidden D3D9 device unavailable");
         ImGui_ImplDX9_Init(device);Panel::SetDevice(device);
-        SetFonts(1);CheckPreviewTexture(device);CheckControls();CheckRampGeometry();CheckEditorNavigation();CheckTabContent();
+        SetFonts(1);CheckPreviewTexture(device);CheckColorPicker();CheckLargeMoveCategory();CheckClosingInput();CheckRampHoverHelp();CheckControls();CheckRampGeometry();CheckEditorNavigation();CheckTabContent();
         const std::filesystem::path output=argc>1?argv[1]:"palette-ui-smoke";
         std::filesystem::create_directories(output);
         CheckSources(output);CheckOpeningClicks(output);
         Panel::Configure(nullptr,nullptr,ApplyFixture,RestoreFixture);
-        for(float scale:{0.7f,1.0f,1.5f}) {
-            SetFonts(scale);CheckFontFit();Seed();
-            for(int page=0;page<2;++page) {
-                Panel::g.view=page?Panel::State::View::Files:Panel::State::View::Editor;BeginFrame();DrawPalettePage();EndFrame(device);
-                Require(ImGui::GetDrawData()->TotalVtxCount>100,"Panel produced no geometry");
-                Require(page==0 || scale<1 || Panel::g.scroll[page].maxScrollPx>0,"Long library controls did not expose scrolling");
-                SaveBitmap(device,output/(std::to_string(int(scale*100))+"-"+std::to_string(page)+".bmp"));
-                Panel::g.focus[page]=page==0?0:15;
-                if(page==0) Panel::g.target=1;
-                BeginFrame();DrawPalettePage();EndFrame(device);
-                Require(Panel::g.scroll[page].maxScrollPx==0 || Panel::g.scroll[page].scrollPx>0,"Focused bottom row did not scroll into view");
-                SaveBitmap(device,output/(std::to_string(int(scale*100))+"-"+std::to_string(page)+"-bottom.bmp"));
+        for(const auto language:{I18n::English,I18n::Japanese}) {
+            I18n::SetLanguage(language);
+            for(float scale:{0.7f,1.0f,1.25f,1.5f}) {
+                if(language==I18n::Japanese && scale<1) continue;
+                SetFonts(scale);CheckFontFit();Seed();
+                for(int target:{0,1}) {
+                    Panel::g.target=target;Panel::g.editorFocus=target?19:3;
+                    BeginFrame();DrawPalettePage();EndFrame(device);
+                    Require(ImGui::GetDrawData()->TotalVtxCount>100,"Panel produced no geometry");
+                    SaveBitmap(device,output/(std::string(language==I18n::Japanese?"ja-":"en-")+std::to_string(int(scale*100))+(target?"-ramps.bmp":"-shades.bmp")));
+                }
             }
         }
+        I18n::SetLanguage(I18n::English);SetFonts(1);
         if(argc>2) CaptureRealAssets(device,argv[2],output,argc>3?argv[3]:"assets/movedata");
         Require(Panel::g_workingTexture.value!=nullptr,"Sprite texture was not created");
         Panel::SetDevice(nullptr);
@@ -675,7 +794,6 @@ int main(int argc,char** argv) {
         Panel::SetDevice(device);
         ImGui_ImplDX9_InvalidateDeviceObjects();Panel::ReleaseTextures();
         Require(SUCCEEDED(device->Reset(&pp)),"Device reset failed after releasing editor resources");
-        Panel::g.view=Panel::State::View::Editor;
         BeginFrame();DrawPalettePage();EndFrame(device);
         Require(Panel::g_workingTexture.value!=nullptr,"Preview texture did not recover after reset");
         Panel::ReleaseTextures();Require(!Panel::g_workingTexture.value && !Panel::g_originalTexture.value,"Preview textures were not released");
