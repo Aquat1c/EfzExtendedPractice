@@ -1,3 +1,5 @@
+#include "gui/custom_menu/palette_editor.h"
+#include "gui/custom_menu/palette_editor_integration.h"
 #include "gui/lifecycle_state.h"
 #include "gui/pointer_mapping.h"
 #include "gui/framebar.h"
@@ -101,6 +103,7 @@ HRESULT __cdecl BeforeOverlayReset(void* device, uint32_t epoch) {
     if (invalidate) {
         if (!g_imguiContext || !g_imguiInitialization.IsReady()) return E_UNEXPECTED;
         EfzScopedImGuiContext context(g_imguiContext);
+        CustomMenu::PaletteEditorPanel::ReleaseTextures();
         // InvalidateDeviceObjects clears VB/IB/font pointers only; the context
         // and WndProc chain must survive the reset.
         ImGui_ImplDX9_InvalidateDeviceObjects();
@@ -497,7 +500,7 @@ static void UpdateVirtualCursor(ImGuiIO& io) {
     // The custom menu reads io.MousePos for real hover only; gamepad motion fed
     // here makes the menu self-navigate, so skip the virtual cursor for it.
     const bool customMenuOwnsNavigation =
-        g_externalFallbackHost || cfg.useCustomMenu;
+        g_externalFallbackHost || cfg.useCustomMenu || CustomMenu::PaletteEditorPanel::IsOpen();
     if (customMenuOwnsNavigation) {
         ReleaseGamepadNavInputs(io);
         g_useVirtualCursor = false;
@@ -1053,6 +1056,7 @@ namespace ImGuiImpl {
                     return false;
                 if (g_d3dDevice == device) return true;
                 ImGui::SetCurrentContext(g_imguiContext);
+                CustomMenu::PaletteEditorPanel::ReleaseTextures();
                 if (g_d3dDevice) ImGui_ImplDX9_Shutdown();
                 g_resetGate.UnbindBackend();
                 g_d3dDevice = nullptr;
@@ -1149,6 +1153,7 @@ namespace ImGuiImpl {
                 g_wndProcAttached.store(!(previousProc == nullptr && wndProcErr != 0), std::memory_order_release);
                 if (!previousProc && wndProcErr != 0) {
                     LogOut("[IMGUI] Error: Failed to hook window procedure (err=" + std::to_string(wndProcErr) + ")", true);
+                    CustomMenu::PaletteEditorPanel::ReleaseTextures();
                     ImGui_ImplDX9_Shutdown();
                     ImGui_ImplWin32_Shutdown();
                     if (createdContext) {
@@ -1187,6 +1192,7 @@ namespace ImGuiImpl {
             if (useContext) context.emplace(g_imguiContext);
             const bool wasVisible = g_imguiVisible;
             g_imguiVisible = visible;
+            if (!visible) CustomMenu::PaletteEditorPanel::RequestSuspend();
             if (wasVisible != visible) g_visibilityGeneration.fetch_add(1, std::memory_order_acq_rel);
             if (wasVisible != visible && useContext) {
                 ImGuiIO& io = ImGui::GetIO();
@@ -1212,7 +1218,7 @@ namespace ImGuiImpl {
                 g_resetVirtualCursorOnOpen = true;
                 ImGuiGui::RequestInitialNavFocus();
                 const bool customMenuOwnsNavigation =
-                    g_externalFallbackHost || Config::GetSettings().useCustomMenu;
+                    g_externalFallbackHost || Config::GetSettings().useCustomMenu || CustomMenu::PaletteEditorPanel::IsOpen();
                 if (!wasVisible && customMenuOwnsNavigation &&
                     useContext) {
                     // The menu-open press may still be held; every open gets a fresh release gate.
@@ -1363,6 +1369,7 @@ namespace ImGuiImpl {
             // Caller holds a DeviceRenderScope. The DX9 backend owns a device
             // reference; shut it down or the device outlives the release.
             const auto releaseDevice = [&]() {
+                CustomMenu::PaletteEditorPanel::ReleaseTextures();
                 if (g_d3dDevice) ImGui_ImplDX9_Shutdown();
                 g_d3dDevice = nullptr;
                 g_resetGate.UnbindBackend();
@@ -1528,6 +1535,7 @@ namespace ImGuiImpl {
             }
         }
         
+        CustomMenu::PaletteEditorPanel::ReleaseTextures();
         if (g_d3dDevice) ImGui_ImplDX9_Shutdown();
         ImGui_ImplWin32_Shutdown();
         context.ForgetDestroyed(g_imguiContext);
@@ -1739,6 +1747,8 @@ namespace ImGuiImpl {
     }
     
     void NewFrameInputs() {
+        CustomMenu::PaletteEditorPanel::SetDevice(g_d3dDevice);
+        CustomMenu::SyncPalettePreview();
         ImGuiContext& context = *ImGui::GetCurrentContext();
         ImGuiIO& io = context.IO;
         const bool inputActive = TrainingUiInputActive();
@@ -1782,7 +1792,7 @@ namespace ImGuiImpl {
         
         bool frameStarted = false;
         try {
-            const bool useCustomMenu = g_externalFallbackHost || Config::GetSettings().useCustomMenu;
+            const bool useCustomMenu = g_externalFallbackHost || Config::GetSettings().useCustomMenu || CustomMenu::PaletteEditorPanel::IsOpen();
 
             if (useCustomMenu) {
                 CustomMenu::PrepareFrame();

@@ -256,6 +256,7 @@ void TickHelpResources(ImDrawList* dl, const ScreenLayout& layout, int& focus, S
 void TickHelpAbout    (ImDrawList* dl, const ScreenLayout& layout, int& focus, ScrollState& scroll, bool& backEdge);
 
 bool IsPopupActive();
+void OpenDropdownPopup(const Row& row);
 bool TickPopupIfOpen(ImDrawList* dl, const ScreenLayout& layout);
 void ClosePopup();
 bool IsSubmenuActive();

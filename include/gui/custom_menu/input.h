@@ -17,6 +17,8 @@ bool NavUp();
 bool NavDown();
 bool NavLeft();
 bool NavRight();
+bool NavLeftHeld();
+bool NavRightHeld();
 
 bool Activate();
 

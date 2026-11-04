@@ -163,6 +163,12 @@ endif()
 
 add_library(efz_training_mode SHARED ${SOURCES})
 
+add_custom_target(efz_movedata ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata"
+        "$<TARGET_FILE_DIR:efz_training_mode>/assets/movedata")
+add_dependencies(efz_movedata efz_training_mode)
+
 if(EFZ_ENABLE_INPUT_LOGS)
     target_compile_definitions(efz_training_mode PRIVATE EFZ_ENABLE_INPUT_LOGS=1)
 endif()
@@ -197,6 +203,7 @@ set(EFZ_THIRD_PARTY_LINKS
     ws2_32
     iphlpapi
     comctl32
+    comdlg32
     gdiplus
     shlwapi
     d3d9
@@ -579,6 +586,44 @@ if(BUILD_TESTING)
     add_test(NAME macro_playback_start_policy_tests
              COMMAND macro_playback_start_policy_tests)
 
+    add_executable(palette_assets_tests
+        tests/palette_assets_tests.cpp src/game/palette_assets.cpp)
+    target_include_directories(palette_assets_tests PRIVATE include)
+    set_property(TARGET palette_assets_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME palette_assets_tests COMMAND palette_assets_tests)
+
+    add_executable(palette_live_tests
+        tests/palette_live_tests.cpp src/game/palette_live.cpp)
+    target_include_directories(palette_live_tests PRIVATE include)
+    set_property(TARGET palette_live_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME palette_live_tests COMMAND palette_live_tests)
+
+    add_executable(palette_editor_tests
+        tests/palette_editor_tests.cpp src/game/palette_editor.cpp src/game/palette_assets.cpp)
+    target_include_directories(palette_editor_tests PRIVATE include 3rdparty/json/single_include)
+    set_property(TARGET palette_editor_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME palette_editor_tests COMMAND palette_editor_tests)
+
+    add_executable(palette_editor_ui_tests
+        tests/palette_editor_ui_tests.cpp
+        src/game/palette_editor.cpp src/game/palette_assets.cpp
+        src/gui/custom_menu/screens.cpp src/gui/custom_menu/layout.cpp src/gui/custom_menu/scale.cpp
+        src/gui/custom_menu/fonts.cpp ${RESOURCE_SOURCES}
+        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_dx9.cpp)
+    target_include_directories(palette_editor_ui_tests PRIVATE
+        include 3rdparty/json/single_include ${IMGUI_DIR})
+    target_link_libraries(palette_editor_ui_tests PRIVATE d3d9 user32 gdi32 shell32 comdlg32)
+    target_compile_options(palette_editor_ui_tests PRIVATE /Gy)
+    set_property(TARGET palette_editor_ui_tests APPEND_STRING PROPERTY LINK_FLAGS " /OPT:REF")
+    set_property(TARGET palette_editor_ui_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME palette_editor_ui_tests COMMAND palette_editor_ui_tests)
+
     add_executable(collision_display_visibility_tests
         tests/collision_display_visibility_tests.cpp)
     target_include_directories(collision_display_visibility_tests PRIVATE
@@ -903,6 +948,12 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME mission_authoring_tests
              COMMAND mission_authoring_tests)
+
+    add_executable(mission_movedata_cache_tests tests/mission_movedata_cache_tests.cpp)
+    target_include_directories(mission_movedata_cache_tests PRIVATE include 3rdparty/json/single_include)
+    set_property(TARGET mission_movedata_cache_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME mission_movedata_cache_tests COMMAND mission_movedata_cache_tests)
 
     add_executable(mission_movedata_union_tests
         tests/mission_movedata_union_tests.cpp)

@@ -1,3 +1,5 @@
+#include "gui/custom_menu/palette_editor.h"
+#include "gui/custom_menu/palette_editor_integration.h"
 #include "gui/lifecycle_state.h"
 #include "../include/gui/custom_menu/renderer.h"
 #include "../include/gui/custom_menu/anim.h"
@@ -1645,7 +1647,7 @@ void TearDownOnClose() {
 
 bool MaybeRefreshOnOpen() {
     const bool visibleNow = ImGuiImpl::IsVisible();
-    const bool customNow  = ImGuiImpl::IsExternalFallbackHost() || Config::GetSettings().useCustomMenu;
+    const bool customNow  = ImGuiImpl::IsExternalFallbackHost() || Config::GetSettings().useCustomMenu || PaletteEditorPanel::IsOpen();
 
     const unsigned visibilityGen = ImGuiImpl::VisibilityGeneration();
     const bool flipped = visibilityGen != g_shell.lastVisibilityGen;
@@ -1759,6 +1761,11 @@ void Render() {
         return;
     }
 
+    if (PaletteEditorPanel::IsOpen()) {
+        PaletteEditorPanel::Render();
+        SyncPalettePreview();
+        return;
+    }
     ApplyPendingMenuNavigation();
 
     ++s_renderFrame;

@@ -426,6 +426,8 @@ bool NavUp()    { return SampleEdges().up;    }
 bool NavDown()  { return SampleEdges().down;  }
 bool NavLeft()  { return SampleEdges().left;  }
 bool NavRight() { return SampleEdges().right; }
+bool NavLeftHeld() { SampleEdges(); return g_prev.left; }
+bool NavRightHeld() { SampleEdges(); return g_prev.right; }
 bool Activate() { return SampleEdges().activate; }
 bool Back()     { return SampleEdges().back;  }
 bool SwitchPlayer() { return SampleEdges().switchPlayer; }

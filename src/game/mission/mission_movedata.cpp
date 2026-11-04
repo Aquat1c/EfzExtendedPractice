@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -27,6 +28,7 @@ struct CharEntry {
     std::vector<int> attackEntities;
 };
 
+std::mutex g_cacheMutex;
 std::unordered_map<int, CharEntry> g_cache;
 const std::vector<int> g_emptySpecials;
 const std::vector<int> g_emptyEntities;
@@ -109,6 +111,7 @@ bool ParseFile(const std::string& file, CharEntry& e) {
 }
 
 bool EnsureLoaded(int charId) {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     auto it = g_cache.find(charId);
     if (it != g_cache.end()) return it->second.ok;
 
@@ -146,6 +149,7 @@ bool EnsureLoaded(int charId) {
 }
 
 Cls GetClass(int charId, int moveId) {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     auto it = g_cache.find(charId);
     if (it == g_cache.end() || !it->second.ok) return Cls::Unknown;
     auto m = it->second.classById.find(moveId);
@@ -169,6 +173,7 @@ const char* ClassName(Cls c) {
 }
 
 bool IsAttack(int charId, int moveId) {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     auto it = g_cache.find(charId);
     if (it == g_cache.end() || !it->second.ok) return false;
     auto m = it->second.attackById.find(moveId);
@@ -191,18 +196,21 @@ bool IsCommonSystemHelperCandidate(int moveId) {
 }
 
 const std::vector<int>& Specials(int charId) {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     auto it = g_cache.find(charId);
     if (it == g_cache.end() || !it->second.ok) return g_emptySpecials;
     return it->second.specials;
 }
 
 const std::vector<int>& EntityPatterns(int charId) {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     auto it = g_cache.find(charId);
     if (it == g_cache.end() || !it->second.ok) return g_emptyEntities;
     return it->second.entities;
 }
 
 const std::vector<int>& AttackEntityPatterns(int charId) {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     auto it = g_cache.find(charId);
     if (it == g_cache.end() || !it->second.ok) return g_emptyEntities;
     return it->second.attackEntities;

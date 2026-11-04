@@ -1,3 +1,4 @@
+#include "gui/custom_menu/palette_editor.h"
 #include "gui/lifecycle_state.h"
 #include "utils/minhook_utils.h"
 #include <fstream>
@@ -824,7 +825,7 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
 
         // Mission screens and the pause menu draw with the custom-menu fonts, and Japanese overlay glyphs
         // live only in that atlas, so PrepareFrame must also run while any of those are up.
-    if ((ImGuiImpl::IsVisible() && Config::GetSettings().useCustomMenu) ||
+    if ((ImGuiImpl::IsVisible() && (Config::GetSettings().useCustomMenu || CustomMenu::PaletteEditorPanel::IsOpen())) ||
         PracticeMenu::TitleScreen::WantsDraw() ||
         Mission::PauseMenu::WantsDraw() ||
         Mission::TutorialSession::WantsDraw() ||
@@ -892,7 +893,7 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
         style.WindowBorderSize = 0.0f;
         style.FrameBorderSize = 0.0f;
 
-        if (Config::GetSettings().useCustomMenu) {
+        if (Config::GetSettings().useCustomMenu || CustomMenu::PaletteEditorPanel::IsOpen()) {
             SetEndScenePhase("CustomMenu::Render");
             CustomMenu::Render();
         } else {
@@ -1301,7 +1302,7 @@ void DirectDrawHook::RenderD3D9Overlays(LPDIRECT3DDEVICE9 pDevice, UINT rtW, UIN
                 padPos = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
             }
 
-            const bool customMenuActive = Config::GetSettings().useCustomMenu ||
+            const bool customMenuActive = Config::GetSettings().useCustomMenu || CustomMenu::PaletteEditorPanel::IsOpen() ||
                                           ImGuiImpl::IsExternalFallbackHost();
 
             static bool  s_mouseDotActivated = false;

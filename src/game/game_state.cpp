@@ -1,6 +1,9 @@
 #include "utils/minhook_utils.h"
 #include "game/battle_frontend_result.h"
 #include "game/character_hotswap.h"
+#include "game/palette_live.h"
+#include "gui/custom_menu/palette_editor.h"
+#include "gui/custom_menu/palette_editor_integration.h"
 #include "runtime/practice_battle_gates.h"
 #include "../include/game/game_state.h"
 #include "../include/game/auto_action.h"
@@ -157,11 +160,19 @@ namespace {
         CharacterHotswap::OnBattleFrontendEntry(reinterpret_cast<uintptr_t>(battleContext));
         const uint32_t batch = s_currentBattleBatch.fetch_add(
             1, std::memory_order_acq_rel) + 1;
+        PaletteEditor::Live::Pump();
         GameThread::Drain();
+        CustomMenu::UpdatePalettePreview();
         if (auto callback = s_beforeBattleUpdate.load(std::memory_order_relaxed)) {
             callback(battleContext);
         }
 
+        uint8_t exitRequested = 0;
+        if (battleContext && SafeReadMemory(reinterpret_cast<uintptr_t>(battleContext) + SCREEN_EXIT_FLAG_OFFSET,
+                                           &exitRequested, sizeof(exitRequested)) && exitRequested) {
+            CustomMenu::PaletteEditorPanel::RequestSuspend();
+            PaletteEditor::Live::Restore();
+        }
         const char result = oBattleUpdate ? oBattleUpdate(battleContext) : SCREEN_BATTLE;
 
         if (auto callback = s_afterBattleUpdate.load(std::memory_order_relaxed)) {
@@ -173,6 +184,8 @@ namespace {
             Practice::BattleCleanupHeld(battleContext),0);
         if (accepted != SCREEN_BATTLE) {
             std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+            CustomMenu::PaletteEditorPanel::RequestSuspend();
+            PaletteEditor::Live::Invalidate();
             MinHookUtils::SetPracticeBattleActive(false);
             XInputShim::SetPollingActive(false);
             // Last battle frame: unwind menu/framestep pause while the Practice controller is alive.

@@ -1,3 +1,4 @@
+#include "gui/custom_menu/palette_editor_integration.h"
 #include "game/practice_snapshots.h"
 #include "../include/gui/imgui_gui.h"
 #include "../include/gui/imgui_impl.h"
@@ -2430,6 +2431,8 @@ namespace ImGuiGui {
     }
 
     void RenderCharacterTab() {
+        if (ImGui::Button("Palette editor")) CustomMenu::OpenPaletteEditor();
+        ImGui::Spacing();
         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Character-Specific Settings");
         ImGui::Separator();
         

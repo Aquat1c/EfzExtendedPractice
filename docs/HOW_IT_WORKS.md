@@ -837,6 +837,56 @@ Whole-HUD hide wraps the battle render and forces the engine's own intro gate po
 filter: the two HUD render functions set a thread-local seam around their draws, and the blitters skip a draw only inside a seam when its destination matches a disabled element. Gameplay sprites have no
 seam, so they always pass through. All six hooks are refused as a unit if any entry differs, because a generic x86 prologue proves nothing about the body.
 
+## Palette editing
+
+Both menu styles open the same palette panel from Characters. Its Editor
+page keeps colour controls beside an animated preview; Library contains the
+file operations. Both use the custom menu's fonts, controls and input mapping.
+Individual colours accept RGB, HSV or three/six-digit hex;
+numbered shade groups preserve the stock palette's lightness relationships.
+Pins protect individual edits from group changes. Undo keeps sixteen edits,
+with a slider drag or held adjustment recorded as one edit. Hue remains editable on black and
+gray even when changing it does not change the visible RGB value.
+
+`palette_assets.cpp` reads the character's DAT and PAT files into bounded,
+mod-owned assets. Six stock palettes supply forty colours each. Transparency
+comes from the sprite data, and shared effect colours come from the stage
+palette rather than the editable fighter bank. Animation choices use PAT
+IDs, the shipped move classifications, and the move/entity notation catalogues,
+including sparse IDs and the native last-definition rule for duplicates.
+Nanase and Ikumi also expose their alternate PATs. Preview playback uses visual frame durations at 64 Hz and
+never executes a move or advances the match. Managed D3D9 textures belong
+to the overlay's device and are released through its reset/shutdown gate.
+
+`palette_editor.cpp` owns the document and file library. The immutable stock
+baseline, edited colours, pins and group targets are stored together in
+JSON under `palettes` beside the configuration file. Invalid imports leave
+the current document intact. Save-new refuses collisions; replacing a
+library entry verifies that the scanned file has not changed. Writes use a
+flushed temporary file and atomic rename. Deleted entries move to a
+recoverable per-character trash folder. Native PAL export contains only the
+forty BGR colour triples and their count; library metadata stays in JSON.
+
+`palette_live.cpp` owns temporary fighter recolouring. The panel requests a
+snapshot; the existing admitted battle update applies it on the game thread,
+including while Practice is paused. Native entry bytes are verified before
+use. Only the selected fighter's palette row changes, preserving each
+entry's reserved byte. DirectDraw's palette upload result is checked before
+the native blend tables are regenerated. Changed previews coalesce over
+100 ms; unchanged colours do no refresh work. No simulation, RNG, reload or
+additional game hook is involved.
+
+The live snapshot records the fighter, scene generation, character and slot.
+Restoration requires that identity and the last-written bytes to still match.
+Closing the editor restores its captured colours; **Export + apply** retains
+the approved colours for the current match and writes the chosen native slot
+for later use through the existing custom-palette selection. Savestate writes
+suspend the panel, invalidate its old ownership, and refresh the complete
+restored palette after simulation state has been restored. An unavailable
+graphics device defers presentation refresh without failing the savestate.
+Scene retirement drops stale snapshots, and netplay admission prevents every native palette read or
+write through this adapter. Suspending the menu preserves the editable draft.
+
 ## Menus and rendering
 
 The overlay owns the final draw call: `src/gui/overlay.cpp` hooks

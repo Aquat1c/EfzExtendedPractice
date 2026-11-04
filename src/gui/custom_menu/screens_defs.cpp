@@ -1,3 +1,4 @@
+#include "gui/custom_menu/palette_editor_integration.h"
 #include "gui/lifecycle_state.h"
 #include "../include/gui/custom_menu/screens.h"
 #include "../include/gui/custom_menu/sound.h"
@@ -5802,6 +5803,7 @@ Row* BuildCharsRows(int& count) {
     auto& d = ImGuiGui::guiState.localData;
 
     s_rows[n++] = Header("CHARACTER CONTROLS");
+    s_rows[n++] = Action("PALETTE EDITOR", [] { CustomMenu::OpenPaletteEditor(); });
     s_rows[n++] = Action("REFRESH CHARACTER DATA", RefreshCharacterDataAction);
 
     s_rows[n++] = Spacer();

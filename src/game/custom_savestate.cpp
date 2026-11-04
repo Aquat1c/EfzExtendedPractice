@@ -1,3 +1,5 @@
+#include "game/palette_live.h"
+#include "gui/custom_menu/palette_editor.h"
 #include "../../include/game/custom_savestate.h"
 
 #include "../../include/game/auto_action.h"
@@ -3083,6 +3085,9 @@ bool RestoreSnapshot(const Snapshot& snapshot, std::string& outReason, bool engi
         LogSavestateTrace("restore write dump", "label=render skipped=read-failed addr=" + PointerHex(base + kRenderBitmapOffset));
     }
 
+    CustomMenu::PaletteEditorPanel::RequestSuspend();
+    PaletteEditor::Live::Restore();
+    PaletteEditor::Live::Invalidate();
     const bool battleOk = WriteMemoryBlock(battleContext, snapshot.battleContext);
     const bool cameraOk = WriteMemoryBlock(battleContext + kCameraSubfieldOffset, snapshot.cameraSubfield);
     const bool gameStateOk = WriteMemoryBlock(gameStatePtr, gameStateBytes);
@@ -3168,6 +3173,9 @@ bool RestoreSnapshot(const Snapshot& snapshot, std::string& outReason, bool engi
         oss << " savedLatch=" << Hex32(snapshot.savedFKeyLatch)
             << " restoredMod={" << DescribePersistedModState(snapshot.modState) << '}';
         LogSavestateTrace("restore finalize", oss.str());
+    }
+    if (!PaletteEditor::Live::RefreshCurrent()) {
+        LogSavestateTrace("restore palette", "graphics refresh deferred until the palette device is ready");
     }
     LogSnapshotStatus("restore", "working snapshot restored | " + DescribeResolvedPair(p1Base, p2Base, p1CharId, p2CharId, p1Size, p2Size));
     return true;

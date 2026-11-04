@@ -1,3 +1,5 @@
+#include "game/palette_live.h"
+#include "gui/custom_menu/palette_editor.h"
 #include "game/practice_snapshots.h"
 #include "../include/utils/utilities.h"
 
@@ -623,6 +625,10 @@ void Practice::ResetPracticeMeasurements(const EfzTmIdentityV1&, ResetReason) {
 }
 
 void ResetPracticeMatchSessionState(const char* reason) {
+    std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+    CustomMenu::PaletteEditorPanel::RequestSuspend();
+    PaletteEditor::Live::Restore();
+    PaletteEditor::Live::Invalidate();
     CharacterHotswap::InvalidateCompletedPracticeLoadReceipt();
     Mission::Engine::NotifyPracticeSessionReset(reason);
     Framestep::CancelActiveState(reason ? reason : "practice match reset");

@@ -14,7 +14,7 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
 2. **Install EFZ Mod Manager** (if you don't have it already)
    - Download: [EFZ Mod Manager spreadsheet](https://docs.google.com/spreadsheets/d/1r0nBAaQczj9K4RG5zAVV4uXperDeoSnXaqQBal2-8Us/edit?usp=sharing)
 
-3. **Place the DLL in your mods folder**
+3. **Place the DLL and its assets in your mods folder**
 
    The mod expects this layout inside your game directory:
 
@@ -26,10 +26,14 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
    ├── EfzModManager.ini         <- mod enable list (edit this)
    └── mods/
        └── efz_training_mode/    <- mod folder (name matches the DLL)
-           └── efz_training_mode.dll
+           ├── efz_training_mode.dll
+           └── assets/movedata/  <- move classifications used by the palette editor
    ```
 
    Example full path: `EFZ\mods\efz_training_mode\efz_training_mode.dll`
+
+   Keep the packaged `assets` folder beside the DLL. Source builds copy move data
+   into the DLL output directory automatically.
 
 4. **Enable the mod in `EfzModManager.ini`**
 
@@ -98,6 +102,8 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
 - **Character-Specific Settings:**
   - Toggle or adjust unique character parameters directly from the overlay
   - Examples: Ikumi (Blood/Genocide), Misuzu (Feathers), Mishio (Element/Awakened), Rumi (Stance/Kimchi), Akiko (Current Bullet Cycle/Time-Slow), Neyuki (Jam 0–9), Kano (Magic), Mio (Stance), Doppel (Gold Doppel), Mai (Ghost/Awakening), Minagi (Michiru position + Always readied)
+
+- **Palette Editor:** Open **Characters → Palette Editor** in offline Practice. Edit either fighter's 40 colours with RGB, HSV or hex controls, shade groups, pins, resets and gesture undo. Preview actual moves with animation/frame selection, zoom, pan, colour picking and original/edited comparison; live fighter colours update without reloading the match. The library supports named saves, replacement and recoverable deletion beside the mod's config. Import or export native `.pal` files for the six character slots; **Export + apply** keeps the edited colours for the current match. Ordinary preview changes are restored on closing the editor, and hidden-menu drafts survive until reopened.
 
 - **Random Defense Tools:**
   - Random Block and Random RG for realistic defensive variance
