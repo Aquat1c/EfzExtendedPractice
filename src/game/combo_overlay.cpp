@@ -73,9 +73,10 @@ namespace {
         double rf = 0.0;
     };
 
+    enum class ComboPhase { Empty, Live, Finalized };
+
     struct ComboState {
-        bool live = false;
-        bool finalized = false;
+        ComboPhase phase = ComboPhase::Empty;
         bool hiddenByPolicy = false;
 
         int attackerSide = 0;
@@ -346,7 +347,7 @@ namespace {
             return runtime;
         }
 
-        const bool continuingLiveCombo = g_state.live && g_state.attackerSide == attackerSide;
+        const bool continuingLiveCombo = g_state.phase == ComboPhase::Live && g_state.attackerSide == attackerSide;
         const int hitCount = continuingLiveCombo ? (g_state.hitCount + 1) : 1;
         const int totalDamage = continuingLiveCombo ? (g_state.totalDamage + defenderDamage) : defenderDamage;
         return BuildSyntheticRuntime(runtime, hitCount, totalDamage);
@@ -378,7 +379,7 @@ namespace {
     }
 
     void ResetStateUnlocked(const char* reason, bool resetSessionStats, bool armIdleBaseline) {
-        const bool hadState = g_state.live || g_state.finalized || g_displayIds.header != -1
+        const bool hadState = g_state.phase != ComboPhase::Empty || g_displayIds.header != -1
             || g_displayIds.totals != -1 || g_displayIds.resources != -1
             || g_displayIds.detail != -1 || g_displayIds.status != -1
             || g_displayIds.extras != -1;
@@ -436,7 +437,7 @@ namespace {
         const int effectiveTotalDamage = (std::max)(runtime.totalDamage, (std::max)(0, defenderHpStart - defender.hp));
 
         g_state = ComboState{};
-        g_state.live = true;
+        g_state.phase = ComboPhase::Live;
         g_state.attackerSide = attackerSide;
         g_state.defenderSide = defenderSide;
         g_state.hitCount = runtime.hitCount;
@@ -494,8 +495,7 @@ namespace {
         const int previousTotalDamage = g_state.totalDamage;
         const int updatedTotalDamage = (std::max)(runtime.totalDamage, (std::max)(0, g_state.defenderHpStart - defender.hp));
 
-        g_state.live = true;
-        g_state.finalized = false;
+        g_state.phase = ComboPhase::Live;
         g_state.hitCount = runtime.hitCount;
         g_state.totalDamage = updatedTotalDamage;
         if (updatedTotalDamage > previousTotalDamage) {
@@ -556,7 +556,7 @@ namespace {
 
     void FinalizeComboUnlocked(unsigned long long nowMs) {
         const Config::Settings& cfg = Config::GetSettings();
-        if (!g_state.live) {
+        if (g_state.phase != ComboPhase::Live) {
             return;
         }
         if (!cfg.comboOverlayShowFinalSummary) {
@@ -564,8 +564,7 @@ namespace {
             return;
         }
 
-        g_state.live = false;
-        g_state.finalized = true;
+        g_state.phase = ComboPhase::Finalized;
         const float duration = (cfg.comboOverlayDisplayDuration < 0.5f)
             ? 0.5f
             : (std::min)(cfg.comboOverlayDisplayDuration, 30.0f);
@@ -596,11 +595,11 @@ namespace {
             return;
         }
 
-        if (!g_state.live && !g_state.finalized) {
+        if (g_state.phase == ComboPhase::Empty) {
             ClearDisplayUnlocked();
             return;
         }
-        if (g_state.finalized && nowMs >= g_state.lingerUntilMs) {
+        if (g_state.phase == ComboPhase::Finalized && nowMs >= g_state.lingerUntilMs) {
             ResetStateUnlocked("final summary expired", false, false);
             return;
         }
@@ -609,7 +608,7 @@ namespace {
         if (cfg.comboOverlayHideWhenImGuiVisible && menuVisible) {
             ClearDisplayUnlocked();
             g_state.hiddenByPolicy = true;
-            if (g_state.finalized && !cfg.comboOverlayResumeAfterImGui) {
+            if (g_state.phase == ComboPhase::Finalized && !cfg.comboOverlayResumeAfterImGui) {
                 ResetStateUnlocked("hidden by imgui without resume", false, false);
             }
             return;
@@ -785,7 +784,7 @@ namespace ComboOverlay {
         } else if (p2HitP1ThisFrame) {
             attackerSide = 2;
             currentCombo = RuntimeOrSyntheticForDamageEdge(2, combo2, damageToP1);
-        } else if (g_state.live) {
+        } else if (g_state.phase == ComboPhase::Live) {
             const int defenderSide = (g_state.attackerSide == 1) ? 2 : 1;
             const ComboRuntime& liveRuntime = RuntimeForSide(g_state.attackerSide, combo1, combo2);
             const PlayerMetrics& liveDefender = MetricsForSide(defenderSide, p1, p2);
@@ -821,7 +820,7 @@ namespace ComboOverlay {
             const uintptr_t attackerPtr = (attackerSide == 1) ? sample.p1Ptr : sample.p2Ptr;
 
             const bool newCombo =
-                !g_state.live
+                g_state.phase != ComboPhase::Live
                 || g_state.attackerSide != attackerSide
                 || currentCombo.hitCount < g_state.hitCount
                 || currentCombo.totalDamage < g_state.totalDamage;
@@ -829,8 +828,7 @@ namespace ComboOverlay {
             if (newCombo) {
                 StartNewComboUnlocked(sample, attackerSide, currentCombo, attacker, defender, attackerPtr);
             } else {
-                g_state.live = true;
-                g_state.finalized = false;
+                g_state.phase = ComboPhase::Live;
                 if (ComboProgressed(currentCombo)) {
                     UpdateLiveComboUnlocked(sample, currentCombo, attacker, defender, attackerPtr);
                 } else {
@@ -842,7 +840,7 @@ namespace ComboOverlay {
                     }
                 }
             }
-        } else if (g_state.live) {
+        } else if (g_state.phase == ComboPhase::Live) {
             FinalizeComboUnlocked(nowMs);
         }
 

@@ -5,6 +5,23 @@
 struct EfzTmEntryV1;
 
 namespace MacroController {
+    namespace PlaybackFinishPolicy {
+        enum class Phase { Streaming, AwaitingFinalPoll, AwaitingClearTick, Neutralizing, Guarding };
+        constexpr Phase AfterFinalPoll(uint32_t initial, uint32_t current, int waited) {
+            return current != initial || waited >= 12
+                ? Phase::AwaitingClearTick : Phase::AwaitingFinalPoll;
+        }
+        constexpr Phase AfterClearTick(int frameDiv) {
+            return frameDiv == 0 ? Phase::Neutralizing : Phase::AwaitingClearTick;
+        }
+        constexpr Phase AfterNeutral(int remaining) {
+            return remaining > 0 ? Phase::Neutralizing : Phase::Guarding;
+        }
+        constexpr bool GuardFinished(bool activated, int remaining) {
+            return activated || remaining <= 0;
+        }
+    }
+
 
 enum class State : uint8_t {
     Idle = 0,

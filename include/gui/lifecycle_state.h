@@ -113,6 +113,22 @@ private:
     unsigned framesSinceFire_ = 0;
 };
 
+enum class MenuRenderPhase { Game, BackendUnavailable, AwaitingGameFrame };
+class MenuRenderRoute {
+public:
+    bool NeedsFallback() const { return phase_.load(std::memory_order_acquire) != MenuRenderPhase::Game; }
+    bool WaitingForFrame() const { return phase_.load(std::memory_order_acquire) == MenuRenderPhase::AwaitingGameFrame; }
+    void UseGame() { phase_.store(MenuRenderPhase::Game, std::memory_order_release); }
+    void BackendUnavailable() { phase_.store(MenuRenderPhase::BackendUnavailable, std::memory_order_release); }
+    void NoFrames() { phase_.store(MenuRenderPhase::AwaitingGameFrame, std::memory_order_release); }
+    void ObserveFrame() {
+        auto phase = MenuRenderPhase::AwaitingGameFrame;
+        (void)phase_.compare_exchange_strong(phase, MenuRenderPhase::Game, std::memory_order_acq_rel);
+    }
+private:
+    std::atomic<MenuRenderPhase> phase_{MenuRenderPhase::Game};
+};
+
 enum class MenuFadePhase { Opening, Closing };
 enum class TextEditorPhase { Closed, FocusRequested, Editing };
 class TextEditor {

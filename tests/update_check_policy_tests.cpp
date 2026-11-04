@@ -127,6 +127,13 @@ void TestRealWorldScenarios() {
 }
 
 int main() {
+    using UpdateCheck::Policy::FetchPhase;
+    using UpdateCheck::Policy::CanStartFetch;
+    Require(CanStartFetch(FetchPhase::Idle, 0, 0), "initial fetch is admitted");
+    Require(!CanStartFetch(FetchPhase::Fetching, 100, 0), "only one fetch can be active");
+    Require(!CanStartFetch(FetchPhase::Complete, 100, 0), "successful fetch is process-terminal");
+    Require(!CanStartFetch(FetchPhase::RetryWait, 499, 500) &&
+            CanStartFetch(FetchPhase::RetryWait, 500, 500), "failed fetch retries at the deadline");
     TestIsSafeTag();
     TestNormalizeTag();
     TestExtractTagHappyPath();

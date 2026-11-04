@@ -525,7 +525,6 @@ void EndWakeMacroCleanup(int playerNum) {
 struct DashFollowDeferred {
     std::atomic<int> pendingSel{0};
     std::atomic<int> player{0};
-    std::atomic<int> dashStartLatched{0}; // 0 = not yet, 1 = latched and fired, -1 = latched but failed to fire
     std::atomic<int> isBack{0};
     std::atomic<uint64_t> motionGeneration{0};
     std::atomic<uint64_t> normalGeneration{0};
@@ -603,7 +602,6 @@ static void ScheduleForwardDashFollowup(int playerNum, int sel,
     }
     g_dashDeferred.pendingSel.store(sel);
     g_dashDeferred.player.store(playerNum);
-    g_dashDeferred.dashStartLatched.store(0);
     g_dashDeferred.isBack.store(0);
     g_dashDeferred.motionGeneration.store(motionGeneration);
     g_dashDeferred.normalGeneration.store(0);
@@ -620,7 +618,6 @@ static void ScheduleBackDashFollowup(int playerNum, int sel,
     }
     g_dashDeferred.pendingSel.store(sel);
     g_dashDeferred.player.store(playerNum);
-    g_dashDeferred.dashStartLatched.store(0);
     g_dashDeferred.isBack.store(1);
     g_dashDeferred.motionGeneration.store(motionGeneration);
     g_dashDeferred.normalGeneration.store(0);
@@ -703,7 +700,6 @@ static void ProcessDeferredDashFollowups(short curP1, short prevP1, short curP2,
             g_dashDeferred.normalDispatchAttempts.load(
                 std::memory_order_acquire);
         g_dashDeferred.normalGeneration.store(0, std::memory_order_release);
-        g_dashDeferred.dashStartLatched.store(0, std::memory_order_release);
         if (attempts >= kMaxAutoActionDispatchAttempts ||
             (!forwardDashStart && !backDashStart)) {
             LogOut("[AUTO-ACTION] Dash-normal was not consumed and its retry window closed",
@@ -793,12 +789,10 @@ static void ProcessDeferredDashFollowups(short curP1, short prevP1, short curP2,
                 generation, std::memory_order_release);
             g_dashDeferred.normalDispatchAttempts.fetch_add(
                 1, std::memory_order_acq_rel);
-            g_dashDeferred.dashStartLatched.store(2);
         } else if (submit == NormalInputPolicy::SubmitResult::Busy) {
             LogOut("[AUTO-ACTION] Dash follow-up input lane busy; retaining selection inside dash-start window",
                    detailedLogging.load());
         } else {
-            g_dashDeferred.dashStartLatched.store(-1);
             LogOut("[AUTO-ACTION] Dash follow-up intent invalid; retiring selection", true);
             ResetDeferredDashFollowupState();
         }
@@ -814,7 +808,6 @@ static std::atomic<int> g_recentDashQueuedFrame(0);
 static void ResetDeferredDashFollowupState() {
     g_dashDeferred.pendingSel.store(0, std::memory_order_release);
     g_dashDeferred.player.store(0, std::memory_order_release);
-    g_dashDeferred.dashStartLatched.store(0, std::memory_order_release);
     g_dashDeferred.isBack.store(0, std::memory_order_release);
     g_dashDeferred.motionGeneration.store(0, std::memory_order_release);
     g_dashDeferred.normalGeneration.store(0, std::memory_order_release);
@@ -5587,7 +5580,6 @@ void ProcessAutoControlRestore() {
             if (ValidationMetricsEnabled()) { GetValidationMetrics().dashPreStartInterrupts++; }
             if (g_dashDeferred.pendingSel.load() > 0) {
                 g_dashDeferred.pendingSel.store(0);
-                g_dashDeferred.dashStartLatched.store(-1);
             }
             g_recentDashQueued.store(false);
             RestoreP2ControlState();
@@ -5605,7 +5597,6 @@ void ProcessAutoControlRestore() {
             LogOut("[AUTO-ACTION][DASH] Dash follow-up cancelled by interrupt before dash started", true);
             if (ValidationMetricsEnabled()) { GetValidationMetrics().dashFollowupCancelled++; }
             g_dashDeferred.pendingSel.store(0);
-            g_dashDeferred.dashStartLatched.store(-1);
         }
     int fdfSel = forwardDashFollowup.load();
         // Do not restore when the dash starts: wait until the whole dash state is left, whatever follows.
@@ -5768,7 +5759,6 @@ void ProcessAutoControlRestore() {
                 LogOut("[AUTO-ACTION][DASH] Pre-start cancelled (no start observed, non-dash state persisted) - restoring", true);
                 if (g_dashDeferred.pendingSel.load() > 0) {
                     g_dashDeferred.pendingSel.store(0);
-                    g_dashDeferred.dashStartLatched.store(-1);
                 }
                 g_recentDashQueued.store(false);
                 RestoreP2ControlState();

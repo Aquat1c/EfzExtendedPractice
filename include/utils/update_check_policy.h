@@ -11,6 +11,14 @@
 namespace UpdateCheck {
 namespace Policy {
 
+enum class FetchPhase { Idle, Fetching, RetryWait, Complete };
+
+constexpr bool CanStartFetch(FetchPhase phase, unsigned long long now,
+                             unsigned long long retryAt) {
+    return phase == FetchPhase::Idle ||
+        (phase == FetchPhase::RetryWait && now >= retryAt);
+}
+
 // Tags are attacker-influenced text that reaches a UI buffer; anything longer
 // or outside this charset is rejected rather than rendered into the menu.
 constexpr size_t kMaxTagLength = 32;

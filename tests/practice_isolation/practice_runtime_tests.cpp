@@ -78,6 +78,13 @@ void ActualEntrySeparateAttachmentAndHeldRetirement(bool duplicateBegin){
     CHECK(EFZ_TM_AdvanceRetireV1(&retire)==EFZ_TM_PENDING);
     CHECK(EFZ_TM_GetStatusV1(&status)==EFZ_TM_READY);
     CHECK(status.restorationObligations!=0&&status.state==EFZ_TM_REVOKING);
+    CHECK(!Practice::RecordBattleCleanupBranch(battle.battleContext+4,0));
+    CHECK(!Practice::RecordBattleCleanupBranch(battle.battleContext,2));
+    CHECK(Practice::RecordBattleCleanupBranch(battle.battleContext,0));
+    CHECK(Practice::RecordBattleCleanupBranch(battle.battleContext,0));
+    CHECK(!Practice::RecordBattleCleanupBranch(battle.battleContext,1));
+    CHECK(!Practice::TakeBattleCleanupResume(battle.battleContext,battle.gameSystem,0));
+    CHECK(!Practice::RecordBattleCleanupReturned(battle.battleContext,battle.gameSystem,1));
     auto old=retire;old.id.battleWorld=10;CHECK(EFZ_TM_AdvanceRetireV1(&old)==EFZ_TM_STALE);
     retire.oldWorldHeld=0;
     if(duplicateBegin) {

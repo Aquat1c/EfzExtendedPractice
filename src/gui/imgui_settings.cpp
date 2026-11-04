@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #include "../include/gui/imgui_settings.h"
 #include "../include/gui/imgui_gui.h"
 #include "../include/utils/controller_names.h"
@@ -21,8 +22,7 @@ namespace ImGuiSettings {
     static constexpr int GP_TRIGGER_THRESH = 30;
 
     struct KeyboardCaptureState {
-        bool active = false;
-        bool armed = false;
+        GuiLifecycle::KeyCapture capture;
         std::string which;
         bool prevPressed[256] = {};
     };
@@ -41,8 +41,7 @@ namespace ImGuiSettings {
     }
 
     static void BeginKeyboardCapture(KeyboardCaptureState& state, const char* cfgKey) {
-        state.active = true;
-        state.armed = false;
+        state.capture.Open();
         state.which = cfgKey ? cfgKey : "";
         for (int vk = 0; vk < 256; ++vk) {
             state.prevPressed[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
@@ -50,8 +49,7 @@ namespace ImGuiSettings {
     }
 
     static void CancelKeyboardCapture(KeyboardCaptureState& state) {
-        state.active = false;
-        state.armed = false;
+        state.capture.Close();
         state.which.clear();
     }
 
@@ -59,7 +57,7 @@ namespace ImGuiSettings {
                                     int& keyCode,
                                     const char* cfgKey,
                                     bool disallowFooterKeys = false) {
-        if (!state.active || state.which != (cfgKey ? cfgKey : "")) {
+        if (!state.capture.IsOpen() || state.which != (cfgKey ? cfgKey : "")) {
             return false;
         }
 
@@ -81,13 +79,13 @@ namespace ImGuiSettings {
             state.prevPressed[vk] = now;
 
             if (now) anyHeld = true;
-            if (state.armed && now && !was && captured == 0) {
+            if (state.capture.CanCapture() && now && !was && captured == 0) {
                 captured = vk;
             }
         }
 
-        if (!state.armed) {
-            if (!anyHeld) state.armed = true;
+        if (!state.capture.CanCapture()) {
+            state.capture.ObserveRelease(anyHeld);
             return false;
         }
 
@@ -148,13 +146,13 @@ namespace ImGuiSettings {
         ImGui::SameLine();
         static KeyboardCaptureState captureState;
         std::string btnId = std::string("Bind##") + setKeyName;
-        if (!captureState.active) {
+        if (!captureState.capture.IsOpen()) {
             if (ImGui::Button(btnId.c_str())) {
                 BeginKeyboardCapture(captureState, setKeyName);
                 LogOut(std::string("[CONFIG/UI] Capturing key for ") + setKeyName + "... press any key", false);
             }
         } else if (captureState.which == setKeyName) {
-            ImGui::TextColored(ImVec4(1,1,0,1), captureState.armed ? "Press any key..." : "Release all keys...");
+            ImGui::TextColored(ImVec4(1,1,0,1), captureState.capture.CanCapture() ? "Press any key..." : "Release all keys...");
             if (PollKeyboardCapture(captureState, keyCode, setKeyName)) {
                 LogOut(std::string("[CONFIG/UI] ") + setKeyName + " bound to " + GetKeyName(keyCode), false);
             }
@@ -186,11 +184,11 @@ namespace ImGuiSettings {
         ImGui::SameLine();
         std::string btnId = std::string("Rebind##") + cfgKey;
         static KeyboardCaptureState captureState;
-        if (!captureState.active) {
+        if (!captureState.capture.IsOpen()) {
             if (ImGui::Button(btnId.c_str())) { BeginKeyboardCapture(captureState, cfgKey); }
         } else if (captureState.which == cfgKey) {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1,1,0,1), captureState.armed ? "Press a key (no Enter/Space)..." : "Release all keys...");
+            ImGui::TextColored(ImVec4(1,1,0,1), captureState.capture.CanCapture() ? "Press a key (no Enter/Space)..." : "Release all keys...");
             if (PollKeyboardCapture(captureState, keyCode, cfgKey, true)) {
                 LogOut(std::string("[CONFIG/UI] ") + cfgKey + " footer key -> " + GetKeyName(keyCode), false);
             }
@@ -525,9 +523,8 @@ namespace ImGuiSettings {
                     {"Toggle Menu",     "gpToggleMenuButton", cfg.gpToggleMenuButton}
                 };
 
-                static bool capturing = false;
+                static GuiLifecycle::KeyCapture padCapture;
                 static std::string which;
-                static bool armed = false;
                 static uint32_t prevAggMask = 0;
                 static double startTime = 0.0;
 
@@ -540,26 +537,26 @@ namespace ImGuiSettings {
                     ImGui::TextDisabled("[%s]", Config::GetGamepadButtonName(r.val).c_str());
                     ImGui::SameLine();
                     std::string btn = std::string("Rebind##") + r.key;
-                    if (!capturing) {
+                    if (!padCapture.IsOpen()) {
                         if (ImGui::SmallButton(btn.c_str())) {
-                            capturing = true; which = r.key; armed = false; prevAggMask = 0; startTime = ImGui::GetTime();
+                            padCapture.Open(); which = r.key; prevAggMask = 0; startTime = ImGui::GetTime();
                         }
                         ImGui::SameLine();
                         if (ImGui::SmallButton("Disable")) {
                             Config::SetSetting("Hotkeys", r.key, "-1");
                         }
-                    } else if (capturing && which == r.key) {
-                        ImGui::TextColored(ImVec4(1,1,0,1), armed ? "Waiting for next input..." : "Release all buttons/triggers...");
+                    } else if (padCapture.IsOpen() && which == r.key) {
+                        ImGui::TextColored(ImVec4(1,1,0,1), padCapture.CanCapture() ? "Waiting for next input..." : "Release all buttons/triggers...");
                         ImGui::SameLine();
-                        if (ImGui::SmallButton("Cancel")) { capturing = false; which.clear(); armed=false; }
+                        if (ImGui::SmallButton("Cancel")) { padCapture.Close(); which.clear(); }
 
                         uint32_t padsMask = 0;
                         uint32_t agg = PollAggregatedGamepadMask(&padsMask);
 
                         const double elapsed = ImGui::GetTime() - startTime;
-                        if (!armed) {
+                        if (!padCapture.CanCapture()) {
                             if (elapsed > 0.12 && agg == 0) {
-                                armed = true;
+                                padCapture.ObserveRelease(false);
                                 prevAggMask = 0;
                             }
                         } else {
@@ -567,7 +564,7 @@ namespace ImGuiSettings {
                             if (edge != 0) {
                                 std::string name = Config::GetGamepadButtonName((int)edge);
                                 Config::SetSetting("Hotkeys", which, name);
-                                capturing = false; which.clear(); armed = false; prevAggMask = 0; startTime = 0.0;
+                                padCapture.Close(); which.clear(); prevAggMask = 0; startTime = 0.0;
                             } else {
                                 prevAggMask = agg;
                             }

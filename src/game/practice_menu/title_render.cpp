@@ -32,8 +32,8 @@ constexpr int kPaletteBase        = 193;
 constexpr int kPaletteCountFallback = 56;
 
 uint32_t g_surface = 0;
-bool     g_loaded  = false;
-bool     g_loadFailed = false;
+enum class LoadPhase { Unloaded, Loaded, Failed };
+LoadPhase g_loadPhase = LoadPhase::Unloaded;
 char     g_transparent = 0;
 std::string g_datPath;
 
@@ -85,18 +85,18 @@ void RestoreTitlePalette(uint32_t sc) {
 namespace PracticeMenu::Render {
 
 bool EnsureLoaded(uint32_t sc) {
-    if (g_loaded) return true;
-    if (g_loadFailed || !sc) return false;
+    if (g_loadPhase == LoadPhase::Loaded) return true;
+    if (g_loadPhase == LoadPhase::Failed || !sc) return false;
 
     if (g_datPath.empty() && !ResolveDatPath(g_datPath)) {
         Log("title_ob2.dat not found next to the DLL; rendering disabled");
-        g_loadFailed = true;
+        g_loadPhase = LoadPhase::Failed;
         return false;
     }
 
     const uintptr_t loadImgVa = Resolve(kVaLoadImage);
     const uintptr_t readPixVa = Resolve(kVaReadPixel);
-    if (!loadImgVa || !readPixVa) { g_loadFailed = true; return false; }
+    if (!loadImgVa || !readPixVa) { g_loadPhase = LoadPhase::Failed; return false; }
 
     __try {
         auto loadImg = reinterpret_cast<LoadImageFn>(loadImgVa);
@@ -105,21 +105,21 @@ bool EnsureLoaded(uint32_t sc) {
         g_surface = 0;
         loadImg(reinterpret_cast<void*>(GameContext(sc)), &g_surface, g_datPath.c_str(),
                 0, static_cast<unsigned char>(kPaletteBase));
-        if (g_surface == 0) { Log("loadCompressedImageFile returned null surface"); g_loadFailed = true; return false; }
+        if (g_surface == 0) { Log("loadCompressedImageFile returned null surface"); g_loadPhase = LoadPhase::Failed; return false; }
 
         g_transparent = readPix(static_cast<int>(g_surface));
 
-        g_loaded = true;
+        g_loadPhase = LoadPhase::Loaded;
         Log("Loaded title_ob2.dat into private surface");
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("Exception while loading title_ob2.dat");
-        g_loadFailed = true;
+        g_loadPhase = LoadPhase::Failed;
         return false;
     }
 }
 
-bool IsLoaded() { return g_loaded; }
+bool IsLoaded() { return g_loadPhase == LoadPhase::Loaded; }
 
 void ApplyPalette(uint32_t sc) {
     if (!EnsureLoaded(sc)) return;
@@ -149,7 +149,7 @@ void DrawBackground(uint32_t sc) {
 }
 
 void Release(uint32_t sc) {
-    if (g_loaded) RestoreTitlePalette(sc);
+    if (g_loadPhase == LoadPhase::Loaded) RestoreTitlePalette(sc);
 }
 
 void DrawRows(uint32_t sc, int selectedRow, int slideOffsetX) {

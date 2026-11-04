@@ -108,6 +108,21 @@ int main() {
               StreamEndCanLatch(1, 1, 0, 0),
           "one-tick playback cannot finish before every primed raw slice drains");
 
+    using FinishPhase = MacroController::PlaybackFinishPolicy::Phase;
+    namespace Finish = MacroController::PlaybackFinishPolicy;
+    Check(Finish::AfterFinalPoll(7, 7, 11) == FinishPhase::AwaitingFinalPoll &&
+          Finish::AfterFinalPoll(7, 7, 12) == FinishPhase::AwaitingClearTick &&
+          Finish::AfterFinalPoll(0xffffffffu, 0, 0) == FinishPhase::AwaitingClearTick,
+          "final byte survives a poll or the exact twelve-tick watchdog");
+    Check(Finish::AfterClearTick(1) == FinishPhase::AwaitingClearTick &&
+          Finish::AfterClearTick(0) == FinishPhase::Neutralizing &&
+          Finish::AfterNeutral(1) == FinishPhase::Neutralizing &&
+          Finish::AfterNeutral(0) == FinishPhase::Guarding,
+          "tail waits for a full tick and drains every neutral tick");
+    Check(!Finish::GuardFinished(false, 1) && Finish::GuardFinished(false, 0) &&
+          Finish::GuardFinished(true, 6),
+          "guard releases on activation or timeout");
+
     std::cout << "macro playback start policy tests passed\n";
     return 0;
 }

@@ -1,3 +1,4 @@
+#include "gui/lifecycle_state.h"
 #include "utils/minhook_utils.h"
 #include <fstream>
 #include <iomanip>
@@ -476,8 +477,7 @@ static void* g_EndSceneTarget = nullptr;
 static const char* g_EndSceneTargetSource = "none";
 static std::atomic<bool> g_EndSceneHookEnabled{ false };
 static std::atomic<bool> g_EndSceneObserved{ false };
-static std::atomic<bool> g_ExternalMenuFallbackNeeded{ false };
-static std::atomic<bool> g_FallbackFromWatchdog{ false };
+static GuiLifecycle::MenuRenderRoute g_menuRenderRoute;
 static std::atomic<DWORD> g_EndSceneLastEntryTick{ 0 };
 static std::atomic<bool> g_endSceneImguiInit{ false };
 
@@ -658,7 +658,7 @@ bool AttachEndSceneHookForCandidate(const EndSceneHookCandidate& candidate, cons
     DirectDrawHook::isHooked = true;
     g_EndSceneObserved.store(false, std::memory_order_release);
     g_EndSceneHookEnabled.store(true, std::memory_order_release);
-    g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
+    g_menuRenderRoute.UseGame();
     LogEndSceneCandidate(candidate, "[OVERLAY][D3D9] EndScene hook attached");
     return true;
 }
@@ -700,13 +700,12 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
     // Any 640x480 frame proves the target live, admitted or not; other devices share
     // this entry. Polled while a watchdog fallback is published so a late frame lifts it.
     if ((!g_EndSceneObserved.load(std::memory_order_acquire)
-            || g_FallbackFromWatchdog.load(std::memory_order_acquire))
+            || g_menuRenderRoute.WaitingForFrame())
         && !g_onlineModeActive.load(std::memory_order_relaxed)) {
         UINT w = 0, h = 0;
         if (QueryRenderTargetSize(pDevice, w, h) && w == 640 && h == 480) {
             g_EndSceneObserved.store(true, std::memory_order_release);
-            if (g_FallbackFromWatchdog.exchange(false, std::memory_order_acq_rel))
-                g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
+            g_menuRenderRoute.ObserveFrame();
         }
     }
     if (!hookExecution.Admitted()) return oEndScene(pDevice);
@@ -802,10 +801,10 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
         bool expected = false;
         if (g_endSceneImguiInit.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
             if (ImGuiImpl::Initialize(pDevice)) {
-                g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
+                g_menuRenderRoute.UseGame();
                 LogOut("[OVERLAY] ImGui initialized from EndScene hook.", true);
             } else if (!ImGuiImpl::IsExternalFallbackHost()) {
-                g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+                g_menuRenderRoute.BackendUnavailable();
                 LogOut("[OVERLAY] ImGui failed to initialize from EndScene hook.", true);
             }
         }
@@ -820,7 +819,7 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
     if (!ImGuiImpl::IsBoundToDevice(pDevice)) {
         GifPlayer::ReleaseDeviceResources();
         if (!ImGuiImpl::Initialize(pDevice)) return forward();
-        g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
+        g_menuRenderRoute.UseGame();
     }
 
         // Mission screens and the pause menu draw with the custom-menu fonts, and Japanese overlay glyphs
@@ -1721,7 +1720,7 @@ bool DirectDrawHook::InitializeD3D9() {
         d3d9Module = LoadLibraryA("d3d9.dll");
         if (!d3d9Module) {
             LogOut("[OVERLAY] Failed to get d3d9.dll module", true);
-            g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+            g_menuRenderRoute.BackendUnavailable();
             s_d3d9InitInProgress.store(false);
             return false;
         }
@@ -1739,7 +1738,7 @@ bool DirectDrawHook::InitializeD3D9() {
     auto Direct3DCreate9_fn = (LPDIRECT3D9(WINAPI*)(UINT))(GetProcAddress(d3d9Module, "Direct3DCreate9"));
     if (!Direct3DCreate9_fn) {
         LogOut("[OVERLAY] Failed to get Direct3DCreate9 address", true);
-        g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+        g_menuRenderRoute.BackendUnavailable();
         s_d3d9InitInProgress.store(false);
         return false;
     }
@@ -1752,7 +1751,7 @@ bool DirectDrawHook::InitializeD3D9() {
     LPDIRECT3D9 d3d9 = Direct3DCreate9_fn(D3D_SDK_VERSION);
     if (!d3d9) {
         LogOut("[OVERLAY] Failed to create D3D9 object", true);
-        g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+        g_menuRenderRoute.BackendUnavailable();
         s_d3d9InitInProgress.store(false);
         return false;
     }
@@ -1803,7 +1802,7 @@ bool DirectDrawHook::InitializeD3D9() {
         char hrbuf[64] = {};
         _snprintf_s(hrbuf, sizeof(hrbuf), _TRUNCATE, "0x%08lX (%ld)", (unsigned long)hr, (long)hr);
         LogOut(std::string("[OVERLAY] Failed to create temp D3D9 device: ") + hrbuf, true);
-        g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+        g_menuRenderRoute.BackendUnavailable();
         d3d9->Release();
         if (dummyWnd) {
             DestroyWindow(dummyWnd);
@@ -1869,7 +1868,7 @@ bool DirectDrawHook::InitializeD3D9() {
             s_lastD3D9InitDeferredForNetplay.store(true, std::memory_order_release);
             LogOut("[OVERLAY] EndScene attach deferred: netplay suspend became active during attach.", true);
         } else {
-            g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
+            g_menuRenderRoute.BackendUnavailable();
         }
         tempDevice->Release();
         d3d9->Release();
@@ -1894,9 +1893,7 @@ bool DirectDrawHook::InitializeD3D9() {
     std::thread([]{
         Sleep(6000);
         if (!g_EndSceneObserved.load()) {
-            // Flag before marker: EndScene clears the flag only after taking the marker.
-            g_ExternalMenuFallbackNeeded.store(true, std::memory_order_release);
-            g_FallbackFromWatchdog.store(true, std::memory_order_release);
+            g_menuRenderRoute.NoFrames();
             LogOut("[OVERLAY][D3D9] EndScene not observed within 6s after hook enable.", true);
             LogOut(std::string("[OVERLAY][D3D9] Current hook source=") + g_EndSceneTargetSource
                    + " target=" + FormatPointerValue(reinterpret_cast<uintptr_t>(g_EndSceneTarget)),
@@ -1912,7 +1909,7 @@ bool DirectDrawHook::WasLastD3D9InitDeferredForNetplay() {
 }
 
 bool DirectDrawHook::ShouldUseExternalMenuFallback() {
-    return g_ExternalMenuFallbackNeeded.load(std::memory_order_acquire);
+    return g_menuRenderRoute.NeedsFallback();
 }
 
 // A foreign image is either a peer chained over our live JMP (reachable) or the
@@ -1965,7 +1962,7 @@ bool DirectDrawHook::SetD3D9Active(bool active) {
 
     g_EndSceneHookEnabled.store(active, std::memory_order_release);
     if (!active) {
-        g_ExternalMenuFallbackNeeded.store(false, std::memory_order_release);
+        g_menuRenderRoute.UseGame();
     }
     LogOut(std::string("[OVERLAY] D3D9 EndScene hook ") + (active ? "enabled" : "disabled")
            + " source=" + g_EndSceneTargetSource,

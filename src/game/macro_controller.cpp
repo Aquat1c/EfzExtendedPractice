@@ -128,14 +128,12 @@ namespace {
     std::vector<uint8_t> s_tickBufQueue;
     size_t s_tickBufHead = 0;
     uint16_t s_writesLeftThisTick = 0;
-    bool s_finishing = false;
+    using PlaybackFinishPhase = MacroController::PlaybackFinishPolicy::Phase;
+    PlaybackFinishPhase s_finishPhase = PlaybackFinishPhase::Streaming;
     int  s_finishNeutralFrames = 0;
-    bool s_finishPendingClearTick = false;
-    bool s_finishGuardActive = false;
     int  s_finishGuardFramesLeft = 0;  // internal frames (192 Hz)
     uint16_t s_finishGuardStartMoveId = 0;
     // Final byte must survive one engine poll, or the same Tick replaces it with neutral.
-    bool s_endStreamPending = false;
     uint32_t s_endStreamPollHitsAtLatch = 0;
     int s_endStreamWaitFrames = 0;
     // KO/round transitions can stall the input ring; bound both waits.
@@ -460,9 +458,9 @@ namespace {
         s_streamFacingPerTick.clear();
         s_bufWriteQueue.clear(); s_bufQueueHead = 0; s_baselineMask = 0;
         s_tickBufQueue.clear(); s_tickBufHead = 0; s_writesLeftThisTick = 0;
-        s_finishing = false; s_finishNeutralFrames = 0; s_finishPendingClearTick = false;
-        s_finishGuardActive = false; s_finishGuardFramesLeft = 0; s_finishGuardStartMoveId = 0;
-        s_endStreamPending = false; s_endStreamPollHitsAtLatch = 0;
+        s_finishPhase = PlaybackFinishPhase::Streaming; s_finishNeutralFrames = 0;
+        s_finishGuardFramesLeft = 0; s_finishGuardStartMoveId = 0;
+        s_endStreamPollHitsAtLatch = 0;
         s_endStreamWaitFrames = 0; s_playNoProgressFrames = 0;
         s_lastSeenBufIdx = 0xFFFF; s_playbackBufIdxSyncInitialized = false;
         s_playbackPollAuditLogged = false;
@@ -620,7 +618,7 @@ namespace {
                                             s_tickBufQueue.size())),
                 static_cast<int>(s_writesLeftThisTick));
         if (endLatched) {
-            s_endStreamPending = true;
+            s_finishPhase = PlaybackFinishPhase::AwaitingFinalPoll;
             s_endStreamPollHitsAtLatch =
                 GetInputPollOverrideHitCount(playPlayer);
             s_endStreamWaitFrames = 0;
@@ -986,13 +984,13 @@ void Tick() {
     } else if (st == State::Replaying) {
         const int playPlayer = ClampPlayer(s_playPlayer.load(std::memory_order_acquire));
         Slot& playSlot = ActivePlaybackSlot();
-        if (s_finishGuardActive) {
+        if (s_finishPhase == PlaybackFinishPhase::Guarding) {
             g_pollOverrideMask[playPlayer].store(0, std::memory_order_relaxed);
             g_pollOverrideActive[playPlayer].store(true, std::memory_order_relaxed);
             uint16_t mv = GetPlayerMoveID(playPlayer);
             bool activated = IsActivationMove(mv);
-                if (activated || s_finishGuardFramesLeft <= 0) {
-                s_finishGuardActive = false;
+                if (PlaybackFinishPolicy::GuardFinished(activated, s_finishGuardFramesLeft)) {
+                s_finishPhase = PlaybackFinishPhase::Streaming;
                 const bool keepExclusiveHold = s_exclusiveReplay.load(std::memory_order_acquire);
                 s_state.store(State::Idle);
                 ImmediateInput::Clear(playPlayer);
@@ -1037,29 +1035,28 @@ void Tick() {
             if (s_finishGuardFramesLeft > 0) s_finishGuardFramesLeft--;
             return;
         }
-        if (s_finishPendingClearTick && s_frameDiv == 0) {
-            s_finishPendingClearTick = false;
-            s_finishing = true;
+        if (s_finishPhase == PlaybackFinishPhase::AwaitingClearTick &&
+            PlaybackFinishPolicy::AfterClearTick(s_frameDiv) == PlaybackFinishPhase::Neutralizing) {
+            s_finishPhase = PlaybackFinishPhase::Neutralizing;
             s_finishNeutralFrames = 3;
             s_tickBufQueue.clear();
             s_tickBufHead = 0;
             s_writesLeftThisTick = 0;
             s_baselineMask = 0;
         }
-        if (s_finishPendingClearTick && s_frameDiv != 0) {
+        if (s_finishPhase == PlaybackFinishPhase::AwaitingClearTick && s_frameDiv != 0) {
             g_pollOverrideMask[playPlayer].store(0, std::memory_order_relaxed);
             g_pollOverrideActive[playPlayer].store(true, std::memory_order_relaxed);
             return;
         }
-        if (s_finishing) {
+        if (s_finishPhase == PlaybackFinishPhase::Neutralizing) {
             g_pollOverrideMask[playPlayer].store(0, std::memory_order_relaxed);
             g_pollOverrideActive[playPlayer].store(true, std::memory_order_relaxed);
-            if (s_finishNeutralFrames > 0) {
+            if (PlaybackFinishPolicy::AfterNeutral(s_finishNeutralFrames) == PlaybackFinishPhase::Neutralizing) {
                 s_finishNeutralFrames--;
                 return;
             }
-            s_finishing = false;
-            s_finishGuardActive = true;
+            s_finishPhase = PlaybackFinishPhase::Guarding;
             s_finishGuardFramesLeft = 6;
             s_finishGuardStartMoveId = GetPlayerMoveID(playPlayer);
             (void)ClearPlayerCommandFlags(playPlayer);
@@ -1081,9 +1078,11 @@ void Tick() {
                 return;
             }
         }
-        if (s_endStreamPending) {
+        if (s_finishPhase == PlaybackFinishPhase::AwaitingFinalPoll) {
             const uint32_t pollHits = GetInputPollOverrideHitCount(playPlayer);
-            if (pollHits == s_endStreamPollHitsAtLatch && ++s_endStreamWaitFrames < 12) {
+            if (PlaybackFinishPolicy::AfterFinalPoll(s_endStreamPollHitsAtLatch, pollHits,
+                    pollHits == s_endStreamPollHitsAtLatch ? ++s_endStreamWaitFrames : s_endStreamWaitFrames)
+                    == PlaybackFinishPhase::AwaitingFinalPoll) {
                 g_pollOverrideActive[playPlayer].store(true, std::memory_order_release);
                 return;
             }
@@ -1091,9 +1090,8 @@ void Tick() {
                 LogOut("[MACRO][PLAY][WARN] final input poll was not acknowledged; "
                        "continuing neutral cleanup after bounded hold", true);
             }
-            s_endStreamPending = false;
             s_endStreamWaitFrames = 0;
-            s_finishPendingClearTick = true;
+            s_finishPhase = PlaybackFinishPhase::AwaitingClearTick;
             s_baselineMask = 0;
             g_pollOverrideMask[playPlayer].store(0, std::memory_order_relaxed);
             g_pollOverrideActive[playPlayer].store(true, std::memory_order_release);
@@ -1178,7 +1176,7 @@ void Tick() {
                         s_primedTickSubframesRemaining = 0;
                         s_primedTickAwaitingFirstPoll = false;
                         s_baselineMask = 0;
-                        s_finishPendingClearTick = true;
+                        s_finishPhase = PlaybackFinishPhase::AwaitingClearTick;
                         g_pollOverrideMask[playPlayer].store(
                             0, std::memory_order_relaxed);
                         g_pollOverrideActive[playPlayer].store(
@@ -1240,7 +1238,7 @@ void Tick() {
                     s_tickBufHead = 0;
                     s_writesLeftThisTick = 0;
                     s_baselineMask = 0;
-                    s_finishPendingClearTick = true;
+                    s_finishPhase = PlaybackFinishPhase::AwaitingClearTick;
                     g_pollOverrideMask[playPlayer].store(0, std::memory_order_relaxed);
                     g_pollOverrideActive[playPlayer].store(true, std::memory_order_release);
                     return;
@@ -1277,7 +1275,7 @@ void Tick() {
             const bool legacySpanAdvance = playbackFrozen ? playbackStepAdvanced : (s_frameDiv == 0);
             if (legacySpanAdvance && s_playSpanRemaining <= 0) {
                 if (s_playIndex >= playSlot.spans.size()) {
-                    s_finishPendingClearTick = true;
+                    s_finishPhase = PlaybackFinishPhase::AwaitingClearTick;
                     (void)ClearPlayerCommandFlags(playPlayer);
                     return;
                 }

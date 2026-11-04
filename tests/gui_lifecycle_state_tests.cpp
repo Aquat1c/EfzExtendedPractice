@@ -95,5 +95,18 @@ int main() {
     expect(repeat.Tick(true, false, 18, 4), "navigation repeats on interval boundary");
     expect(!repeat.Tick(false, false, 18, 4), "release resets repeat phase");
     expect(repeat.Tick(true, true, 18, 4), "new press fires without old repeat debt");
+    MenuRenderRoute route;
+    expect(!route.NeedsFallback(), "renderer starts on game route");
+    route.NoFrames();
+    expect(route.WaitingForFrame() && route.NeedsFallback(), "watchdog selects missing-frame fallback");
+    route.BackendUnavailable();
+    route.ObserveFrame();
+    expect(route.NeedsFallback() && !route.WaitingForFrame(), "late frame cannot clear backend failure");
+    route.NoFrames();
+    route.ObserveFrame();
+    expect(!route.NeedsFallback(), "observed frame releases only watchdog fallback");
+    route.BackendUnavailable();
+    route.UseGame();
+    expect(!route.NeedsFallback(), "successful backend restores game route");
     return failures == 0 ? 0 : 1;
 }

@@ -18,7 +18,8 @@ Practice::RetireInputBaseline retireInput=nullptr;
 Practice::CancelInputWork cancelInput=nullptr;
 bool inputBaselineAdopted=false;
 uint32_t cleanupBranch=UINT32_MAX,cleanupAcceptedScreen=UINT32_MAX;
-bool cleanupResumeEntered=false,cleanupTailReturned=false;
+enum class CleanupPhase { NotRecorded, Held, Resumed, Returned };
+CleanupPhase cleanupPhase=CleanupPhase::NotRecorded;
 EfzTmEntryV1 current{};
 EfzTmRetireV1 retiring{};
 uint32_t state=EFZ_TM_DORMANT;
@@ -260,27 +261,27 @@ bool RecordBattleCleanupBranch(uint32_t battle,uint32_t branch) noexcept try {
     std::lock_guard<std::mutex> lock(ownerMutex);
     if(branch>1 || !current.id.battleWorld || current.battleContext!=battle ||
        current.nativeThreadId!=GetCurrentThreadId() || (state!=EFZ_TM_BATTLE && state!=EFZ_TM_REVOKING))return false;
-    if(cleanupBranch!=UINT32_MAX)return cleanupBranch==branch && !cleanupResumeEntered;
-    cleanupBranch=branch;return true;
+    if(cleanupPhase!=CleanupPhase::NotRecorded)return cleanupBranch==branch && cleanupPhase==CleanupPhase::Held;
+    cleanupBranch=branch;cleanupPhase=CleanupPhase::Held;return true;
 } catch(...) {abiFault.store(true,std::memory_order_release);return false;}
 bool TakeBattleCleanupResume(uint32_t battle,uint32_t gameSystem,uint32_t branch) noexcept try {
     std::lock_guard<std::mutex> lock(ownerMutex);
-    if(abiFault.load() || fault || state!=EFZ_TM_REVOKING || !retiring.oldWorldHeld || cleanupResumeEntered ||
+    if(abiFault.load() || fault || state!=EFZ_TM_REVOKING || !retiring.oldWorldHeld || cleanupPhase!=CleanupPhase::Held ||
        cleanupBranch!=branch || current.battleContext!=battle || current.gameSystem!=gameSystem ||
        current.nativeThreadId!=GetCurrentThreadId() || !CleanupParticipantsReady())return false;
-    cleanupResumeEntered=true;return true;
+    cleanupPhase=CleanupPhase::Resumed;return true;
 } catch(...) {abiFault.store(true,std::memory_order_release);return false;}
 bool RecordBattleCleanupReturned(uint32_t battle,uint32_t gameSystem,uint32_t acceptedScreen) noexcept try {
     std::lock_guard<std::mutex> lock(ownerMutex);
-    if(!cleanupResumeEntered || cleanupTailReturned || fault || state!=EFZ_TM_REVOKING ||
+    if(cleanupPhase!=CleanupPhase::Resumed || fault || state!=EFZ_TM_REVOKING ||
        current.battleContext!=battle || current.gameSystem!=gameSystem || current.nativeThreadId!=GetCurrentThreadId() ||
        (acceptedScreen!=0 && acceptedScreen!=1 && acceptedScreen!=2 && acceptedScreen!=5 && acceptedScreen!=8))return false;
-    cleanupAcceptedScreen=acceptedScreen;cleanupTailReturned=true;return true;
+    cleanupAcceptedScreen=acceptedScreen;cleanupPhase=CleanupPhase::Returned;return true;
 } catch(...) {abiFault.store(true,std::memory_order_release);return false;}
 }
 extern "C" __declspec(dllexport) uint32_t __cdecl EFZ_TM_CommitBattleCleanupV1(uint32_t battle,uint32_t gameSystem,uint32_t acceptedScreen) try {
     std::lock_guard<std::mutex> lock(ownerMutex);
-    if(abiFault.load() || fault || !cleanupTailReturned || state!=EFZ_TM_REVOKING ||
+    if(abiFault.load() || fault || cleanupPhase!=CleanupPhase::Returned || state!=EFZ_TM_REVOKING ||
        current.battleContext!=battle || current.gameSystem!=gameSystem || current.nativeThreadId!=GetCurrentThreadId() ||
        cleanupAcceptedScreen!=acceptedScreen)return EFZ_TM_FAULTED;
     if(!battleWork.Reclaim())return EFZ_TM_FAULTED;
@@ -290,6 +291,6 @@ extern "C" __declspec(dllexport) uint32_t __cdecl EFZ_TM_CommitBattleCleanupV1(u
     } else {
         current.battleContext=0;current.player1=0;current.player2=0;
     }
-    cleanupBranch=cleanupAcceptedScreen=UINT32_MAX;cleanupResumeEntered=cleanupTailReturned=false;
+    cleanupBranch=cleanupAcceptedScreen=UINT32_MAX;cleanupPhase=CleanupPhase::NotRecorded;
     return EFZ_TM_READY;
 } catch(...) {abiFault.store(true,std::memory_order_release);return EFZ_TM_FAULTED;}

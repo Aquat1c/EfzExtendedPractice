@@ -1,3 +1,4 @@
+#include <atomic>
 #include "../include/utils/update_check.h"
 
 #include <windows.h>
@@ -42,9 +43,9 @@ constexpr size_t kMaxResponseBytes = 256u * 1024u;   // GitHub embeds the change
 
 // Namespace scope on purpose: the XP build's /Zc:threadSafeInit- makes function-local statics a data race.
 CRITICAL_SECTION g_lock;
-volatile LONG    g_lockReady = 0;
-volatile LONG    g_fetchInFlight = 0;
-volatile LONG    g_completed = 0;
+enum class LockPhase { Uninitialized, Initializing, Ready };
+std::atomic<LockPhase> g_lockPhase{LockPhase::Uninitialized};
+Policy::FetchPhase g_fetchPhase = Policy::FetchPhase::Idle; // guarded by g_lock
 unsigned long long g_retryNotBeforeTick = 0;  // guarded by g_lock
 volatile LONG    g_status = static_cast<LONG>(Status::Idle);
 volatile LONG    g_newerRelease = 0;
@@ -53,14 +54,13 @@ std::string      g_latest;         // guarded by g_lock
 std::string      g_acknowledged;   // guarded by g_lock
 
 void EnsureLock() {
-    if (InterlockedCompareExchange(&g_lockReady, 1, 0) == 0) {
+    auto expected = LockPhase::Uninitialized;
+    if (g_lockPhase.compare_exchange_strong(expected, LockPhase::Initializing)) {
         InitializeCriticalSection(&g_lock);
-        InterlockedExchange(&g_lockReady, 2);
+        g_lockPhase.store(LockPhase::Ready);
         return;
     }
-    while (InterlockedCompareExchange(&g_lockReady, 2, 2) != 2) {
-        Sleep(0);
-    }
+    while (g_lockPhase.load() != LockPhase::Ready) Sleep(0);
 }
 
 struct ScopedLock {
@@ -73,13 +73,10 @@ void SetStatus(Status s) {
 }
 
 void FinishAttempt(bool succeeded) {
-    if (succeeded) {
-        InterlockedExchange(&g_completed, 1);
-    } else {
-        ScopedLock guard;
+    ScopedLock guard;
+    if (!succeeded)
         g_retryNotBeforeTick = XPCompat::GetTickCount64Compat() + kRetryAfterFailureMs;
-    }
-    InterlockedExchange(&g_fetchInFlight, 0);
+    g_fetchPhase = succeeded ? Policy::FetchPhase::Complete : Policy::FetchPhase::RetryWait;
 }
 
 // Resolve from a function address, not the module name: the DLL can be renamed.
@@ -344,21 +341,11 @@ void Start() {
     }
     if (g_isShuttingDown.load()) return;
 
-    if (InterlockedCompareExchange(&g_completed, 0, 0) != 0) {
-        return;
-    }
     {
         ScopedLock guard;
-        if (g_retryNotBeforeTick != 0
-            && XPCompat::GetTickCount64Compat() < g_retryNotBeforeTick) {
-            return;
-        }
-    }
-    if (InterlockedCompareExchange(&g_fetchInFlight, 1, 0) != 0) {
-        return;
-    }
-    {
-        ScopedLock guard;
+        if (!Policy::CanStartFetch(g_fetchPhase, XPCompat::GetTickCount64Compat(),
+                                  g_retryNotBeforeTick)) return;
+        g_fetchPhase = Policy::FetchPhase::Fetching;
         g_acknowledged = ReadAcknowledgedFromDisk();
     }
     SetStatus(Status::Checking);
