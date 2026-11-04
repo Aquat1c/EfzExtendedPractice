@@ -60,6 +60,7 @@ int main() {
     ready = false;
     ApplyConfiguredVolumesNow();
     Check(writes == 3, "unready native audio has no writes");
+    Check(ConsumeAudioApplyRequest(), "startup apply waits for native sound initialization");
     ready = true;
 
     g_p2ControlMutex.lock();

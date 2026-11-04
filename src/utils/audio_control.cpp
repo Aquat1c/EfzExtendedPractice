@@ -1198,7 +1198,8 @@ bool InstallHookGroup(const char* groupName, PendingAudioHook* hooks, size_t hoo
 
     for (size_t i = 0; i < hookCount; ++i) {
         PendingAudioHook& hook = hooks[i];
-        if (!MinHookUtils::CreateHook(hook.target, hook.detour, hook.original, kAudioHookOwner, hook.name)) {
+        if (!MinHookUtils::CreateHook(hook.target, hook.detour, hook.original, kAudioHookOwner, hook.name,
+                                      nullptr, nullptr, true)) {
             std::ostringstream oss;
             oss << "[AUDIO][HOOK] " << groupName << " create failed at "
                 << (hook.name ? hook.name : "<unnamed>")

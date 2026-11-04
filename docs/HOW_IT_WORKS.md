@@ -197,7 +197,7 @@ look already bypassed, since those could belong to something else.
 
 ## Practice-only hook bodies
 
-Hooks stay installed for the whole process, because they can't always be removed safely, but their bodies only run in a live Practice battle. `PracticeBattleHooksOpen` (`include/game/game_state.h`) is the shared check: it is open only while the polling flag is set and no netplay state is published, and it shuts at battle exit and before netplay starts. Everywhere else a hook calls the original and does nothing else. The battle update hook checks `IsPracticeContext` directly so it can still run the exit cleanup on the battle's last frame. The audio hooks are the exception: volume settings apply in every mode, and they stay installed through netplay.
+Hooks stay installed for the whole process, because they can't always be removed safely, but their bodies only run in a live Practice battle. `PracticeBattleHooksOpen` (`include/game/game_state.h`) is the shared check: it is open only while the polling flag is set and no netplay state is published, and it shuts at battle exit and before netplay starts. Everywhere else a hook calls the original and does nothing else. The battle update hook checks `IsPracticeContext` directly so it can still run the exit cleanup on the battle's last frame. Audio hooks also run in offline menus, so saved volume settings apply to startup music and later scene fades. Pending volume settings retry when the sound system becomes ready. During netplay, the native entry gates forward audio calls directly to the original functions.
 
 The battle update and battle hotkey hooks treat their byte signatures as advisory.
 Under EfzRevival those prologues are already JMP-patched, so live bytes never match

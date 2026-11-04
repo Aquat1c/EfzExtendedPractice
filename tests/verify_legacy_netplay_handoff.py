@@ -10,6 +10,10 @@ startup = (root / "src/dllmain.cpp").read_text(encoding="utf-8")
 def body(source, start, end):
     return source.split(start, 1)[1].split(end, 1)[0]
 
+audio = (root / "src/utils/audio_control.cpp").read_text(encoding="utf-8")
+audio_install = body(audio, "bool InstallHookGroup(", "bool CommonAudioEntryAcceptable(")
+assert re.search(r"MinHookUtils::CreateHook\(hook.target, hook.detour, hook.original, kAudioHookOwner, hook.name,\s*nullptr, nullptr, true\)", audio_install), "audio hooks must run in offline menus before Practice starts"
+
 enter = body(utilities, "void EnterNetplaySuspend() {", "void ExitNetplaySuspend()")
 assert "RetireLegacyPractice(g_p2ControlMutex, g_onlineModeActive, [] {" in enter
 retirement = (root / "include/runtime/legacy_netplay_handoff.h").read_text(encoding="utf-8")
@@ -40,7 +44,7 @@ tick = body(bridge, "void Tick()", "void TickExportOnly(")
 assert "takeover::Tick(&g_status, &g_connectStartTick, &trainingRetirementRequired)" in tick
 retire_tick = tick.split("if (trainingRetirementRequired)", 1)[1]
 assert retire_tick.index("TrainingHandoff trainingHandoff;") < retire_tick.index("lock(g_mutex)") < retire_tick.index("takeover::Tick(&g_status, &g_connectStartTick, nullptr, true)")
-assert "requestSerial != g_startRequestSerial" in retire_tick
+assert "!g_start.IsCurrent(requestSerial)" in retire_tick
 assert "phase != NetbridgePhase::Connecting && phase != NetbridgePhase::DelaySetup" in retire_tick
 takeover = (root.parent / "InGameNetplay/src/netplay/bridge/revival_takeover.cpp").read_text(encoding="utf-8")
 native_init = body(takeover, "const DWORD initReady = WaitForSingleObject(g_hostInitEvent, 0);", "const int initResult = g_localInitFn(initParams);")
@@ -49,7 +53,7 @@ assert "if (trainingRetirementRequired) *trainingRetirementRequired = true;" in 
 assert "return;" in native_init.split("if (!trainingRetired)", 1)[1].split("LogRevival102jDeepSnapshot", 1)[0]
 handoff = (root.parent / "InGameNetplay/include/netplay/bridge/training_handoff.inl").read_text(encoding="utf-8")
 assert "training_handoff.inl" in bridge
-assert handoff.index("state_export::SuspendForOnlineSimulation()") < handoff.index("ready_ = true;\n    }")
+assert handoff.index("state_export::SuspendForOnlineSimulation()") < handoff.index("state_ = alreadySuspended ? State::PreparedKeepSuspended : State::PreparedResumeExports;")
 assert "PublishOnlineBoundary" not in handoff
 assert "PublishTrainingHandoffBoundary(GetStatus())" in handoff
 assert "RefreshNetplayRuntimeState();" in exit_suspend

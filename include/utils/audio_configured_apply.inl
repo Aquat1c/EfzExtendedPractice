@@ -5,7 +5,10 @@ void ImplApplyConfiguredVolumesNow(const AudioSettingsView& view) {
     if (!RuntimeVolumeApplicationReady()) {
         TryEnableVolumeApplication(0, "ApplyConfiguredVolumesNow");
     }
-    if (!RuntimeVolumeApplicationReady()) return;
+    if (!RuntimeVolumeApplicationReady()) {
+        RequestAudioApply();
+        return;
+    }
 
     const uintptr_t gameSystemPtr = AudioGameSystem();
     if (gameSystemPtr) {
