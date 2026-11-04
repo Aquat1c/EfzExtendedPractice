@@ -16,6 +16,17 @@ assert re.search(r"MinHookUtils::CreateHook\(hook.target, hook.detour, hook.orig
 
 enter = body(utilities, "void EnterNetplaySuspend() {", "void ExitNetplaySuspend()")
 assert "RetireLegacyPractice(g_p2ControlMutex, g_onlineModeActive, [] {" in enter
+assert "AudioControl::SuspendForNetplay();" in enter
+audio_apply = (root / "include/utils/audio_configured_apply.inl").read_text(encoding="utf-8")
+audio_suspend = body(audio_apply, "void ImplSuspendForNetplay(", "void ImplResumeFromNetplay()")
+assert audio_suspend.index("SetAudioGainAdmitted(false)") < audio_suspend.index("RetireBgmVolume(view)")
+assert audio_suspend.index("RetireBgmVolume(view)") < audio_suspend.index("SetNativePassthrough(true)")
+for entry, end in (("void __fastcall ImplHookedPlayBackgroundMusic(", "void __fastcall HookedPlayBackgroundMusic("),
+                   ("bool ImplPlayBackgroundMusic(", "bool PlayBackgroundMusic(")):
+    play = body(audio, entry, end)
+    assert play.index("ResetBgmOutputVolume()") < play.index("SehCallPlayBackgroundMusic(")
+bgm = (root / "include/utils/audio_bgm_volume.inl").read_text(encoding="utf-8")
+assert "SafeWriteMemory" not in bgm
 retirement = (root / "include/runtime/legacy_netplay_handoff.h").read_text(encoding="utf-8")
 assert retirement.index("lock(boundary)") < retirement.index("retire();") < retirement.index("online.store(true")
 assert "StopBufferFreezingIgnoringTutorialLease()" in enter
@@ -27,7 +38,7 @@ assert re.search(r"mutationLock\.unlock\(\);\s+\(void\)Practice::WaitForMonitorS
 assert re.search(r"mutationLock\.unlock\(\);\s+auto beforeSleep", loop)
 assert re.search(r"mutationLock\.lock\(\);\s+if\(Practice::MonitorStopRequested\(\)", loop)
 exit_suspend = body(utilities, "void ExitNetplaySuspend() {", "void AuditNetplayMenuEntryState()")
-assert exit_suspend.index("SetPracticeBattleActive(false)") < exit_suspend.index("SetNativePassthrough(false)")
+assert exit_suspend.index("SetPracticeBattleActive(false)") < exit_suspend.index("AudioControl::ResumeFromNetplay()")
 assert startup.index("SetPracticeBattleActive(false)") < startup.index("SetNativePassthrough(false)")
 assert "g_netplayHandoffPending.load" in utilities
 exit_battle = body(frontend, "if (accepted != SCREEN_BATTLE) {", "return static_cast<char>(accepted)")

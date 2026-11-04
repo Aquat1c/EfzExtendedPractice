@@ -25,6 +25,8 @@ const char* HookInstallResultName(HookInstallResult result);
 void ShutdownHooks(bool releaseRevivalModuleReference);
 bool PlayBackgroundMusic(uintptr_t gameSystemPtr, unsigned short trackNumber);
 void ApplyConfiguredVolumesNow();
+void SuspendForNetplay();
+void ResumeFromNetplay();
 void SetVolumeApplicationReady(bool ready);
 bool IsVolumeApplicationReady();
 bool IsGameSoundSystemReady(uintptr_t gameSystemPtr = 0);

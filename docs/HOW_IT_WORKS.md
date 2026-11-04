@@ -1137,7 +1137,9 @@ Capability bits say which field groups are live on this tick, and a bit can be z
 - The Revival launcher creates `efz.exe` suspended and injects later, so the mod takes the vanilla audio entries only after a stable, positively standalone launch signature. If that's never proven within a time limit, the entries stay unowned, because claiming an unproven entry could break a late Revival.
 - Revival rebuilds its EFZ wrappers from its frame hook, so a torn read is normal and only defers the decision. Snapshots use `ReadProcessMemory`, which fails cleanly if a wrapper is freed mid-read.
 - Revival's audio callback receives its saved machine state rather than conventional arguments. The hook cross-checks the saved ESP, so an ordinary cdecl caller can't make it write through an unrelated stack slot, and it also writes the live stack argument, because the copied EFZ prologue reads it after the callback returns.
-- The game system's BGM field holds the allocated buffer index, not the logical track, so the track number is recorded in the play hook.
+- The game system's BGM field holds the allocated buffer index, so the play hook records the logical track separately.
+- BGM gain uses the latest native volume sample for the current buffer. Track loads reset this observation, and an initial DirectSound volume read captures an already-playing track. The game drives fade targets and timing while configured gain scales the output. Raw samples continue to update while muted, so unmuting follows the current fade.
+- Netplay suspension closes gain admission under the audio boundary and restores the last known raw BGM level. A Revival volume write can finish after its callback returns, so the same buffer waits for a fresh offline native sample before accepting another settings apply. A new track also resets this wait. Mute can apply immediately because its output level is independent of the raw sample.
 
 ### Sharing audio settings with ExtendedConfig
 

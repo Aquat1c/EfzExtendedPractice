@@ -8,6 +8,7 @@ static_assert(std::atomic<uint32_t>::is_always_lock_free, "x86 settings require 
 alignas(4) std::atomic<uint32_t> settings{PackAudioSettings({100,100,true,true,0})};
 std::atomic<bool> applyPending{false};
 uint32_t disabledLanes = 0;
+bool gainAdmitted = true;
 EfzAudioOwnerV1 acknowledged{};
 const EfzAudioOwnerApiV1* boundary = nullptr;
 struct LocalBoundary {
@@ -32,6 +33,16 @@ void BindAudioBoundary(const EfzAudioOwnerApiV1* provider) noexcept { boundary =
 void EnterAudioBoundary() noexcept { const DWORD saved = GetLastError(); if (boundary) boundary->enter(); else EnterCriticalSection(&localBoundary.cs); SetLastError(saved); }
 void LeaveAudioBoundary() noexcept { const DWORD saved = GetLastError(); if (boundary) boundary->leave(); else LeaveCriticalSection(&localBoundary.cs); SetLastError(saved); }
 AudioSettingsView ReadAudioSettings() noexcept { return UnpackAudioSettings(settings.load(std::memory_order_acquire)); }
+
+AudioSettingsView ReadAdmittedAudioSettings() noexcept {
+    auto view = ReadAudioSettings();
+    if (!gainAdmitted) {
+        view.trainingOwnsBgmGain = false;
+        view.trainingOwnsSeGain = false;
+    }
+    return view;
+}
+void SetAudioGainAdmitted(bool admitted) noexcept { gainAdmitted = admitted; }
 void PublishAudioSettingsView(AudioSettingsView view) noexcept {
     EnterAudioBoundary();
     Store(view);

@@ -26,7 +26,35 @@ void ApplyConfiguredVolumesNow() {
             RequestAudioApply();
             return;
         }
-        EFZ_AUDIO_CALLBACK(ImplApplyConfiguredVolumesNow(ReadAudioSettings()));
+        EFZ_AUDIO_CALLBACK(ImplApplyConfiguredVolumesNow(ReadAdmittedAudioSettings()));
+    }
+    __finally { g_p2ControlMutex.unlock(); }
+}
+
+void ImplSuspendForNetplay(const AudioSettingsView& view) {
+    SetAudioGainAdmitted(false);
+    RetireBgmVolume(view);
+    MinHookUtils::SetNativePassthrough(true);
+}
+
+void ImplResumeFromNetplay() {
+    SetAudioGainAdmitted(true);
+    RequestAudioApply();
+    MinHookUtils::SetNativePassthrough(false);
+}
+
+void ResumeFromNetplay() {
+    g_p2ControlMutex.lock();
+    __try {
+        EFZ_AUDIO_CALLBACK(ImplResumeFromNetplay());
+    }
+    __finally { g_p2ControlMutex.unlock(); }
+}
+
+void SuspendForNetplay() {
+    g_p2ControlMutex.lock();
+    __try {
+        EFZ_AUDIO_CALLBACK(ImplSuspendForNetplay(ReadAudioSettings()));
     }
     __finally { g_p2ControlMutex.unlock(); }
 }

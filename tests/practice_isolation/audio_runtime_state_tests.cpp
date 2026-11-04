@@ -16,9 +16,10 @@ bool Refresh(bool) { ++fileCalls; return true; }
 bool memoryReady=true, bgmLane=true;
 bool IsSoundBufferReadyForOps(uintptr_t,unsigned short,bool,bool) { ++memoryReads; return memoryReady; }
 bool IsCurrentBgmBuffer(void*,unsigned short,uintptr_t&) { ++memoryReads; return bgmLane; }
+void ObserveBgmVolume(void*, unsigned short, int, const AudioSettingsView&) {}
 #include "utils/audio_lane_adjustment.inl"
 int NativeLaneCallback(void* manager,unsigned short index,int volume) {
-    EFZ_AUDIO_CALLBACK(AdjustVolumeForBuffer(manager,index,volume,ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(AdjustVolumeForBuffer(manager,index,volume,ReadAdmittedAudioSettings()));
 }
 int FaultCallbackBody() { RaiseException(0xe0000041,0,0,nullptr); return 0; }
 int FaultCallback() { EFZ_AUDIO_CALLBACK(FaultCallbackBody()); }
@@ -84,6 +85,18 @@ int main() {
     PublishAudioPercents(50,50);
     Check(NativeLaneCallback(reinterpret_cast<void*>(1),1,-604)-NativeLaneCallback(reinterpret_cast<void*>(1),1,-605)==1,"production classifier/scoped callback continuity");
     Check(fileCalls==0 && memoryReads==4,"production callback uses memory boundary and no file/discovery dependencies");
+    EnterAudioBoundary();
+    SetAudioGainAdmitted(false);
+    LeaveAudioBoundary();
+    Check(NativeLaneCallback(reinterpret_cast<void*>(1),1,-605)==-605,
+          "callback selected before gate closure forwards raw after admission closes");
+    Check(ReadAudioSettings().trainingOwnsBgmGain,
+          "netplay admission retains acknowledged ownership");
+    EnterAudioBoundary();
+    SetAudioGainAdmitted(true);
+    LeaveAudioBoundary();
+    Check(NativeLaneCallback(reinterpret_cast<void*>(1),1,-605)==-1207,
+          "offline admission restores the configured gain");
     memoryReady=false; memoryReads=0;
     Check(NativeLaneCallback(reinterpret_cast<void*>(1),1,-605)==-605 && memoryReads==1,"unavailable memory forwards unchanged");
     Check(NativeLaneCallback(nullptr,1,-605)==-605 && memoryReads==1,"invalid manager touches no memory");

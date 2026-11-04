@@ -18,6 +18,9 @@ inline AudioSettingsView UnpackAudioSettings(uint32_t word) noexcept {
         ((word >> 14) & 1) != 0, ((word >> 15) & 1) != 0, uint16_t(word >> 16)};
 }
 AudioSettingsView ReadAudioSettings() noexcept;
+// Called under the audio boundary, including callbacks selected before a gate closes.
+AudioSettingsView ReadAdmittedAudioSettings() noexcept;
+void SetAudioGainAdmitted(bool admitted) noexcept;
 // Owner flags are derived from the acknowledged control state, never the caller.
 void PublishAudioSettingsView(AudioSettingsView view) noexcept;
 void PublishAudioPercents(int bgm, int se) noexcept;

@@ -47,3 +47,20 @@ bool SetBufferVolume(void* soundManagerPtr, unsigned short bufferIndex, int dire
     }
     return result == 0;
 }
+
+bool GetBufferVolume(void* soundManagerPtr, unsigned short bufferIndex, int& volume) {
+    if (RuntimeAudioControlSuppressed("buffer volume read requested")) return false;
+    void* soundBufferPtr = nullptr;
+    if (!ReadSoundBufferPointer(soundManagerPtr, bufferIndex, soundBufferPtr)) return false;
+    uintptr_t vtable = 0;
+    uintptr_t method = 0;
+    constexpr uintptr_t kGetVolumeVtableOffset = 24;
+    if (!ReadChecked(reinterpret_cast<uintptr_t>(soundBufferPtr), vtable) || !vtable
+        || !ReadChecked(vtable + kGetVolumeVtableOffset, method) || !IsExecutableAddress(method)) return false;
+    using GetVolumeFn = int(__stdcall*)(void*, int*);
+    __try {
+        return reinterpret_cast<GetVolumeFn>(method)(soundBufferPtr, &volume) == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}

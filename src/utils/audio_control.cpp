@@ -62,9 +62,6 @@ constexpr char kAudioHookOwner[] = "[AUDIO][HOOK]";
 constexpr uintptr_t kSoundManagerOffset = 0x8;
 constexpr uintptr_t kDirectSoundObjectOffset = 0xC;
 constexpr uintptr_t kBgmBufferOffset = 0xF26;
-constexpr uintptr_t kBgmTargetVolumeOffset = 0xF28;
-constexpr uintptr_t kBgmCurrentVolumeOffset = 0xF2C;
-constexpr uintptr_t kBgmAdjustRateOffset = 0xF30;
 constexpr uintptr_t kCommonSeBufferTableOffset = 3748;
 constexpr uintptr_t kSoundManagerBufferTableOffset = 1216;
 constexpr uintptr_t kCharacterSoundManagerOffset = 136;
@@ -1002,39 +999,8 @@ bool ReadPointer(uintptr_t address, void*& outPtr) {
 
 #include "../include/utils/audio_buffer_volume.inl"
 
+#include "../include/utils/audio_bgm_volume.inl"
 #include "../include/utils/audio_lane_adjustment.inl"
-
-void ApplyBgmVolumeToGameSystem(uintptr_t gameSystemPtr, const AudioSettingsView& view) {
-    if (!view.trainingOwnsBgmGain) return;
-    if (!gameSystemPtr) {
-
-        return;
-    }
-
-    void* soundManagerPtr = nullptr;
-    if (!ReadPointer(gameSystemPtr + kSoundManagerOffset, soundManagerPtr)) {
-
-        return;
-    }
-
-    uint16_t bufferIndex = kInvalidBufferIndex;
-    if (!SafeReadMemory(gameSystemPtr + kBgmBufferOffset, &bufferIndex, sizeof(bufferIndex)) || bufferIndex == kInvalidBufferIndex) {
-
-        return;
-    }
-
-    const int directSoundVolume = ApplyAudioLaneGain(view, true, 0);
-    if (!SetBufferVolume(soundManagerPtr, bufferIndex, directSoundVolume)) {
-
-        return;
-    }
-
-    const uint16_t zeroAdjustRate = 0;
-    SafeWriteMemory(gameSystemPtr + kBgmTargetVolumeOffset, &directSoundVolume, sizeof(directSoundVolume));
-    SafeWriteMemory(gameSystemPtr + kBgmCurrentVolumeOffset, &directSoundVolume, sizeof(directSoundVolume));
-    SafeWriteMemory(gameSystemPtr + kBgmAdjustRateOffset, &zeroAdjustRate, sizeof(zeroAdjustRate));
-
-}
 
 void ApplyCommonSeVolumeToGameSystem(uintptr_t gameSystemPtr, const AudioSettingsView& view) {
     if (!view.trainingOwnsSeGain) return;
@@ -1140,29 +1106,6 @@ bool IsCurrentBgmBuffer(void* soundManagerPtr, unsigned short bufferIndex, uintp
     }
 
     return currentBgmBuffer == bufferIndex;
-}
-
-void ApplyVolumeBeforePlayback(void* soundManagerPtr, unsigned short bufferIndex, const AudioSettingsView& view) {
-    if (!soundManagerPtr || bufferIndex >= kSoundManagerBufferCount) {
-        return;
-    }
-
-    uintptr_t gameSystemPtr = 0;
-    if (IsCurrentBgmBuffer(soundManagerPtr, bufferIndex, gameSystemPtr)) {
-        if (!view.trainingOwnsBgmGain) return;
-        const int directSoundVolume = ApplyAudioLaneGain(view, true, 0);
-        if (SetBufferVolume(soundManagerPtr, bufferIndex, directSoundVolume)) {
-            const uint16_t zeroAdjustRate = 0;
-            SafeWriteMemory(gameSystemPtr + kBgmTargetVolumeOffset, &directSoundVolume, sizeof(directSoundVolume));
-            SafeWriteMemory(gameSystemPtr + kBgmCurrentVolumeOffset, &directSoundVolume, sizeof(directSoundVolume));
-            SafeWriteMemory(gameSystemPtr + kBgmAdjustRateOffset, &zeroAdjustRate, sizeof(zeroAdjustRate));
-        }
-        return;
-    }
-
-    if (!view.trainingOwnsSeGain) return;
-    const int directSoundVolume = ApplyAudioLaneGain(view, false, kDefaultSeDirectSoundVolume);
-    SetBufferVolume(soundManagerPtr, bufferIndex, directSoundVolume);
 }
 
 struct PendingAudioHook {
@@ -1352,6 +1295,7 @@ bool InstallRevivalAudioCallbackHooks(HMODULE revivalModule,
 
 void __fastcall ImplHookedPlayBackgroundMusic(uintptr_t gameSystemPtr, void* unused, unsigned short trackNumber, const AudioSettingsView& view) {
     // GameSystem+0xF26 is the allocated buffer index, not the logical track.
+    if (view.trainingOwnsBgmGain) ResetBgmOutputVolume();
     SetLastBgmTrack(trackNumber);
     if (!g_originalPlayBackgroundMusic
         || !SehCallPlayBackgroundMusic(g_originalPlayBackgroundMusic, gameSystemPtr, trackNumber)) {
@@ -1366,7 +1310,7 @@ void __fastcall ImplHookedPlayBackgroundMusic(uintptr_t gameSystemPtr, void* unu
 }
 
 void __fastcall HookedPlayBackgroundMusic(uintptr_t gameSystemPtr, void* unused, unsigned short trackNumber) {
-    EFZ_AUDIO_CALLBACK(ImplHookedPlayBackgroundMusic(gameSystemPtr, unused, trackNumber, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedPlayBackgroundMusic(gameSystemPtr, unused, trackNumber, ReadAdmittedAudioSettings()));
 }
 
 int __fastcall ImplHookedPlaySoundBuffer(void* soundManagerPtr, void* unused, unsigned short bufferIndex, int loopFlag, const AudioSettingsView& view) {
@@ -1387,7 +1331,7 @@ int __fastcall ImplHookedPlaySoundBuffer(void* soundManagerPtr, void* unused, un
 }
 
 int __fastcall HookedPlaySoundBuffer(void* soundManagerPtr, void* unused, unsigned short bufferIndex, int loopFlag) {
-    EFZ_AUDIO_CALLBACK(ImplHookedPlaySoundBuffer(soundManagerPtr, unused, bufferIndex, loopFlag, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedPlaySoundBuffer(soundManagerPtr, unused, bufferIndex, loopFlag, ReadAdmittedAudioSettings()));
 }
 
 int __fastcall ImplHookedSetSoundVolume(void* soundManagerPtr, void* unused, unsigned short bufferIndex, int volumeLevel, const AudioSettingsView& view) {
@@ -1406,7 +1350,7 @@ int __fastcall ImplHookedSetSoundVolume(void* soundManagerPtr, void* unused, uns
 }
 
 int __fastcall HookedSetSoundVolume(void* soundManagerPtr, void* unused, unsigned short bufferIndex, int volumeLevel) {
-    EFZ_AUDIO_CALLBACK(ImplHookedSetSoundVolume(soundManagerPtr, unused, bufferIndex, volumeLevel, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedSetSoundVolume(soundManagerPtr, unused, bufferIndex, volumeLevel, ReadAdmittedAudioSettings()));
 }
 
 int __fastcall ImplHookedFadeWithSoundAdjustment(void* screenEffectPtr,
@@ -1432,7 +1376,7 @@ int __fastcall HookedFadeWithSoundAdjustment(void* screenEffectPtr,
                                             unsigned char fadeDirection,
                                             int baseVolume,
                                             int volumeAdjustment) {
-    EFZ_AUDIO_CALLBACK(ImplHookedFadeWithSoundAdjustment(screenEffectPtr, unused, paletteId, fadeDirection, baseVolume, volumeAdjustment, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedFadeWithSoundAdjustment(screenEffectPtr, unused, paletteId, fadeDirection, baseVolume, volumeAdjustment, ReadAdmittedAudioSettings()));
 }
 
 void __fastcall ImplHookedLoadSoundEffects(uintptr_t gameSystemPtr, void* unused, const AudioSettingsView& view) {
@@ -1448,7 +1392,7 @@ void __fastcall ImplHookedLoadSoundEffects(uintptr_t gameSystemPtr, void* unused
 }
 
 void __fastcall HookedLoadSoundEffects(uintptr_t gameSystemPtr, void* unused) {
-    EFZ_AUDIO_CALLBACK(ImplHookedLoadSoundEffects(gameSystemPtr, unused, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedLoadSoundEffects(gameSystemPtr, unused, ReadAdmittedAudioSettings()));
 }
 
 void __fastcall ImplHookedLoadCharacterSounds(uintptr_t characterPtr, void* unused, const AudioSettingsView& view) {
@@ -1464,7 +1408,7 @@ void __fastcall ImplHookedLoadCharacterSounds(uintptr_t characterPtr, void* unus
 }
 
 void __fastcall HookedLoadCharacterSounds(uintptr_t characterPtr, void* unused) {
-    EFZ_AUDIO_CALLBACK(ImplHookedLoadCharacterSounds(characterPtr, unused, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedLoadCharacterSounds(characterPtr, unused, ReadAdmittedAudioSettings()));
 }
 
 void __stdcall PreRevivalPlaySoundBuffer(void* soundManagerPtr, unsigned short bufferIndex, int loopFlag, const AudioSettingsView& view) {
@@ -1566,7 +1510,7 @@ int __cdecl HookedRevivalPlaySoundCallback(uintptr_t savedFlags,
                                            uintptr_t originalReturnAddress,
                                            uintptr_t bufferSlot,
                                            uintptr_t loopFlagSlot) {
-    EFZ_AUDIO_CALLBACK(ImplHookedRevivalPlaySoundCallback(savedFlags, savedEdi, savedEsi, savedEbp, originalEsp, savedEbx, savedEdx, originalEcx, savedEax, originalReturnAddress, bufferSlot, loopFlagSlot, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedRevivalPlaySoundCallback(savedFlags, savedEdi, savedEsi, savedEbp, originalEsp, savedEbx, savedEdx, originalEcx, savedEax, originalReturnAddress, bufferSlot, loopFlagSlot, ReadAdmittedAudioSettings()));
 }
 
 int __cdecl ImplHookedRevivalSetVolumeCallback(uintptr_t savedFlags,
@@ -1632,7 +1576,7 @@ int __cdecl HookedRevivalSetVolumeCallback(uintptr_t savedFlags,
                                            uintptr_t originalReturnAddress,
                                            uintptr_t bufferSlot,
                                            uintptr_t volumeSlot) {
-    EFZ_AUDIO_CALLBACK(ImplHookedRevivalSetVolumeCallback(savedFlags, savedEdi, savedEsi, savedEbp, originalEsp, savedEbx, savedEdx, originalEcx, savedEax, originalReturnAddress, bufferSlot, volumeSlot, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplHookedRevivalSetVolumeCallback(savedFlags, savedEdi, savedEsi, savedEbp, originalEsp, savedEbx, savedEdx, originalEcx, savedEax, originalReturnAddress, bufferSlot, volumeSlot, ReadAdmittedAudioSettings()));
 }
 #endif
 
@@ -1885,6 +1829,7 @@ bool ImplPlayBackgroundMusic(uintptr_t gameSystemPtr, unsigned short trackNumber
     }
 
 
+    if (view.trainingOwnsBgmGain) ResetBgmOutputVolume();
     if (!SehCallPlayBackgroundMusic(playBackgroundMusic, gameSystemPtr, trackNumber)) {
 
         return false;
@@ -1906,7 +1851,7 @@ bool ImplPlayBackgroundMusic(uintptr_t gameSystemPtr, unsigned short trackNumber
 }
 
 bool PlayBackgroundMusic(uintptr_t gameSystemPtr, unsigned short trackNumber) {
-    EFZ_AUDIO_CALLBACK(ImplPlayBackgroundMusic(gameSystemPtr, trackNumber, ReadAudioSettings()));
+    EFZ_AUDIO_CALLBACK(ImplPlayBackgroundMusic(gameSystemPtr, trackNumber, ReadAdmittedAudioSettings()));
 }
 
 #include "../include/utils/audio_configured_apply.inl"

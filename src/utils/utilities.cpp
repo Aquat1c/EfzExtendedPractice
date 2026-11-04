@@ -2,6 +2,7 @@
 #include "gui/custom_menu/palette_editor.h"
 #include "game/practice_snapshots.h"
 #include "../include/utils/utilities.h"
+#include "../include/utils/audio_control.h"
 
 #include "../include/core/constants.h"
 #include "../include/runtime/practice_runtime.h"
@@ -1098,7 +1099,7 @@ void AppendPlayerReadbackSummary(
 
 void EnterNetplaySuspend() {
     Practice::RetireLegacyPractice(g_p2ControlMutex, g_onlineModeActive, [] {
-        MinHookUtils::SetNativePassthrough(true);
+        AudioControl::SuspendForNetplay();
         MinHookUtils::SetPracticeBattleActive(false);
         GameThread::Clear();
         {
@@ -1259,7 +1260,7 @@ void ExitNetplaySuspend() {
     DirectDrawHook::SetD3D9Active(true);
     ImGuiImpl::AttachWndProc();
     MinHookUtils::SetPracticeBattleActive(false);
-    MinHookUtils::SetNativePassthrough(false);
+    AudioControl::ResumeFromNetplay();
 
     LogOut(
         std::string("[NETPLAY] Resume cleanup complete: transient overrides cleared, caches invalidated")

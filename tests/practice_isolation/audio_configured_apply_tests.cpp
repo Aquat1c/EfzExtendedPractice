@@ -13,9 +13,16 @@ int failures, writes, readyReads;
 bool sessionActive, suppressed, ready = true, fault;
 std::atomic<bool> applyEntered{false}, releaseApply{true};
 AudioControl::AudioSettingsView applied{};
+std::atomic<bool> retiredBgm{false}, nativePassthrough{false};
 void Check(bool ok, const char* name) { if (!ok) { ++failures; std::printf("FAIL %s\n", name); } }
 }
 bool IsNetplaySessionActive() { return sessionActive; }
+namespace MinHookUtils {
+void SetNativePassthrough(bool enabled) {
+    Check(retiredBgm, "BGM gain retires before native passthrough opens");
+    nativePassthrough = enabled;
+}
+}
 namespace AudioControl {
 bool RuntimeAudioControlSuppressed(const char*) { return suppressed; }
 bool RuntimeVolumeApplicationReady() { ++readyReads; return ready; }
@@ -29,6 +36,7 @@ bool SehApplyBgmVolumeToGameSystem(uintptr_t, const AudioSettingsView& view) {
 }
 bool SehApplyCommonSeVolumeToGameSystem(uintptr_t, const AudioSettingsView&) { ++writes; return true; }
 bool SehApplyCharacterSeVolumesNow(const AudioSettingsView&) { ++writes; return true; }
+void RetireBgmVolume(const AudioSettingsView&) { retiredBgm = true; RequestAudioApply(); }
 #include "utils/audio_configured_apply.inl"
 }
 namespace {
@@ -84,6 +92,7 @@ int main() {
         acquiredEarly = acquired;
         transferCheckedLock = true;
         if (!acquired) g_p2ControlMutex.lock();
+        SuspendForNetplay();
         writesAtHandoff = writes;
         g_onlineModeActive = true;
         published = true;
@@ -94,7 +103,36 @@ int main() {
     releaseApply = true;
     activeApply.join(); handoff.join();
     Check(writes == 6 && writesAtHandoff == 6 && published.load(), "handoff publishes only after current apply completes");
+    Check(retiredBgm && nativePassthrough && ConsumeAudioApplyRequest(),
+          "handoff retires gain and queues offline reapplication");
     g_onlineModeActive = false;
+
+    retiredBgm = false;
+    nativePassthrough = false;
+    EnterAudioBoundary();
+    std::atomic<bool> callbackHandoffStarted{false}, callbackHandoffFinished{false};
+    std::thread callbackHandoff([&] {
+        g_p2ControlMutex.lock();
+        callbackHandoffStarted = true;
+        SuspendForNetplay();
+        callbackHandoffFinished = true;
+        g_p2ControlMutex.unlock();
+    });
+    while (!callbackHandoffStarted.load()) SwitchToThread();
+    Sleep(20);
+    Check(!retiredBgm.load() && !nativePassthrough.load() && !callbackHandoffFinished.load(),
+          "handoff waits for a native fade holding only the audio boundary");
+    LeaveAudioBoundary();
+    callbackHandoff.join();
+    Check(retiredBgm.load() && nativePassthrough.load() && callbackHandoffFinished.load(),
+          "native fade drains before gain retirement and passthrough");
+
+    ResumeFromNetplay();
+    EnterAudioBoundary();
+    const auto resumed = ReadAdmittedAudioSettings();
+    LeaveAudioBoundary();
+    Check(resumed.trainingOwnsBgmGain && resumed.trainingOwnsSeGain && !nativePassthrough.load(),
+          "offline resume reopens gain together with native entry gates");
 
     fault = true;
     Check(CatchApplyFault(), "native apply exception reaches outer handler");
