@@ -22,9 +22,8 @@ namespace {
 std::atomic<int> g_mode[3];
 std::atomic<int> g_stage[3];
 
-// g_stageDone: 0 = still armed (zero-init default). g_ourValue distinguishes
-// this module's own latch write from an opponent press.
-std::atomic<int> g_stageDone[3];
+enum class StagePhase { Armed, Finished };
+std::atomic<StagePhase> g_stagePhase[3]{};
 std::atomic<int> g_prevTechMove[3];
 std::atomic<int> g_rolledValue[3];
 std::atomic<int> g_ourValue[3];
@@ -126,7 +125,7 @@ int ResolveValue(int playerNum, int mode, uintptr_t base, uintptr_t baseOffset) 
 }
 
 void ClearSide(int playerNum) {
-    g_stageDone[playerNum].store(0, std::memory_order_release);
+    g_stagePhase[playerNum].store(StagePhase::Armed, std::memory_order_release);
     g_prevTechMove[playerNum].store(0, std::memory_order_release);
     g_rolledValue[playerNum].store(0, std::memory_order_release);
     g_ourValue[playerNum].store(0, std::memory_order_release);
@@ -180,12 +179,12 @@ void TickSide(int playerNum, uintptr_t base) {
     const int prev = g_prevTechMove[playerNum].load(std::memory_order_acquire);
     if (prev != moveID) {
         g_prevTechMove[playerNum].store(moveID, std::memory_order_release);
-        g_stageDone[playerNum].store(0, std::memory_order_release);
+        g_stagePhase[playerNum].store(StagePhase::Armed, std::memory_order_release);
         g_rolledValue[playerNum].store(0, std::memory_order_release);
         g_ourValue[playerNum].store(0, std::memory_order_release);
     }
 
-    if (g_stageDone[playerNum].load(std::memory_order_acquire) != 0) return;
+    if (g_stagePhase[playerNum].load(std::memory_order_acquire) == StagePhase::Finished) return;
 
     const int stage = g_stage[playerNum].load(std::memory_order_acquire);
     if (!StageSelected(stage, moveID)) return;
@@ -204,7 +203,7 @@ void TickSide(int playerNum, uintptr_t base) {
     const int ours = g_ourValue[playerNum].load(std::memory_order_acquire);
     if (latch != (uint32_t)DOPPEL_TECH_NONE && (int)latch != ours) {
         // First press wins: never overwrite an opponent escape.
-        g_stageDone[playerNum].store(1, std::memory_order_release);
+        g_stagePhase[playerNum].store(StagePhase::Finished, std::memory_order_release);
         return;
     }
 
@@ -214,7 +213,7 @@ void TickSide(int playerNum, uintptr_t base) {
     }
 
     if ((int)latch == value) {
-        if (mode != MODE_ALWAYS) g_stageDone[playerNum].store(1, std::memory_order_release);
+        if (mode != MODE_ALWAYS) g_stagePhase[playerNum].store(StagePhase::Finished, std::memory_order_release);
         return;
     }
 
@@ -224,7 +223,7 @@ void TickSide(int playerNum, uintptr_t base) {
 
     // ALWAYS stays armed: her motion recogniser rewrites the committed
     // follow-up every frame, so the escape must track the one she performs.
-    if (mode != MODE_ALWAYS) g_stageDone[playerNum].store(1, std::memory_order_release);
+    if (mode != MODE_ALWAYS) g_stagePhase[playerNum].store(StagePhase::Finished, std::memory_order_release);
 
     LogOut(std::string("[DOPPEL-TECH] P") + std::to_string(playerNum) +
            " mode=" + ModeName(mode) +

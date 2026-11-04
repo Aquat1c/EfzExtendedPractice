@@ -36,10 +36,10 @@ namespace {
 constexpr uintptr_t kVaProcessPlayerInput = 0x00406590; // processPlayerInput(inputManager)
 typedef void (__thiscall* ProcessInputFn)(void* inputManager);
 
-enum Phase { PHASE_INACTIVE = 0, PHASE_ENTERING, PHASE_ACTIVE, PHASE_LEAVING };
+enum class Phase { Inactive, Entering, Active, Leaving };
 
 std::atomic<bool> g_installed{false};
-std::atomic<int>  g_phase{PHASE_INACTIVE};
+std::atomic<Phase> g_phase{Phase::Inactive};
 std::atomic<bool> g_needPaletteApply{false};
 float g_animT = 0.0f;   // 0 = fully off-screen (right), 1 = fully in place
 int  g_selection = PracticeMenu::Render::ROW_PRACTICE;
@@ -54,8 +54,7 @@ TitleUpdateFn g_origUpdate = nullptr;
 struct InputState { int horiz = 0; int vert = 0; bool confirm = false; bool cancel = false; };
 InputState g_prevInput;
 
-// 0 = none, otherwise a TitleScreen::Screen value; consumed by the title update detour.
-std::atomic<int> g_pendingReopen{0};
+std::atomic<PracticeMenu::TitleScreen::Screen> g_pendingReopen{PracticeMenu::TitleScreen::Screen::None};
 
 inline float Smoothstep(float t) {
     if (t < 0.0f) t = 0.0f; else if (t > 1.0f) t = 1.0f;
@@ -388,11 +387,11 @@ extern "C" void __cdecl PracticeMenu_EnterFromCase(uint32_t screenContext) {
         g_animT = 0.0f;
         g_needPaletteApply.store(true);
         g_prevInput = InputState{0, 0, true, false};
-        g_phase.store(PHASE_ENTERING);
+        g_phase.store(Phase::Entering);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        g_phase.store(PHASE_INACTIVE);
+        g_phase.store(Phase::Inactive);
     }
-    if (g_phase.load() != PHASE_INACTIVE) Log("Entered submenu from title Practice");
+    if (g_phase.load() != Phase::Inactive) Log("Entered submenu from title Practice");
 }
 
 namespace {
@@ -416,12 +415,12 @@ InputState ReadInput(uint32_t gc) {
 }
 
 void BeginLeave() {
-    g_phase.store(PHASE_LEAVING);
+    g_phase.store(Phase::Leaving);
 }
 void FinishLeave(uint32_t sc) {
     PracticeMenu::TitleScreen::Close();
     PracticeMenu::Render::Release(sc);
-    g_phase.store(PHASE_INACTIVE);
+    g_phase.store(Phase::Inactive);
     Log("Submenu closed -> title menu");
 }
 
@@ -455,7 +454,7 @@ int Activate(uint32_t sc) {
     switch (g_selection) {
         case PracticeMenu::Render::ROW_PRACTICE:
             LaunchPractice(sc);
-            g_phase.store(PHASE_INACTIVE);
+            g_phase.store(Phase::Inactive);
             return 1;
         case PracticeMenu::Render::ROW_TUTORIAL:
             SurfaceTutorialProgressWarning();
@@ -506,7 +505,7 @@ void RenderAndPresent(uint32_t sc) {
         char buf[256];
         _snprintf_s(buf, sizeof(buf), _TRUNCATE,
             "render phase=%d animT=%.2f off=%d gfx=0x%08X bg=0x%08X obj=0x%08X loaded=%d present=%d",
-            g_phase.load(), g_animT, SlideOffsetPx(), gfxCtx,
+            static_cast<int>(g_phase.load()), g_animT, SlideOffsetPx(), gfxCtx,
             sc ? *reinterpret_cast<uint32_t*>(sc + kOffBgSurface) : 0u,
             sc ? *reinterpret_cast<uint32_t*>(sc + kOffObjSurface) : 0u,
             PracticeMenu::Render::IsLoaded() ? 1 : 0, static_cast<int>(presentRet));
@@ -520,21 +519,20 @@ void ReopenGuardedStateEnter(uint32_t sc) {
         g_animT = 1.0f;
         g_needPaletteApply.store(true);
         g_prevInput = InputState{0, 0, true, true};
-        g_phase.store(PHASE_ACTIVE);
+        g_phase.store(Phase::Active);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        g_phase.store(PHASE_INACTIVE);
+        g_phase.store(Phase::Inactive);
     }
 }
 
 void ConsumeReopenRequest(uint32_t sc) {
-    const int reopen = g_pendingReopen.exchange(0);
-    if (reopen == 0) return;
-    const auto screen = static_cast<PracticeMenu::TitleScreen::Screen>(reopen);
+    const auto screen = g_pendingReopen.exchange(PracticeMenu::TitleScreen::Screen::None);
+    if (screen == PracticeMenu::TitleScreen::Screen::None) return;
     g_selection = screen == PracticeMenu::TitleScreen::Screen::Tutorial
                 ? PracticeMenu::Render::ROW_TUTORIAL
                 : PracticeMenu::Render::ROW_MISSION;
     ReopenGuardedStateEnter(sc);
-    if (g_phase.load() != PHASE_INACTIVE) {
+    if (g_phase.load() != Phase::Inactive) {
         if (screen == PracticeMenu::TitleScreen::Screen::Tutorial) {
             SurfaceTutorialProgressWarning();
         }
@@ -546,11 +544,11 @@ void ConsumeReopenRequest(uint32_t sc) {
 }
 
 char UpdateDetourBody(uint32_t sc) {
-    int phase = g_phase.load();
-    if (phase == PHASE_INACTIVE) {
+    Phase phase = g_phase.load();
+    if (phase == Phase::Inactive) {
         ConsumeReopenRequest(sc);
         phase = g_phase.load();
-        if (phase == PHASE_INACTIVE) {
+        if (phase == Phase::Inactive) {
             return g_origUpdate ? g_origUpdate(sc) : 0;
         }
     }
@@ -558,10 +556,10 @@ char UpdateDetourBody(uint32_t sc) {
     __try {
         g_lastScreenContext = sc;
 
-        if (phase == PHASE_ENTERING) {
+        if (phase == Phase::Entering) {
             g_animT += kAnimStep;
-            if (g_animT >= 1.0f) { g_animT = 1.0f; g_phase.store(PHASE_ACTIVE); }
-        } else if (phase == PHASE_LEAVING) {
+            if (g_animT >= 1.0f) { g_animT = 1.0f; g_phase.store(Phase::Active); }
+        } else if (phase == Phase::Leaving) {
             g_animT -= kAnimStep;
             if (g_animT <= 0.0f) {
                 g_animT = 0.0f;
@@ -600,7 +598,7 @@ char UpdateDetourBody(uint32_t sc) {
                             QueueSelectedMission(directLoading)) {
                             PracticeMenu::TitleScreen::Close();
                             LaunchPractice(sc, directLoading);
-                            g_phase.store(PHASE_INACTIVE);
+                            g_phase.store(Phase::Inactive);
                             // Returning 2 is the native route into Loading; our
                             // one-shot Loading hook supplies the fighter objects.
                             return directLoading ? 2 : 1;
@@ -609,14 +607,14 @@ char UpdateDetourBody(uint32_t sc) {
                             Mission::Engine::SetPendingRecordMode(true);
                             PracticeMenu::TitleScreen::Close();
                             LaunchPractice(sc);
-                            g_phase.store(PHASE_INACTIVE);
+                            g_phase.store(Phase::Inactive);
                             return 1;
                         }
                         if (act == PracticeMenu::TitleScreen::ConfirmAction::Author) {
                             Mission::Engine::SetPendingMissionMode(true);
                             PracticeMenu::TitleScreen::Close();
                             LaunchPractice(sc);
-                            g_phase.store(PHASE_INACTIVE);
+                            g_phase.store(Phase::Inactive);
                             return 1;
                         }
                     } else if (cancelEdge || escEdge) {
@@ -651,7 +649,7 @@ char UpdateDetourBody(uint32_t sc) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Mission::Engine::CancelPendingMissionLoad("title update exception");
         CharacterHotswap::CancelDirectPracticeLoad("title update exception");
-        g_phase.store(PHASE_INACTIVE);
+        g_phase.store(Phase::Inactive);
     }
     return 0;
 }
@@ -723,7 +721,7 @@ bool Install() {
 void Uninstall() {
     if (!g_installed.load() && !MinHookUtils::HasOwnedTarget(reinterpret_cast<void*>(g_updateHookTarget)) &&
         !Practice::TitleCaseRetained()) return;
-    g_phase.store(PHASE_INACTIVE);
+    g_phase.store(Phase::Inactive);
     Mission::Engine::CancelPendingMissionLoad("Practice menu uninstall");
     CharacterHotswap::CancelDirectPracticeLoad("Practice menu uninstall");
     CharacterHotswap::UninstallDirectPracticeBootstrap();
@@ -731,7 +729,7 @@ void Uninstall() {
     const uintptr_t updateVa = g_updateHookTarget;
     if (updateVa) MinHookUtils::RemoveHook(reinterpret_cast<void*>(updateVa), "PracticeMenu", "updateTitleScreenLogic");
     g_installed.store(false);
-    g_pendingReopen.store(0);
+    g_pendingReopen.store(TitleScreen::Screen::None);
     if (Practice::TitleCaseRetained() ||
         !PracticeHooks::ReleaseRetiredOriginal(MinHookUtils::OwnedHooks(), g_updateHookTarget, g_origUpdate)) {
         Log("Admission closed; update hook and render resources retained until retirement");
@@ -742,10 +740,10 @@ void Uninstall() {
     Log("Uninstalled");
 }
 
-bool IsSubmenuActive() { return g_phase.load() != PHASE_INACTIVE; }
+bool IsSubmenuActive() { return g_phase.load() != Phase::Inactive; }
 
 void RequestTitleReopen(TitleScreen::Screen screen) {
-    g_pendingReopen.store(static_cast<int>(screen));
+    g_pendingReopen.store(screen);
 }
 
 }

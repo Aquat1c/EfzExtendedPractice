@@ -1,3 +1,4 @@
+#include "game/auto_airtech_state.h"
 #include "../include/game/auto_airtech.h"
 #include "../include/core/constants.h"
 #include "../include/utils/utilities.h"
@@ -166,18 +167,15 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
     static bool p2WasInjecting = false;
     static uint32_t s_lastLifecycleGeneration = 0;
     static int s_lastInternalTick = -1;
-    static int p1InjectRemaining = 0;
-    static int p2InjectRemaining = 0;
-    static bool p1Armed = false;
-    static bool p2Armed = false;
+    using namespace AutoAirtechState;
+    static Attempt p1Attempt, p2Attempt;
+    static DelayPhase p1DelayPhase = DelayPhase::Idle;
+    static DelayPhase p2DelayPhase = DelayPhase::Idle;
     static int p1AttemptCount = 0;
     static int p2AttemptCount = 0;
     constexpr int kPreNeutralFrames = 3;          // internal frames (~1 visual) of forced neutral before each attempt
     constexpr int kInjectHoldFramesInitial = 6;   // internal frames (~2 visual) hold of dir+button
     constexpr int kMaxRetryAttempts = 3;
-    static int p1PreNeutral = 0, p2PreNeutral = 0;
-    static bool p1AttemptActive = false, p2AttemptActive = false;
-    static int p1PhaseAnchorTick = -1, p2PhaseAnchorTick = -1;
 
     bool p1FacingRightNow = GetPlayerFacingDirection(1);
     bool p2FacingRightNow = GetPlayerFacingDirection(2);
@@ -187,35 +185,30 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
     const int currentInternalTick = GetEngineTick();
 
     auto clearPlayerState = [&](int playerNum, const char* reason, bool verboseLog) {
-        ((playerNum == 1) ? p1PhaseAnchorTick : p2PhaseAnchorTick) = -1;
+        Attempt& attempt = (playerNum == 1) ? p1Attempt : p2Attempt;
         int* readyTick = (playerNum == 1) ? &p1DelayReadyTick : &p2DelayReadyTick;
         int* lastRemainingVisual = (playerNum == 1) ? &p1LastLoggedRemainingVisual : &p2LastLoggedRemainingVisual;
-        int* injectRemaining = (playerNum == 1) ? &p1InjectRemaining : &p2InjectRemaining;
         int* attemptCount = (playerNum == 1) ? &p1AttemptCount : &p2AttemptCount;
-        int* preNeutral = (playerNum == 1) ? &p1PreNeutral : &p2PreNeutral;
         bool* wasAirtechable = (playerNum == 1) ? &p1WasAirtechable : &p2WasAirtechable;
         bool* isAirteching = (playerNum == 1) ? &p1IsAirteching : &p2IsAirteching;
-        bool* armed = (playerNum == 1) ? &p1Armed : &p2Armed;
-        bool* attemptActive = (playerNum == 1) ? &p1AttemptActive : &p2AttemptActive;
+        DelayPhase& delayPhase = (playerNum == 1) ? p1DelayPhase : p2DelayPhase;
         bool* wasInjecting = (playerNum == 1) ? &p1WasInjecting : &p2WasInjecting;
         std::atomic<bool>& activeFlag = (playerNum == 1) ? g_airtechP1Active : g_airtechP2Active;
         std::atomic<bool>& airtechableFlag = (playerNum == 1) ? g_airtechP1Airtechable : g_airtechP2Airtechable;
 
         const bool hadWork =
-            *armed || *attemptActive || *injectRemaining > 0 || *preNeutral > 0 ||
+            delayPhase != DelayPhase::Idle || attempt.phase != AttemptPhase::Idle ||
             *readyTick >= 0 || *isAirteching || *wasAirtechable ||
             g_manualInputOverride[playerNum].load() || g_manualInputMask[playerNum].load() != 0;
 
         (void)ReleaseAirtechOverride(playerNum);
         *readyTick = -1;
         *lastRemainingVisual = -1;
-        *injectRemaining = 0;
         *attemptCount = 0;
-        *preNeutral = 0;
         *wasAirtechable = false;
         *isAirteching = false;
-        *armed = false;
-        *attemptActive = false;
+        delayPhase = DelayPhase::Idle;
+        attempt.Reset();
         *wasInjecting = false;
         activeFlag.store(false);
         airtechableFlag.store(false);
@@ -366,7 +359,7 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                 const int delayInternal = VisualFramesToInternalTicks(delayVisual);
                 p1DelayReadyTick = currentInternalTick + delayInternal;
                 p1LastLoggedRemainingVisual = delayVisual;
-                p1Armed = true;
+                p1DelayPhase = DelayPhase::Waiting;
                 p1AttemptCount = 0;
                 short untechValue = 0;
                 uintptr_t base = GetEFZBase();
@@ -381,14 +374,14 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                        ", armTick=" + std::to_string(currentInternalTick) +
                        ", readyTick=" + std::to_string(p1DelayReadyTick) + ")", true);
             }
-            if (p1Armed && !p1Airtechable && p1WasAirtechable) {
+            if (p1DelayPhase == DelayPhase::Waiting && !p1Airtechable && p1WasAirtechable) {
                 LogOut(std::string("[AUTO-AIRTECH] P1 airtechable window ended before delay expiry; canceling armed attempt ") +
                        "(readyTick=" + std::to_string(p1DelayReadyTick) +
                        ", currentTick=" + std::to_string(currentInternalTick) + ")", true);
-                p1Armed = false;
+                p1DelayPhase = DelayPhase::Idle;
                 p1DelayReadyTick = -1;
                 p1LastLoggedRemainingVisual = -1;
-            } else if (p1Armed && p1DelayReadyTick > currentInternalTick) {
+            } else if (p1DelayPhase == DelayPhase::Waiting && p1DelayReadyTick > currentInternalTick) {
                 const int remainingInternal = p1DelayReadyTick - currentInternalTick;
                 const int remainingVisual = InternalTicksToVisualFramesCeil(remainingInternal);
                 if (detailedLogging.load() && remainingVisual != p1LastLoggedRemainingVisual) {
@@ -397,10 +390,9 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                            " readyTick=" + std::to_string(p1DelayReadyTick), true);
                     p1LastLoggedRemainingVisual = remainingVisual;
                 }
-            } else if (p1Armed && p1Airtechable && p1DelayReadyTick >= 0 && currentInternalTick >= p1DelayReadyTick) {
-                p1PreNeutral = kPreNeutralFrames;
-                p1InjectRemaining = kInjectHoldFramesInitial;
-                p1Armed = false;
+            } else if (p1DelayPhase == DelayPhase::Waiting && p1Airtechable && p1DelayReadyTick >= 0 && currentInternalTick >= p1DelayReadyTick) {
+                p1Attempt.Start(kPreNeutralFrames, kInjectHoldFramesInitial);
+                p1DelayPhase = DelayPhase::Idle;
                 p1DelayReadyTick = -1;
                 p1LastLoggedRemainingVisual = -1;
                 p1AttemptCount++;
@@ -425,7 +417,7 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                 const int delayInternal = VisualFramesToInternalTicks(delayVisual);
                 p2DelayReadyTick = currentInternalTick + delayInternal;
                 p2LastLoggedRemainingVisual = delayVisual;
-                p2Armed = true;
+                p2DelayPhase = DelayPhase::Waiting;
                 p2AttemptCount = 0;
                 short untechValue = 0;
                 uintptr_t base = GetEFZBase();
@@ -440,14 +432,14 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                        ", armTick=" + std::to_string(currentInternalTick) +
                        ", readyTick=" + std::to_string(p2DelayReadyTick) + ")", true);
             }
-            if (p2Armed && !p2Airtechable && p2WasAirtechable) {
+            if (p2DelayPhase == DelayPhase::Waiting && !p2Airtechable && p2WasAirtechable) {
                 LogOut(std::string("[AUTO-AIRTECH] P2 airtechable window ended before delay expiry; canceling armed attempt ") +
                        "(readyTick=" + std::to_string(p2DelayReadyTick) +
                        ", currentTick=" + std::to_string(currentInternalTick) + ")", true);
-                p2Armed = false;
+                p2DelayPhase = DelayPhase::Idle;
                 p2DelayReadyTick = -1;
                 p2LastLoggedRemainingVisual = -1;
-            } else if (p2Armed && p2DelayReadyTick > currentInternalTick) {
+            } else if (p2DelayPhase == DelayPhase::Waiting && p2DelayReadyTick > currentInternalTick) {
                 const int remainingInternal = p2DelayReadyTick - currentInternalTick;
                 const int remainingVisual = InternalTicksToVisualFramesCeil(remainingInternal);
                 if (detailedLogging.load() && remainingVisual != p2LastLoggedRemainingVisual) {
@@ -456,10 +448,9 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
                            " readyTick=" + std::to_string(p2DelayReadyTick), true);
                     p2LastLoggedRemainingVisual = remainingVisual;
                 }
-            } else if (p2Armed && p2Airtechable && p2DelayReadyTick >= 0 && currentInternalTick >= p2DelayReadyTick) {
-                p2PreNeutral = kPreNeutralFrames;
-                p2InjectRemaining = kInjectHoldFramesInitial;
-                p2Armed = false;
+            } else if (p2DelayPhase == DelayPhase::Waiting && p2Airtechable && p2DelayReadyTick >= 0 && currentInternalTick >= p2DelayReadyTick) {
+                p2Attempt.Start(kPreNeutralFrames, kInjectHoldFramesInitial);
+                p2DelayPhase = DelayPhase::Idle;
                 p2DelayReadyTick = -1;
                 p2LastLoggedRemainingVisual = -1;
                 p2AttemptCount++;
@@ -479,60 +470,50 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
         }
     }
 
-    auto consumeTicks = [&](int& remaining, int& anchorTick) {
-        if (anchorTick >= 0) {
-            remaining -= currentInternalTick - anchorTick;
-            if (remaining < 0) remaining = 0;
-        }
-        anchorTick = remaining > 0 ? currentInternalTick : -1;
-    };
-
     if (autoAirtechEnabled.load()) {
-        if (p1PreNeutral > 0) {
+        if (p1Attempt.phase == AttemptPhase::Neutralizing) {
             if (PublishAirtechOverride(1, 0, true)) {
-                consumeTicks(p1PreNeutral, p1PhaseAnchorTick);
-                p1AttemptActive = false;
+                p1Attempt.NeutralPublished(currentInternalTick);
             }
-        } else if (p1InjectRemaining > 0) {
-            if (!p1AttemptActive) {
+        } else if (p1Attempt.phase == AttemptPhase::AwaitingInjection ||
+                   p1Attempt.phase == AttemptPhase::Injecting) {
+            if (p1Attempt.phase == AttemptPhase::AwaitingInjection) {
                 uint8_t mask = composeMaskForAttempt(1, p1AttemptCount - 1);
                 if (PublishAirtechOverride(1, mask, true)) {
-                    p1AttemptActive = true;
+                    p1Attempt.InjectionPublished();
                 }
             }
-            if (p1AttemptActive) consumeTicks(p1InjectRemaining, p1PhaseAnchorTick);
-        } else if (p1AttemptActive) {
+            if (p1Attempt.phase == AttemptPhase::Injecting) p1Attempt.AdvanceInjection(currentInternalTick);
+        } else if (p1Attempt.phase == AttemptPhase::AwaitingRelease) {
             (void)ReleaseAirtechOverride(1);
-            p1AttemptActive = false;
+            p1Attempt.Finish();
             LogOut("[AUTO-AIRTECH] P1 attempt window complete", detailedLogging.load());
             if (!p1IsAirteching && IsPlayerAirtechable(moveID1,1) && p1AttemptCount < kMaxRetryAttempts) {
-                p1PreNeutral = kPreNeutralFrames;
-                p1InjectRemaining = kInjectHoldFramesInitial;
+                p1Attempt.Start(kPreNeutralFrames, kInjectHoldFramesInitial);
                 p1AttemptCount++;
                 LogOut("[AUTO-AIRTECH] P1 scheduling retry attempt=" + std::to_string(p1AttemptCount), detailedLogging.load());
             }
         }
 
-        if (p2PreNeutral > 0) {
+        if (p2Attempt.phase == AttemptPhase::Neutralizing) {
             if (PublishAirtechOverride(2, 0, true)) {
-                consumeTicks(p2PreNeutral, p2PhaseAnchorTick);
-                p2AttemptActive = false;
+                p2Attempt.NeutralPublished(currentInternalTick);
             }
-        } else if (p2InjectRemaining > 0) {
-            if (!p2AttemptActive) {
+        } else if (p2Attempt.phase == AttemptPhase::AwaitingInjection ||
+                   p2Attempt.phase == AttemptPhase::Injecting) {
+            if (p2Attempt.phase == AttemptPhase::AwaitingInjection) {
                 uint8_t mask = composeMaskForAttempt(2, p2AttemptCount - 1);
                 if (PublishAirtechOverride(2, mask, true)) {
-                    p2AttemptActive = true;
+                    p2Attempt.InjectionPublished();
                 }
             }
-            if (p2AttemptActive) consumeTicks(p2InjectRemaining, p2PhaseAnchorTick);
-        } else if (p2AttemptActive) {
+            if (p2Attempt.phase == AttemptPhase::Injecting) p2Attempt.AdvanceInjection(currentInternalTick);
+        } else if (p2Attempt.phase == AttemptPhase::AwaitingRelease) {
             (void)ReleaseAirtechOverride(2);
-            p2AttemptActive = false;
+            p2Attempt.Finish();
             LogOut("[AUTO-AIRTECH] P2 attempt window complete", detailedLogging.load());
             if (!p2IsAirteching && IsPlayerAirtechable(moveID2,2) && p2AttemptCount < kMaxRetryAttempts) {
-                p2PreNeutral = kPreNeutralFrames;
-                p2InjectRemaining = kInjectHoldFramesInitial;
+                p2Attempt.Start(kPreNeutralFrames, kInjectHoldFramesInitial);
                 p2AttemptCount++;
                 LogOut("[AUTO-AIRTECH] P2 scheduling retry attempt=" + std::to_string(p2AttemptCount), detailedLogging.load());
             }
@@ -541,24 +522,24 @@ void MonitorAutoAirtech(short moveID1, short moveID2) {
         if (p1WasInjecting || g_manualInputOverride[1].load()) {
             (void)ReleaseAirtechOverride(1);
             p1WasInjecting = false;
-            p1InjectRemaining = 0;
             p1DelayReadyTick = -1;
             p1LastLoggedRemainingVisual = -1;
-            p1Armed = false;
+            p1DelayPhase = DelayPhase::Idle;
             p1AttemptCount = 0;
-            p1PreNeutral = 0;
-            p1AttemptActive = false;
+            p1Attempt.neutralRemaining = 0;
+            p1Attempt.injectRemaining = 0;
+            p1Attempt.Finish();
         }
         if (p2WasInjecting || g_manualInputOverride[2].load()) {
             (void)ReleaseAirtechOverride(2);
             p2WasInjecting = false;
-            p2InjectRemaining = 0;
             p2DelayReadyTick = -1;
             p2LastLoggedRemainingVisual = -1;
-            p2Armed = false;
+            p2DelayPhase = DelayPhase::Idle;
             p2AttemptCount = 0;
-            p2PreNeutral = 0;
-            p2AttemptActive = false;
+            p2Attempt.neutralRemaining = 0;
+            p2Attempt.injectRemaining = 0;
+            p2Attempt.Finish();
         }
     }
 }

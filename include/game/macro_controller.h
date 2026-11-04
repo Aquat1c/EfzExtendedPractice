@@ -39,6 +39,7 @@ enum class PlaybackStartMode : uint8_t {
 constexpr int kRandomSlotChoice = 9;
 
 namespace PlaybackStartPolicy {
+    enum class PrimePhase { Inactive, AwaitingFirstPoll, Draining };
     // The roll-th recorded slot, 1-based; 0 when nothing is recorded.
     inline int PickFilledSlot(const bool* filled, int count, unsigned roll) {
         int filledCount = 0;
@@ -79,11 +80,11 @@ namespace PlaybackStartPolicy {
         return writes >= 0 && writes <= 3;
     }
 
-    constexpr bool CanPublishNextPrimedSlice(bool awaitingFirstPoll,
+    constexpr bool CanPublishNextPrimedSlice(PrimePhase phase,
                                               bool pollAdvanced,
                                               bool bufferAdvanced,
                                               bool frameStepAdvanced) {
-        return !awaitingFirstPoll &&
+        return phase == PrimePhase::Draining &&
                (pollAdvanced || bufferAdvanced || frameStepAdvanced);
     }
 
@@ -91,6 +92,12 @@ namespace PlaybackStartPolicy {
                                      int queuedWrites,
                                      int writesLeft) {
         return subframesRemaining > 0 || queuedWrites > 0 || writesLeft > 0;
+    }
+
+    constexpr PrimePhase AfterPrimedSlice(int subframesRemaining,
+                                         int queuedWrites, int writesLeft) {
+        return PrimedTickPending(subframesRemaining, queuedWrites, writesLeft)
+            ? PrimePhase::Draining : PrimePhase::Inactive;
     }
 
     constexpr bool PrimedSliceCanLatchEnd(

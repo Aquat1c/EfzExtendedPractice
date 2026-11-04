@@ -7,6 +7,13 @@
 
 namespace InputHookPolicy {
 
+enum class TailCleanupPhase { Idle, NeutralOnly, NeutralThenCleanup, AwaitingStableHead };
+constexpr TailCleanupPhase AfterTokenNeutralize(TailCleanupPhase phase) {
+    return phase == TailCleanupPhase::NeutralOnly ? TailCleanupPhase::Idle
+        : phase == TailCleanupPhase::NeutralThenCleanup ? TailCleanupPhase::AwaitingStableHead
+        : phase;
+}
+
 enum class TutorialP2InputSource : uint8_t {
     Neutral,
     MotionQueue,

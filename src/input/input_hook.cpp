@@ -1009,15 +1009,16 @@ bool TryGetLastObservedPhysicalPoll(int playerNum, uint8_t& maskOut,
     return true;
 }
 
-static std::atomic<bool> s_armedNeutralize[3] = { false, false, false };
-static std::atomic<bool> s_doFullCleanup[3] = { false, false, false };
+using TailCleanupPhase = InputHookPolicy::TailCleanupPhase;
+static std::atomic<TailCleanupPhase> s_tailCleanup[3]{};
 static std::atomic<uint16_t> s_lastHead[3] = { 0xFFFF, 0xFFFF, 0xFFFF };
 static std::atomic<int> s_headStable[3] = { 0, 0, 0 };
 
 void InputHook_ArmTokenNeutralize(int playerNum, bool alsoDoFullCleanup) {
     if (playerNum != 1 && playerNum != 2) return;
-    s_armedNeutralize[playerNum].store(true, std::memory_order_relaxed);
-    s_doFullCleanup[playerNum].store(alsoDoFullCleanup, std::memory_order_relaxed);
+    s_tailCleanup[playerNum].store(alsoDoFullCleanup ? TailCleanupPhase::NeutralThenCleanup
+                                                    : TailCleanupPhase::NeutralOnly,
+                                   std::memory_order_relaxed);
     s_lastHead[playerNum].store(0xFFFF, std::memory_order_relaxed);
     s_headStable[playerNum].store(0, std::memory_order_relaxed);
     if (detailedLogging.load()) {
@@ -1032,11 +1033,13 @@ static void MaybePerformTailCleanup(int playerNum) {
         int owner = g_activeFreezePlayer.load();
         if (owner == playerNum || owner == 0) return;
     }
-    if (s_armedNeutralize[playerNum].load(std::memory_order_relaxed)) {
+    auto phase = s_tailCleanup[playerNum].load(std::memory_order_relaxed);
+    if (phase == TailCleanupPhase::NeutralOnly || phase == TailCleanupPhase::NeutralThenCleanup) {
         (void)NeutralizeMotionToken(playerNum);
-        s_armedNeutralize[playerNum].store(false, std::memory_order_relaxed);
+        (void)s_tailCleanup[playerNum].compare_exchange_strong(
+            phase, InputHookPolicy::AfterTokenNeutralize(phase), std::memory_order_relaxed);
     }
-    if (s_doFullCleanup[playerNum].load(std::memory_order_relaxed)) {
+    if (s_tailCleanup[playerNum].load(std::memory_order_relaxed) == TailCleanupPhase::AwaitingStableHead) {
         uintptr_t pPtr = GetPlayerPointer(playerNum);
         if (!pPtr) return;
         uint16_t head = 0;
@@ -1050,7 +1053,9 @@ static void MaybePerformTailCleanup(int playerNum) {
         int stable = s_headStable[playerNum].fetch_add(1, std::memory_order_relaxed) + 1;
         if (stable >= 2) {
             (void)FullCleanupAfterToggle(playerNum);
-            s_doFullCleanup[playerNum].store(false, std::memory_order_relaxed);
+            auto expected = TailCleanupPhase::AwaitingStableHead;
+            (void)s_tailCleanup[playerNum].compare_exchange_strong(
+                expected, TailCleanupPhase::Idle, std::memory_order_relaxed);
             s_lastHead[playerNum].store(0xFFFF, std::memory_order_relaxed);
             s_headStable[playerNum].store(0, std::memory_order_relaxed);
         }

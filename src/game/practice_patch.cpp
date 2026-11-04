@@ -1002,7 +1002,8 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
     };
     static bool s_lastAbOn = false;
     bool abOn = false;
-    static bool s_pendingAbOff = false;
+    enum class DisablePhase { Ready, AwaitingActionable };
+    static DisablePhase s_disablePhase = DisablePhase::Ready;
 
     const bool justBlocked = DidP2JustBlockThisFrame(prevDummyMoveID, dummyMoveID);
     const bool hitNow = (!IsP2InHitstun(prevDummyMoveID) && IsP2InHitstun(dummyMoveID));
@@ -1016,12 +1017,11 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
     const unsigned long long curMs = XPCompat::GetTickCount64Compat();
 
     static int s_lastMode = -999;
-    static bool s_waitForHitAfterBlock = false;
-    static bool s_waitForBlockAfterHit = false;
+    enum class AutoBlockPhase { AwaitingTrigger, AwaitingHit, AwaitingBlock };
+    static AutoBlockPhase s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
     static unsigned long long s_neutralStartMs = 0ULL;
     if (mode != s_lastMode) {
-        s_waitForHitAfterBlock = false;
-        s_waitForBlockAfterHit = false;
+        s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
         s_neutralStartMs = 0ULL;
         g_abWindowActive.store(false);
         {
@@ -1035,21 +1035,21 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
     if (mode == DAB_FirstHitThenOff) {
         if (justBlocked) {
             abOn = false;
-            s_waitForHitAfterBlock = true;
+            s_autoBlockPhase = AutoBlockPhase::AwaitingHit;
             s_neutralStartMs = 0ULL;
             log_ab("FirstHitThenOff: blocked -> autoblock OFF (waiting for hit or neutral)");
-        } else if (s_waitForHitAfterBlock) {
+        } else if (s_autoBlockPhase == AutoBlockPhase::AwaitingHit) {
             abOn = false;
             if (hitNow) {
                 abOn = true;
-                s_waitForHitAfterBlock = false;
+                s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
                 s_neutralStartMs = 0ULL;
                 log_ab("FirstHitThenOff: got hit -> autoblock ON");
             } else {
                 if (neutralTimeoutMs == 0) {
                     if (transitionedToNeutral) {
                         abOn = true;
-                        s_waitForHitAfterBlock = false;
+                        s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
                         s_neutralStartMs = 0ULL;
                         log_ab("FirstHitThenOff: neutral edge -> autoblock ON");
                     }
@@ -1057,7 +1057,7 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
                     if (s_neutralStartMs == 0ULL) s_neutralStartMs = curMs;
                     if (curMs - s_neutralStartMs >= (unsigned long long)neutralTimeoutMs) {
                         abOn = true;
-                        s_waitForHitAfterBlock = false;
+                        s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
                         s_neutralStartMs = 0ULL;
                         log_ab("FirstHitThenOff: neutral timeout -> autoblock ON");
                     }
@@ -1070,24 +1070,24 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
         }
     }
     else if (mode == DAB_EnableAfterFirstHit) {
-        if (hitNow && !s_waitForBlockAfterHit) {
+        if (hitNow && s_autoBlockPhase != AutoBlockPhase::AwaitingBlock) {
             abOn = true;
-            s_waitForBlockAfterHit = true;
+            s_autoBlockPhase = AutoBlockPhase::AwaitingBlock;
             s_neutralStartMs = 0ULL;
             log_ab("AfterFirstHit: hit detected -> autoblock ON (waiting for block)");
         }
-        if (s_waitForBlockAfterHit) {
+        if (s_autoBlockPhase == AutoBlockPhase::AwaitingBlock) {
             abOn = true;
             if (justBlocked) {
                 abOn = false;
-                s_waitForBlockAfterHit = false;
+                s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
                 s_neutralStartMs = 0ULL;
                 log_ab("AfterFirstHit: blocked -> autoblock OFF");
             } else {
                 if (neutralTimeoutMs == 0) {
                     if (transitionedToNeutral) {
                         abOn = false;
-                        s_waitForBlockAfterHit = false;
+                        s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
                         s_neutralStartMs = 0ULL;
                         log_ab("AfterFirstHit: neutral edge -> autoblock OFF");
                     }
@@ -1095,7 +1095,7 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
                     if (s_neutralStartMs == 0ULL) s_neutralStartMs = curMs;
                     if (curMs - s_neutralStartMs >= (unsigned long long)neutralTimeoutMs) {
                         abOn = false;
-                        s_waitForBlockAfterHit = false;
+                        s_autoBlockPhase = AutoBlockPhase::AwaitingTrigger;
                         s_neutralStartMs = 0ULL;
                         log_ab("AfterFirstHit: neutral timeout -> autoblock OFF");
                     }
@@ -1135,14 +1135,14 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
 
         if (!abOn) {
             if (inGuardNow || !actionableNow) {
-                s_pendingAbOff = true;
+                s_disablePhase = DisablePhase::AwaitingActionable;
                 abOn = true;
             }
         }
-        if (s_pendingAbOff) {
+        if (s_disablePhase == DisablePhase::AwaitingActionable) {
             if ((leftGuardNow && actionableNow) || (!inGuardNow && actionableNow)) {
                 abOn = false;
-                s_pendingAbOff = false;
+                s_disablePhase = DisablePhase::Ready;
                 if (detailedLogging.load()) {
                     LogOut("[DUMMY_AB] OFF on guard end edge (moveID)", true);
                 }
@@ -1151,7 +1151,7 @@ void MonitorDummyAutoBlock(short p1MoveID, short p2MoveID, short prevP1MoveID, s
             }
         }
     } else {
-        s_pendingAbOff = false;
+        s_disablePhase = DisablePhase::Ready;
     }
 
     g_desiredAbOn.store(abOn);

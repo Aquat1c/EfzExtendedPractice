@@ -142,8 +142,8 @@ namespace {
     uint16_t s_lastSeenBufIdx = 0xFFFF;
     bool s_playbackBufIdxSyncInitialized = false;
     bool s_playbackPollAuditLogged = false;
-    bool s_primedTickAwaitingFirstPoll = false;
-    bool s_primedTickDrainPending = false;
+    using PrimePhase = MacroController::PlaybackStartPolicy::PrimePhase;
+    PrimePhase s_primePhase = PrimePhase::Inactive;
     int s_primedTickSubframesRemaining = 0;
     uint32_t s_primedTickPollHitsAtLastPublish = 0;
     uint32_t s_primedTickPollHitsAtLatch = 0;
@@ -464,8 +464,7 @@ namespace {
         s_endStreamWaitFrames = 0; s_playNoProgressFrames = 0;
         s_lastSeenBufIdx = 0xFFFF; s_playbackBufIdxSyncInitialized = false;
         s_playbackPollAuditLogged = false;
-        s_primedTickAwaitingFirstPoll = false;
-        s_primedTickDrainPending = false;
+        s_primePhase = PrimePhase::Inactive;
         s_primedTickSubframesRemaining = 0;
         s_primedTickPollHitsAtLastPublish = 0;
         s_primedTickPollHitsAtLatch = 0;
@@ -1062,11 +1061,11 @@ void Tick() {
             (void)ClearPlayerCommandFlags(playPlayer);
             return;
         }
-        if (s_primedTickAwaitingFirstPoll) {
+        if (s_primePhase == PrimePhase::AwaitingFirstPoll) {
             const uint32_t pollHits =
                 GetInputPollOverrideHitCount(playPlayer);
             if (pollHits != s_primedTickPollHitsAtLatch) {
-                s_primedTickAwaitingFirstPoll = false;
+                s_primePhase = PrimePhase::Draining;
                 LogOut("[MACRO][PLAY][PRIME] P" +
                            std::to_string(playPlayer) +
                            " first poll acknowledged hits=" +
@@ -1148,20 +1147,20 @@ void Tick() {
             bool shouldAdvanceStream = false;
             if (haveIdx && s_playbackBufIdxSyncInitialized &&
                 (s_playStreamIndex < playSlot.macroStream.size() ||
-                 s_primedTickDrainPending)) {
+                 s_primePhase != PrimePhase::Inactive)) {
                 
                 if (curBufIdx != s_lastSeenBufIdx) {
                     bufferAdvanced = true;
                 }
             }
 
-            if (s_primedTickDrainPending) {
+            if (s_primePhase != PrimePhase::Inactive) {
                 const uint32_t primedPollHits =
                     GetInputPollOverrideHitCount(playPlayer);
                 const bool primedPollAdvanced =
                     primedPollHits != s_primedTickPollHitsAtLastPublish;
                 if (!PlaybackStartPolicy::CanPublishNextPrimedSlice(
-                        s_primedTickAwaitingFirstPoll,
+                        s_primePhase,
                         primedPollAdvanced, bufferAdvanced,
                         playbackStepAdvanced)) {
                     if (!playbackFrozen && ++s_playNoProgressFrames > 384) {
@@ -1172,9 +1171,8 @@ void Tick() {
                         s_tickBufQueue.clear();
                         s_tickBufHead = 0;
                         s_writesLeftThisTick = 0;
-                        s_primedTickDrainPending = false;
+                        s_primePhase = PrimePhase::Inactive;
                         s_primedTickSubframesRemaining = 0;
-                        s_primedTickAwaitingFirstPoll = false;
                         s_baselineMask = 0;
                         s_finishPhase = PlaybackFinishPhase::AwaitingClearTick;
                         g_pollOverrideMask[playPlayer].store(
@@ -1204,11 +1202,11 @@ void Tick() {
                 const int queuedWrites = static_cast<int>(
                     s_tickBufQueue.size() -
                     (std::min)(s_tickBufHead, s_tickBufQueue.size()));
-                s_primedTickDrainPending =
-                    PlaybackStartPolicy::PrimedTickPending(
+                s_primePhase =
+                    PlaybackStartPolicy::AfterPrimedSlice(
                         s_primedTickSubframesRemaining, queuedWrites,
                         static_cast<int>(s_writesLeftThisTick));
-                if (!s_primedTickDrainPending) {
+                if (s_primePhase == PrimePhase::Inactive) {
                     s_primedTickSubframesRemaining = 0;
                     s_frameDiv = 2;
                     s_callsSinceDiv0 = 2;
@@ -1691,18 +1689,11 @@ static bool StartPlayback(int playerNum, bool exclusiveInput, int startTick,
             slot, player, 3,
             false);
         s_primedTickSubframesRemaining = 2;
-        const int queuedWrites = static_cast<int>(
-            s_tickBufQueue.size() -
-            (std::min)(s_tickBufHead, s_tickBufQueue.size()));
-        s_primedTickDrainPending =
-            PlaybackStartPolicy::PrimedTickPending(
-                s_primedTickSubframesRemaining, queuedWrites,
-                static_cast<int>(s_writesLeftThisTick));
         s_primedTickPollHitsAtLatch =
             GetInputPollOverrideHitCount(player);
         s_primedTickPollHitsAtLastPublish =
             s_primedTickPollHitsAtLatch;
-        s_primedTickAwaitingFirstPoll = true;
+        s_primePhase = PrimePhase::AwaitingFirstPoll;
         LogOut("[MACRO][PLAY][PRIME] P" + std::to_string(player) +
                    " tick=" + std::to_string(prepared.tick) +
                    " mask=0x" + ToHexString(published.mask, 2) +

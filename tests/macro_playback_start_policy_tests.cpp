@@ -25,6 +25,8 @@ int main() {
     }
     using MacroController::PlaybackStartMode;
     using MacroController::PlaybackStartPolicy::CanPublishNextPrimedSlice;
+    using MacroController::PlaybackStartPolicy::PrimePhase;
+    using MacroController::PlaybackStartPolicy::AfterPrimedSlice;
     using MacroController::PlaybackStartPolicy::Decide;
     using MacroController::PlaybackStartPolicy::PublishMonitorSlice;
     using MacroController::PlaybackStartPolicy::PrimedSliceCanLatchEnd;
@@ -72,11 +74,11 @@ int main() {
               !SupportedRawWriteCount(4) &&
               !SupportedRawWriteCount(65535),
           "raw groups larger than the three native subframes fail closed");
-    Check(!CanPublishNextPrimedSlice(true, true, true, true) &&
-              !CanPublishNextPrimedSlice(false, false, false, false) &&
-              CanPublishNextPrimedSlice(false, true, false, false) &&
-              CanPublishNextPrimedSlice(false, false, true, false) &&
-              CanPublishNextPrimedSlice(false, false, false, true),
+    Check(!CanPublishNextPrimedSlice(PrimePhase::AwaitingFirstPoll, true, true, true) &&
+              !CanPublishNextPrimedSlice(PrimePhase::Draining, false, false, false) &&
+              CanPublishNextPrimedSlice(PrimePhase::Draining, true, false, false) &&
+              CanPublishNextPrimedSlice(PrimePhase::Draining, false, true, false) &&
+              CanPublishNextPrimedSlice(PrimePhase::Draining, false, false, true),
           "each remaining primed slice waits for an acknowledged poll or frame step");
     Check(PrimedTickPending(2, 0, 0) &&
               PrimedTickPending(1, 0, 0) &&
@@ -85,6 +87,11 @@ int main() {
               !PrimedSliceCanLatchEnd(2) &&
               PrimedSliceCanLatchEnd(1),
           "tick zero retains all cadence slots before tick one or stream end");
+    Check(!CanPublishNextPrimedSlice(PrimePhase::Inactive, true, true, true) &&
+          AfterPrimedSlice(1, 0, 0) == PrimePhase::Draining &&
+          AfterPrimedSlice(0, 1, 0) == PrimePhase::Draining &&
+          AfterPrimedSlice(0, 0, 0) == PrimePhase::Inactive,
+          "prime drain finishes only after cadence and queued writes are empty");
     constexpr uint8_t directions = 0x0F;
     constexpr uint8_t buttons = 0xF0;
     Check(PublishMonitorSlice(0x10, 0x10, directions, buttons) == 0x10 &&

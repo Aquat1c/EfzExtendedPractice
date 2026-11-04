@@ -329,6 +329,13 @@ void TestGroundNormalRankAnchors() {
 }
 
 int main() {
+    using Tail = InputHookPolicy::TailCleanupPhase;
+    Require(InputHookPolicy::AfterTokenNeutralize(Tail::NeutralOnly) == Tail::Idle &&
+            InputHookPolicy::AfterTokenNeutralize(Tail::NeutralThenCleanup) == Tail::AwaitingStableHead,
+            "token cleanup keeps the requested full-tail obligation");
+    Require(InputHookPolicy::AfterTokenNeutralize(Tail::AwaitingStableHead) == Tail::AwaitingStableHead,
+            "stable-head wait does not rearm token neutralization");
+
     TestAllNormalMappings();
     TestUnheldPulseProtocol();
     TestHeldAndRepeatedButtonProtocol();

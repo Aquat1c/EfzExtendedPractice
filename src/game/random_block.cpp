@@ -12,7 +12,8 @@
 namespace RandomBlock {
     static std::atomic<bool> g_enabled{false};
     static std::atomic<int>  g_lastApplied{-1};
-    static std::atomic<bool> g_pendingOff{false};
+    enum class DisablePhase { Ready, AwaitingActionable };
+    static std::atomic<DisablePhase> g_disablePhase{DisablePhase::Ready};
     static std::atomic<bool> g_restoreOn{false};
     static std::atomic<bool> g_restoreKnown{false};
     static std::mutex g_writeMutex;
@@ -29,7 +30,7 @@ namespace RandomBlock {
             g_restoreKnown.store(false, std::memory_order_relaxed);
         }
         g_enabled.store(enabled);
-        g_pendingOff.store(false);
+        g_disablePhase.store(DisablePhase::Ready);
         g_lastApplied.store(-1);
         if (!enabled) {
             const bool restoreOn = g_restoreKnown.load(std::memory_order_relaxed)
@@ -94,7 +95,7 @@ namespace RandomBlock {
                     g_lastApplied.store(1);
                 }
             }
-            g_pendingOff.store(false);
+            g_disablePhase.store(DisablePhase::Ready);
             return;
         }
 
@@ -102,12 +103,12 @@ namespace RandomBlock {
             bool curOn = false; if (!GetPracticeAutoBlockEnabled(curOn)) return;
             bool wantOnFinal = false;
             if (IsDummyBlockingOrBlockstun(dummyMoveId) || !::IsActionable(dummyMoveId)) {
-                g_pendingOff.store(true);
+                g_disablePhase.store(DisablePhase::AwaitingActionable);
                 wantOnFinal = true;
             }
-            if (g_pendingOff.load()) {
+            if (g_disablePhase.load() == DisablePhase::AwaitingActionable) {
                 if (!IsDummyBlockingOrBlockstun(dummyMoveId) && ::IsActionable(dummyMoveId)) {
-                    wantOnFinal = false; g_pendingOff.store(false);
+                    wantOnFinal = false; g_disablePhase.store(DisablePhase::Ready);
                 } else {
                     wantOnFinal = true;
                 }
@@ -128,15 +129,15 @@ namespace RandomBlock {
         // Never turn OFF mid-guard or while inactionable.
         if (!wantOn) {
             if (IsDummyBlockingOrBlockstun(dummyMoveId) || !::IsActionable(dummyMoveId)) {
-                g_pendingOff.store(true);
+                g_disablePhase.store(DisablePhase::AwaitingActionable);
                 wantOn = true;
             }
         }
 
-        if (g_pendingOff.load()) {
+        if (g_disablePhase.load() == DisablePhase::AwaitingActionable) {
             if (!IsDummyBlockingOrBlockstun(dummyMoveId) && ::IsActionable(dummyMoveId)) {
                 wantOn = false;
-                g_pendingOff.store(false);
+                g_disablePhase.store(DisablePhase::Ready);
             } else {
                 wantOn = true;
             }
