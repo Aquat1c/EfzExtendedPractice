@@ -271,6 +271,12 @@ notification cannot undo a stop request. Missing game frames and an unavailable
 render backend are separate fallback reasons. The shared reset gate preserves
 pending reset work across backend unbinding.
 
+Hotkey and controller polling share a worker lifecycle: stopped, starting,
+running and stopping. A stop closes input admission while retaining the worker
+claim until cleanup finishes. Allocation or thread-creation failure releases
+the claim for retry. Controller polling can restart after the old worker has
+released its device resources.
+
 Practice worker faults remain terminal when a later stop request arrives.
 Frame-step completion, savestate side reconciliation and tutorial preview
 refresh each retain their own phases. Input leases, borrowed pointers, patch

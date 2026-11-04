@@ -883,6 +883,13 @@ if(BUILD_TESTING)
                      "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata/nanase.json"
                      "${CMAKE_CURRENT_SOURCE_DIR}/assets/movedata/nanase2.json")
 
+    add_executable(polling_worker_tests tests/polling_worker_tests.cpp)
+    target_include_directories(polling_worker_tests PRIVATE include)
+    set_property(TARGET polling_worker_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME polling_worker_tests COMMAND polling_worker_tests)
+    set_tests_properties(polling_worker_tests PROPERTIES TIMEOUT 20)
+
     add_executable(gui_lifecycle_state_tests tests/gui_lifecycle_state_tests.cpp)
     target_include_directories(gui_lifecycle_state_tests PRIVATE include)
     set_property(TARGET gui_lifecycle_state_tests PROPERTY

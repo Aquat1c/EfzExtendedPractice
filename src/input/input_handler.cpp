@@ -1,3 +1,4 @@
+#include "input/polling_worker.h"
 #include <fstream>
 #include <iomanip>
 #include <chrono>
@@ -334,9 +335,10 @@ static bool SampleHotkeyEdges(ConfigPolicy::HotkeyEdges& edges, const int* keys,
     return anyDown;
 }
 
-std::atomic<bool> keyMonitorRunning(false);
-static std::atomic<bool> keyMonitorAlive{false};
-std::mutex keyMonitorMutex;
+static InputPolling::Worker keyMonitor;
+
+bool IsKeyMonitoringRunning() { return keyMonitor.IsRunning(); }
+void StopKeyMonitoring() { keyMonitor.RequestStop(); }
 
 static void StepStatsPage(int direction) {
     if (!g_statsDisplayEnabled.load()) return;
@@ -351,11 +353,11 @@ static void ToggleAutoJump() {
 
 void MonitorKeys() {
     // CRITICAL: Never run during online mode
-    if (!keyMonitorRunning.load() || !XInputShim::IsPollingActive() || !IsTrainingMenuContext()) {
-        keyMonitorRunning.store(false);
-        keyMonitorAlive.store(false, std::memory_order_release);
+    if (!IsKeyMonitoringRunning() || !XInputShim::IsPollingActive() || !IsTrainingMenuContext()) {
         return;
     }
+    p1Jumping = false;
+    p2Jumping = false;
     LogOut("[KEYBINDS] Key monitoring thread started", true);
     
     {
@@ -379,9 +381,9 @@ void MonitorKeys() {
     int idleLoops = 0;
     const int idleThreshold = 10;
     unsigned long long nextWindowStateRefreshTick = 0;
-    while (keyMonitorRunning.load()) {
+    while (IsKeyMonitoringRunning()) {
         if (!XInputShim::IsPollingActive() || !IsTrainingMenuContext()) {
-            keyMonitorRunning.store(false);
+            StopKeyMonitoring();
             break;
         }
         const unsigned long long nowTick = XPCompat::GetTickCount64Compat();
@@ -862,26 +864,13 @@ void MonitorKeys() {
     }
     
     LogOut("[KEYBINDS] Key monitoring thread exiting", true);
-    keyMonitorRunning.store(false, std::memory_order_release);
-    keyMonitorAlive.store(false, std::memory_order_release);
 }
 
 void RestartKeyMonitoring() {
-    // CRITICAL: Never start key monitoring during online mode
     if (!XInputShim::IsPollingActive() || !IsTrainingMenuContext()) return;
-
-    std::lock_guard<std::mutex> guard(keyMonitorMutex);
-    if (keyMonitorAlive.load(std::memory_order_acquire)) {
-        LogOut("[KEYBINDS] Key monitoring already running", detailedLogging.load());
-        return;
+    if (keyMonitor.Start(MonitorKeys) == InputPolling::StartResult::Failed) {
+        LogOut("[KEYBINDS] Could not start key monitoring; retrying on the next lifecycle update", true);
     }
-
-    p1Jumping = false;
-    p2Jumping = false;
-
-    keyMonitorAlive.store(true, std::memory_order_release);
-    keyMonitorRunning.store(true);
-    std::thread(MonitorKeys).detach();
 }
 
 void DebugInputs() {

@@ -1,3 +1,4 @@
+#include "input/polling_worker.h"
 #include "../include/utils/xinput_shim.h"
 #include "../include/utils/config_policy.h"
 #include "../include/utils/controller_names.h"
@@ -70,7 +71,7 @@ namespace {
     std::string g_lastGenericInventorySummary;
     // Publication only: no XInput/DirectInput call or name lookup while held.
     std::mutex g_snapshotMutex;
-    std::atomic<bool> g_watcherStarted{ false };
+    InputPolling::Worker g_controllerWorker;
     std::atomic<bool> g_pollingActive{false};
     std::atomic<uint64_t> g_pollingGeneration{0};
     void EnsureWatcherStarted();
@@ -925,15 +926,13 @@ namespace {
         g_lastGenericEnumTick = 0;
         g_lastNamesPublishTick = 0;
         g_nativeCapabilitiesMask = 0;
-        g_watcherStarted.store(false, std::memory_order_release);
-        if (XInputShim::IsPollingActive()) EnsureWatcherStarted();
     }
 
     void EnsureWatcherStarted() {
         if (!XInputShim::IsPollingActive()) return;
-        bool expected = false;
-        if (g_watcherStarted.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-            std::thread(ControllerWatcherThread).detach();
+        if (g_controllerWorker.Start(ControllerWatcherThread, EnsureWatcherStarted)
+                == InputPolling::StartResult::Failed) {
+            LogOut("[GAMEPAD] Could not start controller watcher; retrying on the next input poll", true);
         }
     }
 
@@ -974,6 +973,7 @@ namespace XInputShim {
             std::lock_guard<std::mutex> lock(g_snapshotMutex);
             if (g_pollingActive.load() == active) return;
             g_pollingActive.store(active, std::memory_order_release);
+            if (!active) g_controllerWorker.RequestStop();
             g_pollingGeneration.fetch_add(1, std::memory_order_acq_rel);
             g_cachedSnapshot = {};
         }

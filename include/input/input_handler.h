@@ -18,7 +18,8 @@ extern std::atomic<int> autoAirtechDirection;
 extern std::atomic<int> jumpDirection;
 extern std::atomic<int> jumpTarget;
 extern std::atomic<bool> menuOpen;
-extern std::atomic<bool> keyMonitorRunning;
+bool IsKeyMonitoringRunning();
+void StopKeyMonitoring();
 
 extern bool g_directInputAvailable;
 

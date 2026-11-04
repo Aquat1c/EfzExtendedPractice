@@ -749,7 +749,7 @@ void DisableFeatures() {
     MinHookUtils::SetPracticeBattleActive(false);
     GameThread::Clear();
     XInputShim::SetPollingActive(false);
-    keyMonitorRunning.store(false, std::memory_order_release);
+    StopKeyMonitoring();
     if (!g_featuresEnabled.load())
         return;
     
@@ -788,9 +788,9 @@ void DisableFeatures() {
     (void)ClearMotionInputQueue(1, true);
     (void)ClearMotionInputQueue(2, true);
 
-    if (keyMonitorRunning.load()) {
+    if (IsKeyMonitoringRunning()) {
         LogOut("[SYSTEM] Stopping key monitoring due to invalid game mode.", true);
-        keyMonitorRunning.store(false);
+        StopKeyMonitoring();
     }
 
     RemoveAirtechPatches();
@@ -1158,8 +1158,8 @@ void EnterNetplaySuspend() {
     g_pendingControlRestore.store(false);
     ClearTransientInputOverrides();
 
-    if (keyMonitorRunning.load()) {
-        keyMonitorRunning.store(false);
+    if (IsKeyMonitoringRunning()) {
+        StopKeyMonitoring();
     }
 
     StopBGMSuppressionPoller();
@@ -1173,7 +1173,7 @@ void EnterNetplaySuspend() {
     LogOut(
         std::string("[NETPLAY] Suspend cleanup complete")
         + " features=" + (g_featuresEnabled.load() ? "1" : "0")
-        + " keyMonitor=" + (keyMonitorRunning.load() ? "1" : "0")
+        + " keyMonitor=" + (IsKeyMonitoringRunning() ? "1" : "0")
         + " imguiVisible=" + (ImGuiImpl::IsVisible() ? "1" : "0")
         + " fmRequested=" + (IsFinalMemoryBypassEnabled() ? "1" : "0")
         + " fmInstalled=" + (IsFinalMemoryBypassInstalled() ? "1" : "0")
@@ -1296,8 +1296,8 @@ void AuditNetplayMenuEntryState() {
     g_pendingControlRestore.store(false);
     ClearTransientInputOverrides();
 
-    if (keyMonitorRunning.load()) {
-        keyMonitorRunning.store(false);
+    if (IsKeyMonitoringRunning()) {
+        StopKeyMonitoring();
     }
 
     ImGuiImpl::ForceHide();
@@ -2242,7 +2242,7 @@ void ManageKeyMonitoring() {
     bool currentFeaturesEnabled = g_featuresEnabled.load();
     
     bool shouldMonitorKeys = currentWindowActive && currentFeaturesEnabled && practiceBattle;
-    bool isCurrentlyMonitoring = keyMonitorRunning.load();
+    bool isCurrentlyMonitoring = IsKeyMonitoringRunning();
     
     if (shouldMonitorKeys && !isCurrentlyMonitoring) {
         LogOut("[SYSTEM] Starting key monitoring - Window active: " + 
@@ -2253,7 +2253,7 @@ void ManageKeyMonitoring() {
     else if (!shouldMonitorKeys && isCurrentlyMonitoring) {
         std::string reason = !currentFeaturesEnabled ? "features disabled" : "window inactive";
         LogOut("[SYSTEM] Stopping key monitoring - " + reason, true);
-        keyMonitorRunning.store(false);
+        StopKeyMonitoring();
     }
 }
 
