@@ -259,6 +259,21 @@ set_property(TARGET efz_training_mode PROPERTY
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(practice_snapshot_tests tests/practice_isolation/practice_snapshot_tests.cpp src/game/practice_snapshots.cpp)
+    target_include_directories(practice_snapshot_tests PRIVATE include include/game)
+    set_property(TARGET practice_snapshot_tests PROPERTY MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME practice_snapshot_tests COMMAND practice_snapshot_tests)
+
+    add_executable(netplay_snapshot_policy_tests tests/netplay_snapshot_policy_tests.cpp)
+    target_include_directories(netplay_snapshot_policy_tests PRIVATE include)
+    set_property(TARGET netplay_snapshot_policy_tests PROPERTY MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME netplay_snapshot_policy_tests COMMAND netplay_snapshot_policy_tests)
+
+    add_executable(legacy_netplay_handoff_tests tests/practice_isolation/legacy_netplay_handoff_tests.cpp)
+    target_include_directories(legacy_netplay_handoff_tests PRIVATE include)
+    set_property(TARGET legacy_netplay_handoff_tests PROPERTY MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME legacy_netplay_handoff_tests COMMAND legacy_netplay_handoff_tests)
+
     add_executable(overlay_reset_gate_tests tests/overlay_reset_gate_tests.cpp)
     target_include_directories(overlay_reset_gate_tests PRIVATE include)
     add_test(NAME overlay_reset_gate_tests COMMAND overlay_reset_gate_tests)
@@ -278,6 +293,32 @@ if(BUILD_TESTING)
     add_test(NAME audio_output_lifetime_tests COMMAND audio_output_lifetime_tests)
 
     if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+        add_executable(savestate_load_tests tests/practice_isolation/savestate_load_tests.cpp)
+        target_include_directories(savestate_load_tests PRIVATE include)
+        set_property(TARGET savestate_load_tests PROPERTY MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+        add_test(NAME savestate_load_tests COMMAND savestate_load_tests)
+
+        add_executable(audio_configured_apply_tests
+            tests/practice_isolation/audio_configured_apply_tests.cpp src/utils/audio_runtime_state.cpp)
+        target_include_directories(audio_configured_apply_tests PRIVATE include)
+        set_property(TARGET audio_configured_apply_tests PROPERTY MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+        add_test(NAME audio_configured_apply_tests COMMAND audio_configured_apply_tests)
+        add_executable(native_hook_passthrough_tests
+            tests/practice_isolation/native_hook_passthrough_tests.cpp
+            src/utils/minhook_utils.cpp
+            src/runtime/hook_registry.cpp
+            src/runtime/patch_ledger.cpp)
+        target_include_directories(native_hook_passthrough_tests PRIVATE include)
+        set_property(TARGET native_hook_passthrough_tests PROPERTY
+            MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+        if(TARGET minhook)
+            target_link_libraries(native_hook_passthrough_tests PRIVATE minhook)
+        else()
+            target_link_libraries(native_hook_passthrough_tests PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/minhook/lib/libMinHook.x86.lib")
+        endif()
+        add_test(NAME native_hook_passthrough_tests COMMAND native_hook_passthrough_tests)
+
         add_executable(audio_native_adapter_abi_tests
             tests/practice_isolation/audio_native_adapter_abi_tests.cpp)
         target_include_directories(audio_native_adapter_abi_tests PRIVATE

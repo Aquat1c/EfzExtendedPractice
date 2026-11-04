@@ -26,4 +26,4 @@ struct PerFrameSample {
     bool            online;
 };
 
-const PerFrameSample& GetCurrentPerFrameSample();
+PerFrameSample GetCurrentPerFrameSample();

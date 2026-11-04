@@ -151,6 +151,7 @@ void DelayedInitialization(HMODULE hModule) {
             return;
         }
         LogOut("[SYSTEM] MinHook initialized successfully.", true);
+        MinHookUtils::SetNativePassthrough(true);
         Practice::BindRuntimeResources(MinHookUtils::OwnedHooks(),Practice::NativePatchLedger());
         Practice::BindLoadingRequestConsumer(CharacterHotswap::CaptureLoadingRequest,CharacterHotswap::ConsumeLoadingRequest);
         Practice::BindMeasurementResetConsumer(Practice::ResetPracticeMeasurements);
@@ -252,7 +253,13 @@ void DelayedInitialization(HMODULE hModule) {
             LogOut("[NETPLAY] Startup entering suspended mode", true);
             EnterNetplaySuspend();
         } else {
-            LogOut("[NETPLAY] Startup entering active local mode", true);
+            std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+            if (!g_onlineModeActive.load(std::memory_order_acquire)
+                && !IsNetplaySuspendActive() && !IsNetplaySessionActive()) {
+                MinHookUtils::SetPracticeBattleActive(false);
+                MinHookUtils::SetNativePassthrough(false);
+                LogOut("[NETPLAY] Startup waiting for Practice battle ownership", true);
+            }
         }
 
         try {

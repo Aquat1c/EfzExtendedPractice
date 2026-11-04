@@ -28,6 +28,7 @@ void LeaveAudioBoundary() noexcept;
 // Called on the serialized boundary with the exact queried/returned generation.
 bool AcknowledgeAudioOwner(const EfzAudioOwnerV1& record) noexcept;
 void MarkIncompatibleAudioOwner(uint32_t lanes) noexcept;
+void RequestAudioApply() noexcept;
 bool ConsumeAudioApplyRequest() noexcept;
 #include "utils/audio_lane_gain.inl"
 }

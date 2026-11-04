@@ -1,5 +1,7 @@
-// Read via the "EFZNetplay_State" mapping or efz_netplay_mod's EFZNetplay_GetState export (__cdecl).
-// Before reading, check magic, version <= your supported max, and structSize for forward compat.
+// Prefer EFZNetplay_CopyState(output, outputSize, minimumVersion), returning int (__cdecl).
+// Returns 1 for a coherent bounded copy; 0 leaves output untouched. outputSize must be >= 12.
+// Legacy EFZNetplay_GetState and the "EFZNetplay_State" mapping expose mutable storage.
+// Validate magic, version and structSize before using any copied fields.
 #pragma once
 
 #include <cstdint>
@@ -117,7 +119,7 @@ enum EFZNetplayMenuDetail
 };
 
 // Fixed-layout C struct; integers naturally aligned, char arrays ASCII / UTF-8.
-// Written atomically (memcpy under lock) by In-game Netplay, read by consumer mods.
+// EFZNetplay_CopyState serializes the caller's copy with producer publication.
 struct EFZNetplayState
 {
     uint32_t magic;              // Must equal EFZ_NETPLAY_STATE_MAGIC

@@ -699,7 +699,7 @@ bool Install() {
     if (!MinHookUtils::CreateAndEnableHook(reinterpret_cast<void*>(updateVa),
                                            reinterpret_cast<void*>(&UpdateDetour),
                                            reinterpret_cast<void**>(&g_origUpdate),
-                                           "PracticeMenu", "updateTitleScreenLogic", nullptr, nullptr, &MinHookUtils::TicketFor<&UpdateDetour>())) {
+                                           "PracticeMenu", "updateTitleScreenLogic", nullptr, nullptr, &MinHookUtils::TicketFor<&UpdateDetour>(), true)) {
         Log("Failed to hook updateTitleScreenLogic");
         return false;
     }

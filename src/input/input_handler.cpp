@@ -113,7 +113,7 @@ static void SavestateSaveCommand(uintptr_t) {
 }
 static void SavestateLoadCommand(uintptr_t) {
     if (!SavestateHook::TriggerLoad()) {
-        DirectDrawHook::AddMessage("Savestate load unavailable (Revival not ready)", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
+        DirectDrawHook::AddMessage("Savestate load failed or unavailable", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
     }
 }
 static void FramestepTogglePauseCommand(uintptr_t) { Framestep::TogglePause(); }
@@ -143,7 +143,7 @@ static void RequestSavestateLoad() {
             && GetCurrentGamePhase() == GamePhase::Match
             && AreCharactersInitialized()) {
         if (!GameThread::Post(&SavestateLoadCommand)) {
-            DirectDrawHook::AddMessage("Savestate load unavailable (Revival not ready)", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
+            DirectDrawHook::AddMessage("Savestate load failed or unavailable", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);
         }
     } else {
         DirectDrawHook::AddMessage("Savestate load is available only during Practice Match", "SAVESTATE", RGB(255, 180, 120), 1200, 0, 100);

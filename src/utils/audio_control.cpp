@@ -9,6 +9,8 @@
 #include "../include/core/memory.h"
 #include "../include/utils/debug_log.h"
 #include "../include/utils/utilities.h"
+#include "../include/utils/network.h"
+#include "../include/game/auto_action.h"
 #include "../include/utils/minhook_utils.h"
 
 #include <algorithm>
@@ -1906,38 +1908,7 @@ bool PlayBackgroundMusic(uintptr_t gameSystemPtr, unsigned short trackNumber) {
     EFZ_AUDIO_CALLBACK(ImplPlayBackgroundMusic(gameSystemPtr, trackNumber, ReadAudioSettings()));
 }
 
-void ImplApplyConfiguredVolumesNow(const AudioSettingsView& view) {
-    if (RuntimeAudioControlSuppressed("ApplyConfiguredVolumesNow")) {
-        return;
-    }
-    if (!RuntimeVolumeApplicationReady()) {
-        TryEnableVolumeApplication(0, "ApplyConfiguredVolumesNow");
-    }
-    if (!RuntimeVolumeApplicationReady()) {
-
-        return;
-    }
-
-    const uintptr_t gameSystemPtr = AudioGameSystem();
-    if (gameSystemPtr) {
-        if (!SehApplyBgmVolumeToGameSystem(gameSystemPtr, view)) {
-
-        }
-        if (!SehApplyCommonSeVolumeToGameSystem(gameSystemPtr, view)) {
-
-        }
-    } else {
-
-    }
-    if (!SehApplyCharacterSeVolumesNow(view)) {
-
-    }
-
-}
-
-void ApplyConfiguredVolumesNow() {
-    EFZ_AUDIO_CALLBACK(ImplApplyConfiguredVolumesNow(ReadAudioSettings()));
-}
+#include "../include/utils/audio_configured_apply.inl"
 
 int GetConfiguredBgmVolumePercent() {
     return ReadAudioSettings().bgmPercent;

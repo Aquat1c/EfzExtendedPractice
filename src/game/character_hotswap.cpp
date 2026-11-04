@@ -1161,6 +1161,16 @@ bool PracticeLoadingIsReadyForDirectBootstrap(int* loadingContext) {
 }
 
 char __fastcall HookedUpdateLoadingScreen(int* loadingContext, void*) {
+    const auto finishLoading = [](char screen) {
+        if (screen == SCREEN_BATTLE) {
+            std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+            if (!g_onlineModeActive.load(std::memory_order_acquire)
+                && !IsNetplaySuspendActive() && !IsNetplaySessionActive()
+                && GetCurrentGameMode() == GameMode::Practice)
+                MinHookUtils::SetPracticeBattleActive(true);
+        }
+        return screen;
+    };
     auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedUpdateLoadingScreen>());
     if (!execution.Admitted()) return s_originalUpdateLoadingScreen
         ? s_originalUpdateLoadingScreen(loadingContext) : static_cast<char>(SCREEN_CHARACTER_SELECT);
@@ -1185,11 +1195,11 @@ char __fastcall HookedUpdateLoadingScreen(int* loadingContext, void*) {
             s_selectorLoadingHandoffComplete.store(true,
                                                     std::memory_order_release);
         }
-        return nextScreen;
+        return finishLoading(nextScreen);
     }
 
     if (directAction == CharacterHotswap::Transition::DirectLoadingAction::ReturnBattle) {
-        return static_cast<char>(SCREEN_BATTLE);
+        return finishLoading(static_cast<char>(SCREEN_BATTLE));
     }
     if (directAction == CharacterHotswap::Transition::DirectLoadingAction::HoldLoading) {
         return static_cast<char>(SCREEN_LOADING);
@@ -1201,7 +1211,7 @@ char __fastcall HookedUpdateLoadingScreen(int* loadingContext, void*) {
             std::memory_order_acq_rel,
             std::memory_order_acquire)) {
         if (expectedEntry == DirectBootstrapState::BattleHandoff) {
-            return static_cast<char>(SCREEN_BATTLE);
+            return finishLoading(static_cast<char>(SCREEN_BATTLE));
         }
         if (expectedEntry == DirectBootstrapState::Entered) {
             return static_cast<char>(SCREEN_LOADING);
@@ -1294,7 +1304,7 @@ char __fastcall HookedUpdateLoadingScreen(int* loadingContext, void*) {
             LogOut("[HOTSWAP][DIRECT] loader completed after logical cancellation; deferring cleanup until Battle", true);
         }
     }
-    return nextScreen;
+    return finishLoading(nextScreen);
 }
 
 bool SehApplySelections(uintptr_t capturedContext,uintptr_t capturedGameSystem,int p1CharId,
@@ -1629,7 +1639,7 @@ bool InstallDirectPracticeBootstrap() {
                                   reinterpret_cast<void**>(&s_originalUpdateLoadingScreen),
                                   "[HOTSWAP][DIRECT]",
                                   "updateLoadingScreen",
-                                  &alreadyCreated, &MinHookUtils::TicketFor<&HookedUpdateLoadingScreen>())
+                                  &alreadyCreated, &MinHookUtils::TicketFor<&HookedUpdateLoadingScreen>(), true)
         || !s_originalUpdateLoadingScreen) {
         LogOut("[HOTSWAP][DIRECT] Loading hook is already owned or unavailable; selector fallback retained", true);
         (void)PracticeHooks::ReleaseRetiredOriginal(MinHookUtils::OwnedHooks(), updateTarget, s_originalUpdateLoadingScreen);

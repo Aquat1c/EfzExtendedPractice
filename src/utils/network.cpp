@@ -12,6 +12,7 @@
 #include <vector>
 #include <mutex>
 #include "../include/utils/network.h"
+#include "../include/utils/netplay_snapshot_policy.h"
 #include "../include/core/logger.h"
 #include "../include/utils/utilities.h"
 #include "../include/core/memory.h"
@@ -24,11 +25,6 @@
 std::atomic<bool> isOnlineMatch(false);
 
 namespace {
-
-using NetplayGetStateFn = const EFZNetplayState* (__cdecl*)(void);
-
-constexpr size_t kRequiredExportSize =
-    offsetof(EFZNetplayState, stateSeq) + sizeof(uint32_t);
 
 std::atomic<int> s_cachedRevivalVer{0};
 std::atomic<int> s_cachedRevivalFlavor{0};
@@ -49,15 +45,11 @@ std::atomic<int> s_source{static_cast<int>(NetplayStateSource::None)};
 
 // Watcher-thread only.
 int s_offlinePollStreak = 0;
-constexpr int kResumeOfflinePolls = 3;
 
 constexpr DWORD kOtherVersionRetryMs = 1000;
 constexpr int kOtherVersionMaxRetries = 60;
 std::atomic<DWORD> s_otherVersionRetryTick{0};
 std::atomic<int> s_otherVersionRetries{0};
-
-HMODULE s_exportModule = nullptr;
-NetplayGetStateFn s_exportFn = nullptr;
 
 bool TryReadExportSnapshot(EFZNetplayState& outState, NetplayStateSource& outSource);
 
@@ -347,78 +339,20 @@ bool ProcessHasActiveUdpConnection() {
     return false;
 }
 
-bool ValidateExportHeader(const EFZNetplayState& state) {
-    // Forward-compatible: accept a higher producer version or larger struct; the copy clamps to our sizeof.
-    return state.magic == EFZ_NETPLAY_STATE_MAGIC
-        && state.version >= 4u
-        && state.structSize >= kRequiredExportSize;
-}
-
-bool CopyStableExportSnapshot(const EFZNetplayState* raw, EFZNetplayState& outState) {
-    if (!raw) return false;
-
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        EFZNetplayState header = {};
-        std::memcpy(&header, raw, sizeof(header.magic) + sizeof(header.version) + sizeof(header.structSize));
-        if (!ValidateExportHeader(header)) {
-            return false;
-        }
-
-        // The producer writes stateSeq before a plain copy, so equal sequences prove nothing;
-        // only two identical copies rule out a tear.
-        EFZNetplayState local = {};
-        EFZNetplayState confirm = {};
-        const size_t copyBytes = (header.structSize < sizeof(EFZNetplayState))
-            ? static_cast<size_t>(header.structSize)
-            : sizeof(EFZNetplayState);
-        std::memcpy(&local, raw, copyBytes);
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        std::memcpy(&confirm, raw, copyBytes);
-
-        if (std::memcmp(&local, &confirm, copyBytes) != 0) {
-            continue;
-        }
-        if (!ValidateExportHeader(local)) {
-            return false;
-        }
-        outState = local;
-        return true;
-    }
-
-    return false;
-}
-
-bool IsNetplayModInProcess() {
-    return GetModuleHandleA("efz_netplay_mod.dll") != nullptr
-        || GetModuleHandleA("efz_netplay_mod") != nullptr;
-}
-
-NetplayGetStateFn ResolveExportFunction() {
+NetplayCopyStateFn ResolveExportFunction() {
     HMODULE module = GetModuleHandleA("efz_netplay_mod.dll");
     if (module == nullptr) {
         module = GetModuleHandleA("efz_netplay_mod");
     }
 
-    if (module == nullptr) {
-        s_exportModule = nullptr;
-        s_exportFn = nullptr;
-        return nullptr;
-    }
-
-    if (module != s_exportModule || s_exportFn == nullptr) {
-        s_exportModule = module;
-        s_exportFn = reinterpret_cast<NetplayGetStateFn>(
-            GetProcAddress(module, "EFZNetplay_GetState"));
-    }
-
-    return s_exportFn;
+    return module == nullptr ? nullptr : reinterpret_cast<NetplayCopyStateFn>(
+        GetProcAddress(module, "EFZNetplay_CopyState"));
 }
 
 bool TryReadExportSnapshot(EFZNetplayState& outState, NetplayStateSource& outSource) {
     // Export only: the shared-memory name is global and can belong to another game instance.
     if (auto fn = ResolveExportFunction()) {
-        const EFZNetplayState* raw = fn();
-        if (CopyStableExportSnapshot(raw, outState)) {
+        if (TryCopyNetplaySnapshot(fn, outState)) {
             outSource = NetplayStateSource::ExportDll;
             return true;
         }
@@ -463,9 +397,7 @@ bool DetectLegacyUnsupportedRevivalOnline(uintptr_t base, OnlineState& outState,
             outReason = std::string("Legacy RVA 0x") + FormatHexAddress(rva) + " => Spectating";
             return true;
         case 2:
-            outState = OnlineState::Offline;
-            outReason = std::string("Legacy RVA 0x") + FormatHexAddress(rva) + " => Offline";
-            return true;
+            break;
         case 3:
             outState = OnlineState::Tournament;
             outReason = std::string("Legacy RVA 0x") + FormatHexAddress(rva) + " => Tournament";
@@ -475,22 +407,23 @@ bool DetectLegacyUnsupportedRevivalOnline(uintptr_t base, OnlineState& outState,
         }
     }
 
-    outState = OnlineState::Offline;
-    outReason = "Legacy unsupported Revival probe => Offline";
+    outState = OnlineState::Unknown;
+    outReason = "Legacy unsupported Revival probe => Unknown";
     return false;
 }
 
 bool DetectLegacyOnlineState(OnlineState& outState, std::string& outReason) {
     EfzRevivalVersion version = GetEfzRevivalVersion();
-    outState = OnlineState::Offline;
-    outReason = "Legacy fallback => Offline";
-
-    if (version == EfzRevivalVersion::Vanilla) {
-        return false;
-    }
+    outState = OnlineState::Unknown;
+    outReason = "Legacy fallback => Unknown";
 
     HMODULE revivalModule = GetModuleHandleA("EfzRevival.dll");
     if (revivalModule == nullptr) {
+        outState = OnlineState::Offline;
+        outReason = "Revival module absent => Offline";
+        return false;
+    }
+    if (version == EfzRevivalVersion::Vanilla) {
         return false;
     }
 
@@ -501,7 +434,7 @@ bool DetectLegacyOnlineState(OnlineState& outState, std::string& outReason) {
 
     OnlineState state = ReadEfzRevivalOnlineState();
     if (state == OnlineState::Unknown) {
-        outState = OnlineState::Offline;
+        outState = OnlineState::Unknown;
         outReason = "Legacy supported Revival read => Unknown";
         return false;
     }
@@ -909,8 +842,8 @@ OnlineState ReadEfzRevivalOnlineState() {
         return OnlineState::Netplay;
     }
 
-    SetOnlineReason("Revival reads unavailable => Offline");
-    return OnlineState::Offline;
+    SetOnlineReason("Revival reads unavailable => Unknown");
+    return OnlineState::Unknown;
 }
 
 const char* OnlineStateName(OnlineState state) {
@@ -974,7 +907,8 @@ void RefreshNetplayRuntimeState() {
             nextState.legacyOnlineState = legacyState;
         }
         bool exportOwnsRuntime =
-            inMenu || inFlow || activityActive || phaseActive || legacyOnline;
+            inMenu || inFlow || activityActive || phaseActive || legacyOnline
+            || (!hasRelevantCaps && legacyState == OnlineState::Unknown);
         if (hostIdleBackground) {
             exportOwnsRuntime = false;
         }
@@ -1005,20 +939,24 @@ void RefreshNetplayRuntimeState() {
         std::string reason;
         const bool legacyOnline = DetectLegacyOnlineState(legacyState, reason);
         const NetplayRuntimeState previous = GetNetplayRuntimeState();
-        const bool modLoaded = IsNetplayModInProcess();
-        s_offlinePollStreak = legacyOnline ? 0 : s_offlinePollStreak + 1;
-        // Only leaving suspend is debounced: legacyOnline never holds. A failed export read
-        // with the mod loaded holds indefinitely, so one bad poll cannot end a session's suspend.
-        if (!legacyOnline
-            && (modLoaded || (previous.suspendTraining && s_offlinePollStreak < kResumeOfflinePolls))) {
-            if (modLoaded && s_offlinePollStreak == 1) {
+        const bool coherentExportAvailable = ResolveExportFunction() != nullptr;
+        s_offlinePollStreak = NextConfirmedOfflinePollCount(legacyState, s_offlinePollStreak);
+        // A failed coherent export cannot release suspension; older producers use Revival.
+        if (HoldNetplayStateOnMissingSnapshot(coherentExportAvailable, legacyState,
+                                             previous.suspendTraining, s_offlinePollStreak)) {
+            if (coherentExportAvailable && s_offlinePollStreak == 1) {
                 LogOut("[NETPLAY] Export read failed with the netplay mod loaded; holding last known state", true);
             }
             const DWORD refreshTick = nextState.refreshTick;
             nextState = previous;
             nextState.refreshTick = refreshTick;
-            reason = modLoaded ? "Export read failed; holding last known state"
-                               : "Legacy offline poll; holding suspend until confirmed";
+            if (legacyState == OnlineState::Unknown) {
+                nextState.source = NetplayStateSource::LegacyRevival;
+                nextState.legacyOnlineState = OnlineState::Unknown;
+                nextState.suspendTraining = true;
+            }
+            reason = coherentExportAvailable ? "Export read failed; holding last known state"
+                               : "Legacy state unconfirmed; holding suspend until confirmed offline";
         } else {
             nextState.source = (legacyOnline || legacyState != OnlineState::Offline)
                 ? NetplayStateSource::LegacyRevival
@@ -1068,7 +1006,7 @@ bool DetectOnlineMatch() {
     std::string reason;
     bool online = DetectLegacyOnlineState(legacyState, reason);
     SetOnlineReason(reason);
-    return online;
+    return online || legacyState == OnlineState::Unknown;
 }
 
 std::string GetLastOnlineDetectionReason() {

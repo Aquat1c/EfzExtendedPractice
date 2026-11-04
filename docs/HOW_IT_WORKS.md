@@ -98,15 +98,42 @@ Two mechanisms, both reversible:
   `PracticeHooks::Registry` (`src/runtime/hook_registry.cpp`) with preimage
   verification, admission control, and retirement receipts. A hook is only
   physically removed with a qualified receipt, which nothing issues yet. Until
-  then a retired hook stays attached with admission closed, so its original
-  stays callable while callbacks may be in flight, and `MH_Uninitialize` drops
-  it at unload.
+  then a retired hook stays attached with admission closed. Its entry jumps
+  directly to the original trampoline while existing callbacks may finish,
+  and `MH_Uninitialize` drops it at unload.
 - **Byte patches.** `PatchLedger` (`src/runtime/patch_ledger.cpp`) records
   the code bytes of the patches routed through it, with page protection
   handled and an owner on each patch. The Final Memory HP bypass
   (`src/game/final_memory_patch.cpp`) and the timer freezes
   (`src/game/timer_freeze_patch.cpp`) work this way; both are applied only
   inside practice contexts and restored afterward.
+
+### Native forwarding during netplay
+
+Each MinHook entry goes through an indirect jump inside the training DLL.
+Closing admission changes its destination to the original trampoline before
+any C++ callback runs. The jump preserves the native stack, registers and
+flags. The entry remains inside the DLL image so other mods can validate and
+chain it.
+
+This matters for throws: EFZ's native contact routine leaves part of its
+contact table uninitialized, then reads it when placing effects. A C++ wrapper
+can change those stack values even when it only forwards the original call.
+Different effect positions can change particle bounce timing and shared RNG
+consumption. The mod preserves the native call path instead of changing the
+game's collision table or RNG.
+
+Startup holds all entries on their native route until the initial netplay
+state is resolved. Gameplay and audio callbacks open only for an offline
+Practice battle. Replay, VS and Arcade retain the native route. The title
+and loading callbacks are explicit offline exceptions so Practice can be
+entered again. Leaving a Practice battle closes gameplay routing before
+the next screen runs.
+
+Netplay suspension overrides every entry, including those frontend
+exceptions; reopening an individual feature cannot override it. Native
+audio volume processing runs without training's per-play gain changes
+while suspended.
 
 ### Why the hook registry is so cautious
 
@@ -519,8 +546,10 @@ The loop paces on an accumulating schedule to avoid drift: it sleeps most of the
 falls several frames behind it realigns instead of running a burst of catch-up frames. The high-resolution timer and raised priority
 are held only during active intervals. With no owned Practice world, it reads no game pointers and advances no counters.
 
-Other threads read the monitor's data through a sequence snapshot: a reader that catches a write in progress gets a miss, not a torn
-value. Features follow game mode, not window focus; focus only gates key monitoring.
+Other threads read owned copies of the monitor's data under a short mutex.
+The same publication boundary protects complete trigger-option lists, so a
+reader cannot pair a new count with old rows. Features follow game mode,
+not window focus; focus only gates key monitoring.
 
 On character select the engine toggles the active-player byte as players navigate, while the CPU flags stay authoritative, so the mod
 never forces them mid-screen. It re-applies CPU flags on exit. Trigger clearing there waits for stable frames, because the phase can
@@ -660,7 +689,9 @@ These apply across the mod, and they're the things most likely to trip up new co
 - Savestates ride on EfzRevival's own snapshot system:
   `src/game/savestate_hook.cpp` hooks its save/load entry points and
   carries the mod's own state (side, macros, enforcements) across a
-  rollback. The capture and restore backend in
+  rollback. A failed native load returns failure to the hotkey and skips
+  mod-state restoration, counters and success notifications; pause ownership
+  is settled on either result. The capture and restore backend in
   `src/game/custom_savestate.cpp` is not reached by the menus or hotkeys.
 - Character hotswap (`src/game/character_hotswap.cpp`) reloads the match
   with different characters by driving the game's own character-select
@@ -897,14 +928,40 @@ it never competes over `title_ob.dat`. Starting Practice copies the vanilla case
 
 ### Netplay suspend
 
-Suspend is strictly ordered. On entry the online boundary is published first, because any later write would land on netplay's world and desync the match. On exit the resets run with online mode still published, and only then may the Practice hooks be re-admitted. The mod's WndProc is detached before netplay re-takes the window
-procedure, because a foreign procedure on top would turn the re-take into a ring. Hosting in the background isn't a live match: while the host waits idle, training stays active.
+Suspend drains the current Practice writers before publishing the online
+boundary. The monitor, battle callback and direct volume apply share the
+P2 control mutex; retirement also drains the input buffer worker and
+restores owned state. The monitor releases that mutex while parked or
+sleeping. On exit, resets run while online mode is still published, then
+only offline frontend callbacks reopen. A new Practice battle opens its
+own gameplay callbacks.
 
-This mod reads the state only through the export, never by opening the shared memory by name, because that name is global and can belong to another game instance on the same machine. A snapshot counts only when two consecutive copies are byte-identical, because the producer writes its sequence number before a plain copy.
+InGameNetplay calls `EFZ_TM_PrepareNetplayV1` before native online session
+initialization or adoption. Starting a background host listener alone does
+not retire the current Practice session. The call retires Practice synchronously and holds a pending
+handoff until the producer publishes the resulting state and calls
+`EFZ_TM_FinishNetplayPrepareV1`. A failed producer drain rejects the handoff
+and releases its pending hold so the previous offline state can recover.
+Both companion DLLs must support this handshake for synchronous handoff;
+polling an older netplay producer cannot provide that guarantee.
+The mod's WndProc detaches before netplay re-takes the window procedure,
+because a foreign procedure on top would turn the re-take into a ring.
+Hosting in the background is not a live match.
+
+Training reads `EFZNetplay_CopyState`, which copies a complete publication
+under the producer's mutex. A failed copy cannot reopen Practice. Older
+producers fall back to native Revival state; only confirmed offline reads
+count toward resuming, and uncertain reads retain suspension. Training
+never opens the shared mapping by name, which could select another process.
 
 ### Reading the netplay state from another mod
 
-Consumer mods can read the state in-process two ways: open the `EFZNetplay_State` mapping read-only, or call the `__cdecl` export `EFZNetplay_GetState` on `efz_netplay_mod`. Check the magic, check that the version is at most the highest you support, and use `structSize` for forward compatibility.
+Consumer mods should call the `__cdecl` export
+`EFZNetplay_CopyState(output, outputSize, minimumVersion)` on
+`efz_netplay_mod`. It returns nonzero after copying a compatible snapshot
+into caller-owned storage. Check the magic, version and `structSize` before
+using fields. `EFZNetplay_GetState` and the named mapping remain for ABI
+compatibility, but their raw pointer views do not synchronize with writes.
 
 Capability bits say which field groups are live on this tick, and a bit can be zero simply because its data source is unavailable, so check the bit rather than trusting the struct version. Async hosting keeps `sessionMode` at hosting while the local player uses EFZ normally, so use `inNetplayMatch` to detect a live match. Scores are absolute, not adjusted for the local player's side.
 
@@ -919,7 +976,7 @@ Capability bits say which field groups are live on this tick, and a bit can be z
 
 Every callback and transform runs under one recursive boundary that no IO may run under. It uses `__finally`, because native exceptions must release it and a C++ lock alone isn't enough under `/EHsc`. Registration freezes initial ownership, so a late `Initialize` can't activate a transform behind a lane already acknowledged as raw.
 
-This mod and ExtendedConfig name the same process-scoped Win32 mutex, because their separate C++ locks couldn't otherwise stop overlapping file operations. Lock order is module control mutex, then this mutex, then the audio boundary; it's never taken from a native callback, and recursive acquisition by the same control thread lets helpers compose. Writers mark `writeInProgress`, write the payload and revision, then clear the marker, and readers keep the last accepted tuple until a complete pair is written. Moving a slider is the one event-driven apply: volume is the one feature allowed to act outside Practice.
+This mod and ExtendedConfig name the same process-scoped Win32 mutex, because their separate C++ locks couldn't otherwise stop overlapping file operations. Lock order is module control mutex, then this mutex, then the audio boundary; it's never taken from a native callback, and recursive acquisition by the same control thread lets helpers compose. Writers mark `writeInProgress`, write the payload and revision, then clear the marker, and readers keep the last accepted tuple until a complete pair is written. Moving a slider requests an event-driven apply, including outside Practice. Direct applies acquire the P2 control mutex before the audio boundary and recheck netplay ownership; online changes remain pending until offline ownership returns.
 
 ## Controllers and hotkeys
 

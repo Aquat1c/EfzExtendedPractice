@@ -11,7 +11,8 @@ bool CreateHook(void* target,
                 const char* category,
                 const char* label,
                 bool* alreadyCreated = nullptr,
-                PracticeHooks::CallbackTicket* ticket = nullptr);
+                PracticeHooks::CallbackTicket* ticket = nullptr,
+                bool offlineFrontend = false);
 
 bool EnableHook(void* target,
                 const char* category,
@@ -35,13 +36,16 @@ bool CreateAndEnableHook(void* target,
                          const char* label,
                          bool* alreadyCreated = nullptr,
                          bool* alreadyEnabled = nullptr,
-                         PracticeHooks::CallbackTicket* ticket = nullptr);
+                         PracticeHooks::CallbackTicket* ticket = nullptr,
+                         bool offlineFrontend = false);
 
 }
 // The lifecycle continuation owns physical retirement.
 // The bool wrappers never produce safe-continuation or chain-drain receipts.
 namespace MinHookUtils {
 PracticeHooks::Registry& OwnedHooks();
+void SetNativePassthrough(bool enabled);
+void SetPracticeBattleActive(bool active);
 PracticeHooks::Outcome CloseAdmission(const char* owner);
 PracticeHooks::Outcome DisableOwnedTargets(const char* owner,const PracticeHooks::RetirementProof& proof);
 PracticeHooks::Outcome ReclaimDrainedTargets(const char* owner,const PracticeHooks::RetirementProof& proof);

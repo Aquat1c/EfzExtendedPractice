@@ -60,5 +60,6 @@ void MarkIncompatibleAudioOwner(uint32_t lanes) noexcept {
     Store(UnpackAudioSettings(settings.load(std::memory_order_relaxed)));
     LeaveAudioBoundary();
 }
+void RequestAudioApply() noexcept { applyPending.store(true, std::memory_order_release); }
 bool ConsumeAudioApplyRequest() noexcept { return applyPending.exchange(false,std::memory_order_acq_rel); }
 }

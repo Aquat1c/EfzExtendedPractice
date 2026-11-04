@@ -1,11 +1,88 @@
 #include "utils/minhook_utils.h"
 #include "core/logger.h"
 #include <Windows.h>
+#include <array>
 #include <map>
 #include <cstring>
+#include <new>
 #include <sstream>
+#include <utility>
 
 namespace {
+constexpr size_t kNativeGateCount=128;
+alignas(void*) void* volatile nativeGateDestinations[kNativeGateCount]{};
+template<size_t Index> __declspec(naked) void NativeGateCode(){
+    enum { slotOffset=Index*sizeof(void*) };
+    // Preserve native stack residue; netplay requires this E9 destination to be MEM_IMAGE.
+    __asm jmp dword ptr [nativeGateDestinations+slotOffset]
+}
+template<size_t... Indices>
+constexpr std::array<void(*)(),sizeof...(Indices)> MakeGateCodes(std::index_sequence<Indices...>){
+    return {{&NativeGateCode<Indices>...}};
+}
+constexpr auto nativeGateCodes=MakeGateCodes(std::make_index_sequence<kNativeGateCount>{});
+struct NativeEntryGate {
+    void* detour=nullptr;
+    void* original=nullptr;
+    size_t slot=0;
+    bool admitted=false;
+    bool offlineFrontend=false;
+};
+struct NativeGates {
+    std::mutex mutex;
+    std::map<void*,std::unique_ptr<NativeEntryGate>> entries;
+    std::array<bool,kNativeGateCount> occupied{};
+    bool passthrough=true;
+    bool practiceBattle=false;
+};
+NativeGates& Gates(){static auto* gates=new NativeGates;return *gates;}
+void UpdateDestination(NativeEntryGate& gate,bool passthrough){
+    InterlockedExchangePointer(&nativeGateDestinations[gate.slot],
+        gate.admitted&&!passthrough&&(gate.offlineFrontend||Gates().practiceBattle)?gate.detour:gate.original);
+}
+int CreateNativeHook(void* target,void* detour,void** original) try {
+    static_assert(sizeof(void*)==4,"Native entry gates require x86");
+    auto& gates=Gates();
+    std::lock_guard<std::mutex> lock(gates.mutex);
+    if(gates.entries.find(target)!=gates.entries.end())return MH_ERROR_ALREADY_CREATED;
+    size_t slot=0;
+    while(slot<kNativeGateCount && gates.occupied[slot])++slot;
+    if(slot==kNativeGateCount)return MH_ERROR_MEMORY_ALLOC;
+    auto gate=std::make_unique<NativeEntryGate>();
+    gate->detour=detour;
+    gate->slot=slot;
+    const auto inserted=gates.entries.emplace(target,std::move(gate));
+    auto& owned=*inserted.first->second;
+    const int status=MH_CreateHook(target,reinterpret_cast<void*>(nativeGateCodes[slot]),&owned.original);
+    if(status!=MH_OK){gates.entries.erase(inserted.first);return status;}
+    gates.occupied[slot]=true;
+    UpdateDestination(owned,gates.passthrough);
+    if(original)*original=owned.original;
+    return MH_OK;
+} catch(const std::bad_alloc&){return MH_ERROR_MEMORY_ALLOC;}
+void SetNativeAdmission(void* target,bool admitted){
+    auto& gates=Gates();
+    std::lock_guard<std::mutex> lock(gates.mutex);
+    const auto found=gates.entries.find(target);
+    if(found==gates.entries.end())return;
+    found->second->admitted=admitted;
+    UpdateDestination(*found->second,gates.passthrough);
+}
+int RemoveNativeHook(void* target){
+    auto& gates=Gates();
+    std::lock_guard<std::mutex> lock(gates.mutex);
+    const int status=MH_RemoveHook(target);
+    if(status==MH_OK){
+        const auto found=gates.entries.find(target);
+        if(found!=gates.entries.end()){
+            const size_t slot=found->second->slot;
+            InterlockedExchangePointer(&nativeGateDestinations[slot],nullptr);
+            gates.occupied[slot]=false;
+            gates.entries.erase(found);
+        }
+    }
+    return status;
+}
 bool ReadImage(uintptr_t address,size_t size,std::vector<unsigned char>& out) {
     if(!address || !size || address+size<address)return false;
     MEMORY_BASIC_INFORMATION info{};
@@ -18,10 +95,11 @@ bool ReadImage(uintptr_t address,size_t size,std::vector<unsigned char>& out) {
 }
 PracticeHooks::Backend NativeBackend(){
     PracticeHooks::Backend b;
-    b.create=[](void* t,void* d,void** o){return static_cast<int>(MH_CreateHook(t,d,o));};
+    b.create=CreateNativeHook;
     b.enable=[](void* t){return static_cast<int>(MH_EnableHook(t));};
     b.disable=[](void* t){return static_cast<int>(MH_DisableHook(t));};
-    b.remove=[](void* t){return static_cast<int>(MH_RemoveHook(t));};
+    b.remove=RemoveNativeHook;
+    b.setAdmission=SetNativeAdmission;
 #ifndef EFZ_MINHOOK_NO_QUEUE_API
     b.queueDisable=[](void* t){return static_cast<int>(MH_QueueDisableHook(t));};
     b.applyQueued=[](){return static_cast<int>(MH_ApplyQueued());};
@@ -38,6 +116,18 @@ void LogOutcome(const char* action,const char* category,const char* label,const 
 }
 }
 namespace MinHookUtils {
+void SetNativePassthrough(bool enabled){
+    auto& gates=Gates();
+    std::lock_guard<std::mutex> lock(gates.mutex);
+    gates.passthrough=enabled;
+    for(auto& entry:gates.entries)UpdateDestination(*entry.second,enabled);
+}
+void SetPracticeBattleActive(bool active){
+    auto& gates=Gates();
+    std::lock_guard<std::mutex> lock(gates.mutex);
+    gates.practiceBattle=active;
+    for(auto& entry:gates.entries)UpdateDestination(*entry.second,gates.passthrough);
+}
 PracticeHooks::Registry& OwnedHooks(){
     // Resident lifetime: never destroy while callbacks or foreign chains hold
     // execution obligations.
@@ -63,7 +153,7 @@ bool EnableOwnedTargets(const char* owner){
     }
     return result;
 }
-bool CreateHook(void* target,void* detour,void** original,const char* category,const char* label,bool* alreadyCreated,PracticeHooks::CallbackTicket* ticket){
+bool CreateHook(void* target,void* detour,void** original,const char* category,const char* label,bool* alreadyCreated,PracticeHooks::CallbackTicket* ticket,bool offlineFrontend){
     if(alreadyCreated)*alreadyCreated=false;
     PracticeHooks::TargetSpec spec;
     for(const auto& r:OwnedHooks().Snapshot())if(r.spec.target==target){spec=r.spec;if(alreadyCreated)*alreadyCreated=true;break;}
@@ -89,6 +179,15 @@ bool CreateHook(void* target,void* detour,void** original,const char* category,c
     const auto result=OwnedHooks().Acquire(spec,original);
     LogOutcome("create",category,label,result);
     if (!result.Complete()) return false;
+    {
+        auto& gates=Gates();
+        std::lock_guard<std::mutex> lock(gates.mutex);
+        const auto gate=gates.entries.find(target);
+        if(gate!=gates.entries.end()) {
+            gate->second->offlineFrontend=offlineFrontend;
+            UpdateDestination(*gate->second,gates.passthrough);
+        }
+    }
     if (ticket) {
         const auto bound=OwnedHooks().BindCallback(target,*ticket);
         LogOutcome("bind callback",category,label,bound);
@@ -114,7 +213,7 @@ bool RemoveHook(void* target,const char* category,const char* label,bool* wasMis
     CloseAdmission(category);
     const auto result=ReclaimDrainedTargets(category,{});LogOutcome("remove",category,label,result);return result.Complete()&&!HasOwnedTarget(target);
 }
-bool CreateAndEnableHook(void* target,void* detour,void** original,const char* category,const char* label,bool* alreadyCreated,bool* alreadyEnabled,PracticeHooks::CallbackTicket* ticket){
-    return CreateHook(target,detour,original,category,label,alreadyCreated,ticket)&&EnableHook(target,category,label,alreadyEnabled);
+bool CreateAndEnableHook(void* target,void* detour,void** original,const char* category,const char* label,bool* alreadyCreated,bool* alreadyEnabled,PracticeHooks::CallbackTicket* ticket,bool offlineFrontend){
+    return CreateHook(target,detour,original,category,label,alreadyCreated,ticket,offlineFrontend)&&EnableHook(target,category,label,alreadyEnabled);
 }
 }

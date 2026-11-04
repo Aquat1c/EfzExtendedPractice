@@ -1,3 +1,4 @@
+#include "game/practice_snapshots.h"
 #include "runtime/practice_worker.h"
 #include "runtime/practice_runtime.h"
 #include "runtime/practice_session.h"
@@ -19,6 +20,7 @@
 #include "../include/utils/utilities.h"
 #include "../include/utils/bgm_control.h"
 #include "../include/utils/audio_control.h"
+#include "../include/utils/audio_runtime_state.h"
 #include "../include/core/memory.h"
 #include "../include/core/logger.h"
 #include "../include/gui/overlay.h"
@@ -116,7 +118,7 @@ static std::atomic<bool> s_logOnce_CsSnapFallback{false};
 static std::atomic<bool> s_logOnce_CsApplyPost{false};
 static std::atomic<bool> s_practiceHintShown{false};
 
-PerFrameSample g_lastSample{};
+static PerFrameSample g_lastSample{};
 
 extern std::atomic<bool> g_suppressAutoActionClearLogging;
 
@@ -415,37 +417,6 @@ static void ResetControlOnCharacterSelect() {
     }
 }
 
-namespace {
-    struct SnapBuf { FrameSnapshot snap; std::atomic<uint32_t> seq{0}; };
-    static SnapBuf g_snapA, g_snapB;
-    static std::atomic<SnapBuf*> g_writeBuf{&g_snapA};
-    static std::atomic<SnapBuf*> g_readBuf{&g_snapB};
-}
-
-static void PublishSnapshot(const FrameSnapshot &s) {
-    SnapBuf* wb = g_writeBuf.load(std::memory_order_relaxed);
-    uint32_t startSeq = wb->seq.load(std::memory_order_relaxed);
-    if ((startSeq & 1u) == 0u) startSeq++; // odd = being written
-    wb->seq.store(startSeq, std::memory_order_release);
-    wb->snap = s;
-    wb->seq.store(startSeq+1, std::memory_order_release); // even = stable
-    SnapBuf* oldRead = g_readBuf.exchange(wb, std::memory_order_acq_rel);
-    g_writeBuf.store(oldRead, std::memory_order_release);
-}
-
-bool TryGetLatestSnapshot(FrameSnapshot &out, unsigned int maxAgeMs) {
-    SnapBuf* rb = g_readBuf.load(std::memory_order_acquire);
-    uint32_t s1 = rb->seq.load(std::memory_order_acquire);
-    if (s1 & 1u) return false;
-    FrameSnapshot tmp = rb->snap;
-    uint32_t s2 = rb->seq.load(std::memory_order_acquire);
-    if (s1 != s2 || (s2 & 1u)) return false;
-    unsigned long long now = XPCompat::GetTickCount64Compat();
-    if (tmp.tickMs == 0 || now - tmp.tickMs > maxAgeMs) return false;
-    out = tmp;
-    return true;
-}
-
 bool IsValidGameMode(GameMode mode) {
     // Training runs in Practice only; restrictToPracticeMode is ignored.
     return mode == GameMode::Practice;
@@ -453,7 +424,8 @@ bool IsValidGameMode(GameMode mode) {
 
 bool ShouldFeaturesBeActive() {
     if (IsNetplaySuspendActive() || IsNetplaySessionActive()
-        || g_onlineModeActive.load(std::memory_order_acquire)) {
+        || g_onlineModeActive.load(std::memory_order_acquire)
+        || GetCurrentGamePhase() != GamePhase::Match) {
         return false;
     }
 
@@ -875,15 +847,9 @@ void UpdateTriggerOverlay() {
 
             std::string combined;
             const std::string poolSummary = formatPoolSummary();
-            const TriggerOption* opts = nullptr; int optCount = 0;
-            switch (triggerType) {
-                case TRIGGER_AFTER_BLOCK: opts = g_afterBlockOptions; optCount = g_afterBlockOptionCount; break;
-                case TRIGGER_ON_WAKEUP: opts = g_onWakeupOptions; optCount = g_onWakeupOptionCount; break;
-                case TRIGGER_AFTER_HITSTUN: opts = g_afterHitstunOptions; optCount = g_afterHitstunOptionCount; break;
-                case TRIGGER_AFTER_AIRTECH: opts = g_afterAirtechOptions; optCount = g_afterAirtechOptionCount; break;
-                case TRIGGER_ON_RG: opts = g_onRGOptions; optCount = g_onRGOptionCount; break;
-                default: break;
-            }
+            const auto options = GetTriggerOptions(triggerType);
+            const TriggerOption* opts = options.rows.data();
+            const int optCount = options.count;
             if (!poolSummary.empty()) {
                 combined = poolSummary;
             } else {
@@ -1091,6 +1057,8 @@ void ResetFrameMonitorTimeline() {
     if(monitorWorld.s_crRFFreezeP2)StopRFFreezePlayer(2);
     monitorWorld.Reset();
     s_ptrCache={};g_lastSample={};
+    PublishPracticeFrameSample(g_lastSample);
+    PublishFrameSnapshot({});
     monitorTimeline.fetch_add(1,std::memory_order_release);
 }
 
@@ -1161,6 +1129,7 @@ void FrameDataMonitor() {
             expectedNext=clock::now()+targetFrameTime;
             continue;
         }
+        std::unique_lock<std::recursive_mutex> mutationLock(g_p2ControlMutex);
         Practice::SetMonitorParked(false);
         if(scopedMonitor && (work.Generation()!=monitorWorldGeneration || seenMonitorTimeline!=monitorTimeline.load(std::memory_order_acquire))) {
             seenMonitorTimeline=monitorTimeline.load(std::memory_order_acquire);
@@ -1234,16 +1203,20 @@ void FrameDataMonitor() {
                 highResActive = false;
             }
             g_lastSample.online = true;
+            PublishPracticeFrameSample(g_lastSample);
             DropEngineTickState();
             // Assist state only: the netplay world is never written.
             monitorWorld.s_crgAssistActive = false;
             monitorWorld.s_crgSavedAutoBlockValid = false;
             matchLogAnchorInternal = -1;
             SetCurrentLogMatchInternalFrame(-1);
+            mutationLock.unlock();
             (void)Practice::WaitForMonitorSignal(250000000);
             expectedNext = clock::now() + targetFrameTime;
             continue;
         }
+
+        if (AudioControl::ConsumeAudioApplyRequest()) AudioControl::ApplyConfiguredVolumesNow();
 
     GamePhase currentPhase = scopedMonitor?GamePhase::Match:GetCurrentGamePhase();
     GameMode currentMode = scopedMonitor?GameMode::Practice:GetCurrentGameMode();
@@ -1259,6 +1232,7 @@ void FrameDataMonitor() {
         DropEngineTickState();
         matchLogAnchorInternal = -1;
         SetCurrentLogMatchInternalFrame(-1);
+        mutationLock.unlock();
         (void)Practice::WaitForMonitorSignal(50000000);
         expectedNext = clock::now() + targetFrameTime;
         continue;
@@ -1838,6 +1812,7 @@ void FrameDataMonitor() {
             g_lastSample.p1Ptr = s_ptrCache.p1;
             g_lastSample.p2Ptr = s_ptrCache.p2;
             g_lastSample.online = g_onlineModeActive.load();
+            PublishPracticeFrameSample(g_lastSample);
             ComboOverlay::Tick(g_lastSample);
 
             auto& s_rgP1=monitorWorld.s_rgP1;
@@ -2664,7 +2639,7 @@ void FrameDataMonitor() {
                     s_prevHpP1 = p1Hp; s_prevHpP2 = p2Hp;
                 }
 
-                PublishSnapshot(snap);
+                PublishFrameSnapshot(snap);
 
                 auto& charEnfDecim=monitorWorld.charEnfDecim;
                 if ((++charEnfDecim % 12) == 0) {
@@ -2711,6 +2686,7 @@ void FrameDataMonitor() {
         }
         
 FRAME_MONITOR_FRAME_END:
+        mutationLock.unlock();
         auto beforeSleep = clock::now();
         while (beforeSleep < expectedNext && !Practice::MonitorStopRequested() && (!scopedMonitor || work.IsCurrent())) {
             auto remaining = expectedNext - beforeSleep;
@@ -2734,6 +2710,7 @@ FRAME_MONITOR_FRAME_END:
             beforeSleep = clock::now();
         }
 
+        mutationLock.lock();
         if(Practice::MonitorStopRequested() || (scopedMonitor && !work.IsCurrent()))continue;
         // Maintain RF freeze inline only during a Practice match with features on.
         if (g_featuresEnabled.load(std::memory_order_acquire)
@@ -2792,11 +2769,7 @@ FRAME_MONITOR_FRAME_END:
     }
 }
 
-const PerFrameSample& GetCurrentPerFrameSample() {
-    static PerFrameSample initial{};
-    if (frameCounter.load() == 0) return initial;
-    return g_lastSample;
-}
+
 
 void ReinitializeOverlays() {
     if (g_TriggerAfterBlockId != -1) {

@@ -3,6 +3,7 @@
 #include "game/character_hotswap.h"
 #include "runtime/practice_battle_gates.h"
 #include "../include/game/game_state.h"
+#include "../include/game/auto_action.h"
 #include "../include/game/game_thread_queue.h"
 #include "../include/game/final_memory_patch.h"
 #include "../include/game/timer_freeze_patch.h"
@@ -146,6 +147,7 @@ namespace {
     char __fastcall HookedBattleUpdate(void* battleContext, void*) {
     auto hookExecution = MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedBattleUpdate>());
     if (!hookExecution.Admitted()) return oBattleUpdate ? oBattleUpdate(battleContext) : SCREEN_BATTLE;
+        std::lock_guard<std::recursive_mutex> battleLock(g_p2ControlMutex);
         if (g_onlineModeActive.load(std::memory_order_acquire)
             || IsNetplaySuspendActive() || IsNetplaySessionActive()
             || !IsPracticeContext()) {
@@ -170,6 +172,8 @@ namespace {
         const uint8_t accepted = ConsumeBattleFrontendResult(static_cast<uint8_t>(result),
             Practice::BattleCleanupHeld(battleContext),0);
         if (accepted != SCREEN_BATTLE) {
+            std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+            MinHookUtils::SetPracticeBattleActive(false);
             XInputShim::SetPollingActive(false);
             // Last battle frame: unwind menu/framestep pause while the Practice controller is alive.
             ImGuiImpl::ForceHide();

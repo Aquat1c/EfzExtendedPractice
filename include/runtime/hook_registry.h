@@ -44,6 +44,7 @@ struct Backend {
     std::function<int(void*)> enable, disable, remove, queueDisable;
     std::function<int()> applyQueued;
     std::function<bool(uintptr_t,size_t,std::vector<unsigned char>&)> read;
+    std::function<void(void*,bool)> setAdmission;
     int ok=0, alreadyCreated=1, alreadyEnabled=2, alreadyDisabled=3;
 };
 struct CallbackState {

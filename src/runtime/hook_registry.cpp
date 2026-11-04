@@ -216,7 +216,9 @@ Outcome Registry::Enable(void* target){
                 }
             }
             if(!r.admissionOpen){if(epoch_==std::numeric_limits<uint64_t>::max())return {Result::Conflict,1};++epoch_;}
-            r.admissionOpen=true;r.callbacks->admitted.store(true,std::memory_order_release);return {};
+            r.admissionOpen=true;r.callbacks->admitted.store(true,std::memory_order_release);
+            if(!r.externalLedger && backend_.setAdmission)backend_.setAdmission(target,true);
+            return {};
         }
         if(r.state==State::ExternalInstalling)return {Result::Pending,1};
         if(!Matches(r,r.spec.preimage)) return {Result::ForeignBytes,1};
@@ -234,7 +236,9 @@ Outcome Registry::Enable(void* target){
         if(r.enableStatus!=backend_.ok && r.enableStatus!=backend_.alreadyEnabled)return {Result::BackendFailure,1,r.enableStatus};
         r.state=State::Enabled;++epoch_;
         if(!backend_.read(r.spec.rangeStart,r.spec.preimage.size(),r.installed)) return {Result::ForeignBytes,1};
-        r.admissionOpen=true;r.callbacks->admitted.store(true,std::memory_order_release);return {};
+        r.admissionOpen=true;r.callbacks->admitted.store(true,std::memory_order_release);
+        if(backend_.setAdmission)backend_.setAdmission(target,true);
+        return {};
     }
     return {Result::Conflict};
 }
@@ -249,7 +253,10 @@ EntryImage Registry::Image(void* target) const {
 }
 Outcome Registry::CloseAdmission(const std::string& owner){
     std::lock_guard<std::mutex> lock(mutex_);
-    for(auto& r:records_) if(owner.empty()||r.spec.owner==owner){r.admissionOpen=false;r.callbacks->admitted.store(false,std::memory_order_release);}
+    for(auto& r:records_) if(owner.empty()||r.spec.owner==owner){
+        if(!r.externalLedger && backend_.setAdmission)backend_.setAdmission(r.spec.target,false);
+        r.admissionOpen=false;r.callbacks->admitted.store(false,std::memory_order_release);
+    }
     return {};
 }
 Outcome Registry::DisableOwnedTargets(const std::string& owner,const RetirementProof& p){

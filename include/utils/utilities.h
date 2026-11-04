@@ -518,16 +518,7 @@ extern std::atomic<bool>     triggerAfterHitstunUsePool;
 extern std::atomic<bool>     triggerAfterAirtechUsePool;
 extern std::atomic<bool>     triggerOnRGUsePool;
 
-extern int           g_afterBlockOptionCount;
-extern TriggerOption g_afterBlockOptions[MAX_TRIGGER_OPTIONS];
-extern int           g_onWakeupOptionCount;
-extern TriggerOption g_onWakeupOptions[MAX_TRIGGER_OPTIONS];
-extern int           g_afterHitstunOptionCount;
-extern TriggerOption g_afterHitstunOptions[MAX_TRIGGER_OPTIONS];
-extern int           g_afterAirtechOptionCount;
-extern TriggerOption g_afterAirtechOptions[MAX_TRIGGER_OPTIONS];
-extern int           g_onRGOptionCount;
-extern TriggerOption g_onRGOptions[MAX_TRIGGER_OPTIONS];
+
 
 // Forward dash follow-up (0=None, 1=5A,2=5B,3=5C,4=2A,5=2B,6=2C)
 extern std::atomic<int> forwardDashFollowup;

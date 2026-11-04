@@ -1,3 +1,4 @@
+#include "game/practice_snapshots.h"
 #include "../include/gui/imgui_gui.h"
 #include "../include/gui/imgui_impl.h"
 #include "../include/utils/utilities.h"
@@ -4256,17 +4257,7 @@ namespace ImGuiGui {
             triggerAfterAirtechMacroSlot.store(displayData.macroSlotAfterAirtech);
             triggerOnRGMacroSlot.store(displayData.macroSlotOnRG);
 
-            auto clampCopy = [](int srcCount, const TriggerOption* srcArr, int& dstCount, TriggerOption* dstArr){
-                int n = srcCount; if (n < 0) n = 0; if (n > MAX_TRIGGER_OPTIONS) n = MAX_TRIGGER_OPTIONS;
-                dstCount = n;
-                for (int i=0;i<n;i++) dstArr[i] = srcArr[i];
-                for (int i=n;i<MAX_TRIGGER_OPTIONS;i++) dstArr[i] = TriggerOption{false, ACTION_5A, 0, 0, (int)BASE_ATTACK_5A, 0, 0};
-            };
-            clampCopy(displayData.afterBlockOptionCount,    displayData.afterBlockOptions,    g_afterBlockOptionCount,    g_afterBlockOptions);
-            clampCopy(displayData.onWakeupOptionCount,      displayData.onWakeupOptions,      g_onWakeupOptionCount,      g_onWakeupOptions);
-            clampCopy(displayData.afterHitstunOptionCount,  displayData.afterHitstunOptions,  g_afterHitstunOptionCount,  g_afterHitstunOptions);
-            clampCopy(displayData.afterAirtechOptionCount,  displayData.afterAirtechOptions,  g_afterAirtechOptionCount,  g_afterAirtechOptions);
-            clampCopy(displayData.onRGOptionCount,          displayData.onRGOptions,          g_onRGOptionCount,          g_onRGOptions);
+            PublishTriggerOptions(displayData);
             
             SyncFinalMemoryBypassForCurrentMode("ImGui Apply");
 

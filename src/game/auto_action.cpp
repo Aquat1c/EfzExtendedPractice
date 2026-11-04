@@ -1,3 +1,4 @@
+#include "game/practice_snapshots.h"
 #include "../include/game/auto_action.h"
 #include "../include/core/constants.h"
 #include "../include/utils/utilities.h"
@@ -6436,27 +6437,15 @@ static inline bool HasEnabledRows(int triggerType) {
         case TRIGGER_ON_RG:         mainEnabled = triggerOnRGEnabled.load(); break;
         default: mainEnabled = false; break;
     }
-    switch (triggerType) {
-        case TRIGGER_AFTER_BLOCK:   return mainEnabled || countEnabled(g_afterBlockOptions, g_afterBlockOptionCount) > 0;
-        case TRIGGER_ON_WAKEUP:     return mainEnabled || countEnabled(g_onWakeupOptions, g_onWakeupOptionCount) > 0;
-        case TRIGGER_AFTER_HITSTUN: return mainEnabled || countEnabled(g_afterHitstunOptions, g_afterHitstunOptionCount) > 0;
-        case TRIGGER_AFTER_AIRTECH: return mainEnabled || countEnabled(g_afterAirtechOptions, g_afterAirtechOptionCount) > 0;
-        case TRIGGER_ON_RG:         return mainEnabled || countEnabled(g_onRGOptions, g_onRGOptionCount) > 0;
-        default: return mainEnabled;
-    }
+    const auto options = GetTriggerOptions(triggerType);
+    return mainEnabled || countEnabled(options.rows.data(), options.count) > 0;
 }
 
 static inline bool PickRandomRow(int triggerType, int playerNum,
                                  TriggerOption &out) {
-    const TriggerOption* arr = nullptr; int cnt = 0;
-    switch (triggerType) {
-        case TRIGGER_AFTER_BLOCK:   arr = g_afterBlockOptions;   cnt = g_afterBlockOptionCount; break;
-        case TRIGGER_ON_WAKEUP:     arr = g_onWakeupOptions;     cnt = g_onWakeupOptionCount; break;
-        case TRIGGER_AFTER_HITSTUN: arr = g_afterHitstunOptions; cnt = g_afterHitstunOptionCount; break;
-        case TRIGGER_AFTER_AIRTECH: arr = g_afterAirtechOptions; cnt = g_afterAirtechOptionCount; break;
-        case TRIGGER_ON_RG:         arr = g_onRGOptions;         cnt = g_onRGOptionCount; break;
-        default: return false;
-    }
+    const auto options = GetTriggerOptions(triggerType);
+    const TriggerOption* arr = options.rows.data();
+    const int cnt = options.count;
 
     const int targetChar = playerNum == 1 ? displayData.p1CharID
                                            : displayData.p2CharID;

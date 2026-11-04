@@ -169,25 +169,6 @@ namespace {
         Framestep::CancelActiveState("revival savestate load");
     }
 
-    void FinishTrackedLoad(bool result) {
-        s_loadCount.fetch_add(1, std::memory_order_relaxed);
-        RestoreModState();
-        Framestep::FinishSavestateRestore(s_loadStartedFromOwnedPause);
-        s_loadStartedFromOwnedPause = false;
-        ComboOverlay::ResetForStateLoad();
-        Mission::Engine::NotifyStateLoaded();
-        if (uintptr_t base = GetEFZBase()) {
-            CharacterSettings::TickCharacterEnforcements(base, displayData);
-        }
-
-        LogOut("[SAVESTATE][REVIVAL] === LOAD STATE END (result=" + std::string(result ? "true" : "false") + ") ===", true);
-        if (!::Mission::Engine::Runner::IsActive() &&
-            !::Mission::TutorialSession::IsActive() &&
-            !::Mission::Engine::Recorder::IsSessionActive() &&
-            !::Mission::Engine::Demo::IsActive())
-            DirectDrawHook::AddMessage("Revival State Loaded", "savestate", RGB(100, 255, 100), 1500, 0, 100);
-    }
-
     void BeginTrackedSave() {
         LogOut("[SAVESTATE][REVIVAL] === SAVE STATE BEGIN ===", true);
         CaptureModState();
@@ -201,19 +182,6 @@ namespace {
             !::Mission::Engine::Recorder::IsSessionActive() &&
             !::Mission::Engine::Demo::IsActive())
             DirectDrawHook::AddMessage("Revival State Saved", "savestate", RGB(255, 255, 100), 1500, 0, 100);
-    }
-
-    bool __fastcall HookedLoadState(void* self, void*) {
-        auto execution=MinHookUtils::EnterExecution(MinHookUtils::TicketFor<&HookedLoadState>());
-        if (execution && !execution.Admitted()) return oLoadState ? oLoadState(self) : false;
-        if (!PracticeBattleHooksOpen()) {
-            return oLoadState ? oLoadState(self) : false;
-        }
-
-        BeginTrackedLoad();
-        bool result = oLoadState ? oLoadState(self) : false;
-        FinishTrackedLoad(result);
-        return result;
     }
 
     void __fastcall HookedSaveState(void* self, void*) {
@@ -233,6 +201,8 @@ namespace {
         FinishTrackedSave();
     }
 }
+
+#include "../../include/game/savestate_load.inl"
 
 namespace SavestateHook {
     bool Install() {
@@ -399,18 +369,6 @@ namespace SavestateHook {
             return false;
         }
         HookedSaveState(ptr, nullptr);
-        return true;
-    }
-
-    bool TriggerLoad() {
-        if (!s_installed.load() || !oLoadState) return false;
-        void* ptr = PauseIntegration::GetPracticeControllerPtr();
-        if (!ptr) ptr = PauseIntegration::ResolvePracticeControllerPtrNow("savestate hotkey load");
-        if (!ptr) {
-            LogOut("[SAVESTATE][REVIVAL] TriggerLoad: Practice controller unavailable", true);
-            return false;
-        }
-        HookedLoadState(ptr, nullptr);
         return true;
     }
 

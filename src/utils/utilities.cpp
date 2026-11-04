@@ -1,7 +1,9 @@
+#include "game/practice_snapshots.h"
 #include "../include/utils/utilities.h"
 
 #include "../include/core/constants.h"
 #include "../include/runtime/practice_runtime.h"
+#include "../include/runtime/legacy_netplay_handoff.h"
 #include "../include/utils/xinput_shim.h"
 #include "../include/core/logger.h"
 #include "../include/core/memory.h"
@@ -65,6 +67,7 @@
 
 #include "../include/utils/bgm_control.h"
 #include "../include/utils/network.h"
+#include "../include/utils/minhook_utils.h"
 #include "../include/utils/pause_integration.h"
 #include "../include/utils/xp_compat.h"
 #include "../include/core/globals.h"
@@ -75,6 +78,7 @@ std::atomic<bool> g_onlineModeActive(false);
 std::atomic<bool> g_suppressAutoActionClearLogging(false);
 
 namespace {
+std::atomic<uint32_t> g_netplayHandoffPending{0};
 std::atomic<uint32_t> g_runtimeLifecycleGeneration{1};
 std::atomic<bool> g_runtimeLifecycleResyncPending{false};
 std::mutex g_runtimeLifecycleReasonMutex;
@@ -474,23 +478,7 @@ void ResetRuntimeSettingsToDisplayDefaults() {
     triggerAfterAirtechMacroSlot.store(displayData.macroSlotAfterAirtech);
     triggerOnRGMacroSlot.store(displayData.macroSlotOnRG);
 
-    auto clampCopy = [](int srcCount, const TriggerOption* srcArr, int& dstCount, TriggerOption* dstArr) {
-        int count = srcCount;
-        if (count < 0) count = 0;
-        if (count > MAX_TRIGGER_OPTIONS) count = MAX_TRIGGER_OPTIONS;
-        dstCount = count;
-        for (int i = 0; i < count; ++i) {
-            dstArr[i] = srcArr[i];
-        }
-        for (int i = count; i < MAX_TRIGGER_OPTIONS; ++i) {
-            dstArr[i] = TriggerOption{false, ACTION_5A, 0, 0, (int)BASE_ATTACK_5A, 0, 0};
-        }
-    };
-    clampCopy(displayData.afterBlockOptionCount, displayData.afterBlockOptions, g_afterBlockOptionCount, g_afterBlockOptions);
-    clampCopy(displayData.onWakeupOptionCount, displayData.onWakeupOptions, g_onWakeupOptionCount, g_onWakeupOptions);
-    clampCopy(displayData.afterHitstunOptionCount, displayData.afterHitstunOptions, g_afterHitstunOptionCount, g_afterHitstunOptions);
-    clampCopy(displayData.afterAirtechOptionCount, displayData.afterAirtechOptions, g_afterAirtechOptionCount, g_afterAirtechOptions);
-    clampCopy(displayData.onRGOptionCount, displayData.onRGOptions, g_onRGOptionCount, g_onRGOptions);
+    PublishTriggerOptions(displayData);
 
     g_contRecoveryEnabled.store(displayData.continuousRecoveryEnabled);
     g_contRecoveryApplyTo.store(displayData.continuousRecoveryApplyTo);
@@ -706,7 +694,10 @@ void ResetPracticeMatchSessionState(const char* reason) {
 }
 
 void EnableFeatures() {
-    if (g_onlineModeActive.load()) return;
+    std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+    if (g_onlineModeActive.load() || IsNetplaySuspendActive() || IsNetplaySessionActive()
+        || GetCurrentGameMode() != GameMode::Practice
+        || GetCurrentGamePhase() != GamePhase::Match) return;
     if (g_featuresEnabled.load())
         return;
 
@@ -722,6 +713,7 @@ void EnableFeatures() {
     }
 
     g_featuresEnabled.store(true);
+    MinHookUtils::SetPracticeBattleActive(true);
     const int fmApplied = GameThread::SyncPracticePatches("EnableFeatures");
     if (fmApplied > 0 || detailedLogging.load()) {
         LogOut(
@@ -753,6 +745,8 @@ void EnableFeatures() {
 namespace { void ClearTransientInputOverrides(); }
 
 void DisableFeatures() {
+    std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+    MinHookUtils::SetPracticeBattleActive(false);
     GameThread::Clear();
     XInputShim::SetPollingActive(false);
     keyMonitorRunning.store(false, std::memory_order_release);
@@ -1097,15 +1091,11 @@ void AppendPlayerReadbackSummary(
 }
 
 void EnterNetplaySuspend() {
-    // Publish the online boundary first: any later write lands on netplay's world and desyncs the match.
-    bool wasSuspended = false;
-    {
-        // Queue publication rechecks online mode under this mutex; no new P2 generation slips past.
-        std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
-        wasSuspended = g_onlineModeActive.exchange(true, std::memory_order_acq_rel);
-        isOnlineMatch.store(true, std::memory_order_release);
+    Practice::RetireLegacyPractice(g_p2ControlMutex, g_onlineModeActive, [] {
+        MinHookUtils::SetNativePassthrough(true);
+        MinHookUtils::SetPracticeBattleActive(false);
         GameThread::Clear();
-        if (!wasSuspended) {
+        {
             MacroController::Stop();
             KaoriRecoilDuck::CancelAll("entering netplay suspend");
             CancelAllAutoActionChargeFollowups(
@@ -1121,10 +1111,6 @@ void EnterNetplaySuspend() {
                 RestoreP2ControlState();
             }
         }
-    }
-    if (wasSuspended) {
-        return;
-    }
 
     NetplayRuntimeState state = GetNetplayRuntimeState();
     std::ostringstream oss;
@@ -1194,12 +1180,35 @@ void EnterNetplaySuspend() {
         + " fmRestored=" + std::to_string(fmRestored),
         true);
 
-    if (state.inNetplayMenu || state.exportState.activityPhase == EFZ_ACTIVITY_MENU) {
-        AuditNetplayMenuEntryState();
+    isOnlineMatch.store(true, std::memory_order_release);
+    });
+}
+
+extern "C" __declspec(dllexport) uint32_t __cdecl EFZ_TM_PrepareNetplayV1() {
+    bool pending = false;
+    try {
+        std::lock_guard<std::recursive_mutex> lock(g_p2ControlMutex);
+        g_netplayHandoffPending.fetch_add(1, std::memory_order_acq_rel);
+        pending = true;
+        EnterNetplaySuspend();
+        return 1;
+    } catch (...) {
+        if (pending) g_netplayHandoffPending.fetch_sub(1, std::memory_order_acq_rel);
+        return 0;
     }
 }
 
+extern "C" __declspec(dllexport) void __cdecl EFZ_TM_FinishNetplayPrepareV1() {
+    std::lock_guard<std::recursive_mutex> lock(g_p2ControlMutex);
+    if (g_netplayHandoffPending.load(std::memory_order_acquire))
+        g_netplayHandoffPending.fetch_sub(1, std::memory_order_acq_rel);
+}
+
 void ExitNetplaySuspend() {
+    std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
+    if (g_netplayHandoffPending.load(std::memory_order_acquire)) return;
+    RefreshNetplayRuntimeState();
+    if (IsNetplaySuspendActive() || IsNetplaySessionActive()) return;
     if (!g_onlineModeActive.load(std::memory_order_acquire)) {
         isOnlineMatch.store(false, std::memory_order_release);
         return;
@@ -1243,6 +1252,8 @@ void ExitNetplaySuspend() {
     PauseIntegration::SetRuntimeHooksActive(true);
     DirectDrawHook::SetD3D9Active(true);
     ImGuiImpl::AttachWndProc();
+    MinHookUtils::SetPracticeBattleActive(false);
+    MinHookUtils::SetNativePassthrough(false);
 
     LogOut(
         std::string("[NETPLAY] Resume cleanup complete: transient overrides cleared, caches invalidated")
@@ -1632,16 +1643,7 @@ struct InitActionPoolDelayDefaults {
 InitActionPoolDelayDefaults g_initActionPoolDelayDefaults;
 }
 
-int           g_afterBlockOptionCount = 0;
-TriggerOption g_afterBlockOptions[MAX_TRIGGER_OPTIONS] = {};
-int           g_onWakeupOptionCount = 0;
-TriggerOption g_onWakeupOptions[MAX_TRIGGER_OPTIONS] = {};
-int           g_afterHitstunOptionCount = 0;
-TriggerOption g_afterHitstunOptions[MAX_TRIGGER_OPTIONS] = {};
-int           g_afterAirtechOptionCount = 0;
-TriggerOption g_afterAirtechOptions[MAX_TRIGGER_OPTIONS] = {};
-int           g_onRGOptionCount = 0;
-TriggerOption g_onRGOptions[MAX_TRIGGER_OPTIONS] = {};
+
 
 std::atomic<int> forwardDashFollowup(0);
 // 0 = post-dash injection, 1 = dash-normal timing (inject during dash state window)
@@ -2280,7 +2282,8 @@ void LifecycleWatcherThread() {
         RefreshNetplayRuntimeState();
 
         const NetplayRuntimeState netplayState = GetNetplayRuntimeState();
-        const bool shouldSuspend = netplayState.suspendTraining;
+        const bool shouldSuspend = netplayState.suspendTraining
+            || g_netplayHandoffPending.load(std::memory_order_acquire) != 0;
         const bool suspendedNow = g_onlineModeActive.load(std::memory_order_acquire);
         if (shouldSuspend && !suspendedNow) {
             LogOut("[NETPLAY] Lifecycle watcher requested suspend: " + GetLastOnlineDetectionReason(), true);
