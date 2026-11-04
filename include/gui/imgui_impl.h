@@ -31,6 +31,8 @@ namespace ImGuiImpl {
     
     void RenderFrame();
     
+    void NewFrameInputs();
+
     // Call after backend NewFrame calls and before ImGui::NewFrame().
     void PreNewFrameInputs();
     

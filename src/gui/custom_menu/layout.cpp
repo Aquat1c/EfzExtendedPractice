@@ -164,16 +164,24 @@ static float TabBarStartX(float x, float w, const char* const* labels, int count
     return startX < x ? x : startX;
 }
 
-int TabBarIndexAt(float x, float w, const char* const* labels, int count, float pointX) {
+static ImVec4 TabBarItemBounds(float x, float textY, float textW, float textPx) {
+    const float pad = Scale::Snap(7.0f * Scale::Get().layoutScale);
+    return ImVec4(x - pad, Scale::Snap(textY - 4.0f),
+                  x + textW + pad, Scale::Snap(textY + textPx + 4.0f));
+}
+
+int TabBarIndexAt(float x, float y, float w, const char* const* labels, int count, const ImVec2& point) {
     if (!labels || count <= 0) return -1;
     ImFont* bFont = BodyFont();
     const float bPx = PxFromFont(bFont);
-    const float gap = Scale::Get().tabGapX;
+    const float textY = CenterTextY(y, Scale::Get().tabBarHeight, bPx);
     float cursorX = TabBarStartX(x, w, labels, count);
     for (int i = 0; i < count; ++i) {
         const float tw = MeasureTextW(bFont, bPx, labels[i]);
-        if (pointX >= cursorX - gap * 0.5f && pointX < cursorX + tw + gap * 0.5f) return i;
-        cursorX = Scale::Snap(cursorX + tw + gap);
+        const ImVec4 bounds = TabBarItemBounds(cursorX, textY, tw, bPx);
+        if (point.x >= bounds.x && point.x < bounds.z &&
+            point.y >= bounds.y && point.y < bounds.w) return i;
+        cursorX = Scale::Snap(cursorX + tw + Scale::Get().tabGapX);
     }
     return -1;
 }
@@ -198,16 +206,16 @@ void DrawTabBar(ImDrawList* dl, float x, float y, float w,
         const bool isActive  = (i == activeIdx);
         const bool isFocused = (i == focusedIdx);
         const ImU32 col = isActive ? kTextActive : kTextInactive;
-        const float boxPadX = Scale::Snap(7.0f * metrics.layoutScale);
-        const float boxTop = Scale::Snap(textY - 4.0f);
-        const float boxBottom = Scale::Snap(textY + bPx + 4.0f);
+        const ImVec4 bounds = TabBarItemBounds(cursorX, textY, tw, bPx);
+        const float boxTop = bounds.y;
+        const float boxBottom = bounds.w;
 
         if (isActive) {
-            dl->AddRectFilled(ImVec2(cursorX - boxPadX, boxTop),
-                              ImVec2(cursorX + tw + boxPadX, boxBottom),
+            dl->AddRectFilled(ImVec2(bounds.x, boxTop),
+                              ImVec2(bounds.z, boxBottom),
                               IM_COL32(0, 0, 0, 118));
-            dl->AddRect(ImVec2(cursorX - boxPadX + 0.5f, boxTop + 0.5f),
-                        ImVec2(cursorX + tw + boxPadX - 0.5f, boxBottom - 0.5f),
+            dl->AddRect(ImVec2(bounds.x + 0.5f, boxTop + 0.5f),
+                        ImVec2(bounds.z - 0.5f, boxBottom - 0.5f),
                         isFocused ? kTextActive : kRuleDim, 0.0f, 0, 1.0f);
             const float underlineY = Scale::Snap(y + metrics.tabBarHeight - 5.0f);
             dl->AddLine(ImVec2(cursorX - 3.0f, underlineY),
@@ -217,11 +225,11 @@ void DrawTabBar(ImDrawList* dl, float x, float y, float w,
                         ImVec2(cursorX + tw + 3.0f, underlineY + 2.0f),
                         kSelectedLine, 1.0f);
         } else if (isFocused) {
-            dl->AddRectFilled(ImVec2(cursorX - boxPadX, boxTop),
-                              ImVec2(cursorX + tw + boxPadX, boxBottom),
+            dl->AddRectFilled(ImVec2(bounds.x, boxTop),
+                              ImVec2(bounds.z, boxBottom),
                               IM_COL32(0, 0, 0, 96));
-            dl->AddRect(ImVec2(cursorX - boxPadX + 0.5f, boxTop + 0.5f),
-                        ImVec2(cursorX + tw + boxPadX - 0.5f, boxBottom - 0.5f),
+            dl->AddRect(ImVec2(bounds.x + 0.5f, boxTop + 0.5f),
+                        ImVec2(bounds.z - 0.5f, boxBottom - 0.5f),
                         kRuleDim, 0.0f, 0, 1.0f);
             const float underlineY = Scale::Snap(y + metrics.tabBarHeight - 6.0f);
             dl->AddLine(ImVec2(cursorX - 2.0f, underlineY),

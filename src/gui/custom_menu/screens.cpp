@@ -2144,7 +2144,7 @@ void PopupTickInputOnly(const ScreenLayout& layout) {
                 const char* tabLabels[kMaxPopupTabs];
                 int tabCategories[kMaxPopupTabs];
                 const int tabCount = PopupTabs(tabLabels, tabCategories);
-                const int tab = Layout::TabBarIndexAt(g.listX, g.listW, tabLabels, tabCount, mouse.x);
+                const int tab = Layout::TabBarIndexAt(g.listX, Scale::Snap(g.py + 2.0f), g.listW, tabLabels, tabCount, ImVec2(mouse.x, mouse.y));
                 if (tab >= 0 && tabCategories[tab] != g_popup.selectedCategory) {
                     const int direction = tabCategories[tab] < g_popup.selectedCategory ? -1 : +1;
                     PopupOpenCategory(tabCategories[tab]);

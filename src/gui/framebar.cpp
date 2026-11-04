@@ -1,4 +1,6 @@
 #include "../include/gui/framebar.h"
+#include "../include/gui/framebar_presentation.h"
+#include "../include/gui/imgui_impl.h"
 #include "../include/utils/utilities.h"
 #include "../include/utils/config.h"
 #include "../include/utils/i18n.h"
@@ -15,6 +17,7 @@
 
 #include <windows.h>
 #include <atomic>
+#include <cfloat>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -1573,7 +1576,7 @@ void Render(const DrawCtx& ctx) {
     const int moveDataLines = showMoveData ? 1 : 0;
 
     // Layout in 640x480 virtual space, transformed via ctx into RT space.
-    constexpr int   kVisible    = 80;
+    static constexpr int kVisible = 80;
     constexpr float baseW       = 480.0f;
     constexpr float baseRowH    = 9.0f;
     constexpr float rowGap      = 2.0f;
@@ -1593,14 +1596,18 @@ void Render(const DrawCtx& ctx) {
 
     if (g_filledFrames == 0) return;
 
-    const int total = (g_filledFrames < kBarMemory) ? g_filledFrames : kBarMemory;
     const bool visualFrameCells = VisualFrameSampling();
     const int stride = visualFrameCells ? static_cast<int>(SUBFRAMES_PER_VISUAL_FRAME) : 1;
-    const int maxSamples = kVisible * stride;
-    const int samplesToShow = (total < maxSamples) ? total : maxSamples;
-    const int show = visualFrameCells
-        ? ((samplesToShow + stride - 1) / stride)
-        : samplesToShow;
+    const auto view = Presentation::MakeView(g_filledFrames, g_writeIdx, kBarMemory, kVisible, stride);
+    const int show = view.cells;
+    const Presentation::Layout layout{baseX, baseY, baseW, baseRowH, rowGap, kVisible};
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool inspect = !ImGuiImpl::IsVisible() && !io.WantCaptureMouse &&
+        !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) &&
+        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    const int hovered = inspect
+        ? Presentation::PickColumn(view, layout, io.MousePos.x, io.MousePos.y, ctx.ox, ctx.oy, ctx.scale)
+        : -1;
 
     auto drawRow = [&](const Side& side, float y) {
         dl->AddRectFilled(
@@ -1608,24 +1615,18 @@ void Render(const DrawCtx& ctx) {
             ImVec2(tx(baseX + baseW + 2.0f), ty(y + baseRowH + 1.0f)),
             IM_COL32(0, 0, 0, 180));
 
+        Cell visible[kVisible]{};
         for (int i = 0; i < show; ++i) {
-            Cell visualCell{};
-            const Cell* cellPtr = nullptr;
             if (visualFrameCells) {
-                const int groupOldestOffset = samplesToShow - i * stride;
-                const int groupNewestOffsetExclusive = groupOldestOffset - stride > 0
-                    ? groupOldestOffset - stride
-                    : 0;
-                for (int offset = groupOldestOffset; offset > groupNewestOffsetExclusive; --offset) {
-                    const int slot = (g_writeIdx - offset + kBarMemory) % kBarMemory;
-                    MergeVisualCell(visualCell, side.cells[slot]);
+                for (int sample = view.Begin(i); sample < view.End(i); ++sample) {
+                    MergeVisualCell(visible[i], side.cells[view.Slot(sample)]);
                 }
-                cellPtr = &visualCell;
             } else {
-                const int slot = (g_writeIdx - show + i + kBarMemory) % kBarMemory;
-                cellPtr = &side.cells[slot];
+                visible[i] = side.cells[view.NewestSlot(i)];
             }
-            const Cell& cell = *cellPtr;
+        }
+        for (int i = 0; i < show; ++i) {
+            const Cell& cell = visible[i];
             if (cell.cat == Cat::None) continue;
             const float cx = baseX + (float)i * cellW;
             dl->AddRectFilled(
@@ -1744,6 +1745,26 @@ void Render(const DrawCtx& ctx) {
                     IM_COL32(255, 255, 100, 230));
             }
         }
+        if (showStatus) {
+            ImFont* font = ImGui::GetFont();
+            const float fontSize = 8.0f * ctx.scale;
+            for (int first = 0, end; first < show; first = end) {
+                end = Presentation::RunEnd(visible, show, first);
+                if (visible[first].cat == Cat::None || visible[first].cat == Cat::Neutral) continue;
+                char label[16];
+                _snprintf_s(label, sizeof(label), _TRUNCATE, "%d%s", end - first,
+                            first == 0 && view.clipped ? "+" : "");
+                const ImVec2 size = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
+                const float width = (end - first) * cellW * ctx.scale;
+                if (size.x + 2.0f * ctx.scale > width) continue;
+                const ImVec2 pos(tx(baseX + first * cellW) + (width - size.x) * 0.5f,
+                                 ty(y) + (baseRowH * ctx.scale - size.y) * 0.5f);
+                dl->AddRectFilled(ImVec2(pos.x - ctx.scale, pos.y),
+                                  ImVec2(pos.x + size.x + ctx.scale, pos.y + size.y),
+                                  IM_COL32(0, 0, 0, 160));
+                dl->AddText(font, fontSize, pos, IM_COL32(255, 255, 255, 245), label);
+            }
+        }
         dl->AddLine(
             ImVec2(tx(baseX + baseW), ty(y - 2.0f)),
             ImVec2(tx(baseX + baseW), ty(y + baseRowH + 2.0f)),
@@ -1842,6 +1863,35 @@ void Render(const DrawCtx& ctx) {
 
     drawRow(g_p1, baseY);
     drawRow(g_p2, baseY + baseRowH + rowGap);
+    if (hovered >= 0) {
+        const float x = baseX + hovered * cellW;
+        dl->AddRect(ImVec2(tx(x), ty(baseY - 1.0f)),
+                    ImVec2(tx(x + cellW), ty(baseY + 2.0f * baseRowH + rowGap + 1.0f)),
+                    IM_COL32(255, 255, 255, 255));
+        const int slot = view.NewestSlot(hovered);
+        if (!ImGui::BeginTooltip()) return;
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 560.0f);
+        ImGui::Text(I18n::Tr("History: %d subframes before latest"), view.samples - view.End(hovered));
+        if (visualFrameCells) ImGui::TextUnformatted(I18n::Tr("Newest subframe in this visual cell"));
+        auto inspectSide = [&](int player, const Cell& cell) {
+            ImGui::Separator();
+            ImGui::Text("P%d %s  ID:%d  F:%d", player, I18n::Tr(CatName(cell.cat)),
+                        static_cast<int>(cell.moveID), static_cast<int>(cell.frameIdx));
+            ImGui::Text(I18n::Tr("Boxes: %d/%d  Projectile boxes: %d  Projectiles: %d"),
+                        cell.activeHitbox ? static_cast<int>(cell.attackBoxes) : 0,
+                        static_cast<int>(cell.attackBoxes), static_cast<int>(cell.projectileBoxes),
+                        static_cast<int>(cell.projectiles));
+            ImGui::Text(I18n::Tr("State timer: %d  Untech: %d  Hitstop: %d  Superflash: %d"),
+                        static_cast<int>(cell.blockstun), static_cast<int>(cell.untech),
+                        cell.inHitstop ? 1 : 0, static_cast<int>(cell.hitstop));
+            ImGui::Text(I18n::Tr("Can block: %d  Can RG: %d  Guard gauge: %.1f"),
+                        cell.canBlockNow ? 1 : 0, cell.canRGNow ? 1 : 0, cell.guardGauge);
+        };
+        inspectSide(1, g_p1.cells[slot]);
+        inspectSide(2, g_p2.cells[slot]);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
 }
 
 }

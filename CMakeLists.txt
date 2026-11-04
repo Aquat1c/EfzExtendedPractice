@@ -284,6 +284,21 @@ if(BUILD_TESTING)
     target_include_directories(overlay_context_scope_tests PRIVATE include ${IMGUI_DIR})
     add_test(NAME overlay_context_scope_tests COMMAND overlay_context_scope_tests)
 
+    add_executable(menu_tab_geometry_tests
+        tests/menu_tab_geometry_tests.cpp
+        src/gui/custom_menu/layout.cpp src/gui/custom_menu/scale.cpp src/utils/i18n.cpp
+        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp)
+    target_include_directories(menu_tab_geometry_tests PRIVATE include ${IMGUI_DIR})
+    add_test(NAME menu_tab_geometry_tests COMMAND menu_tab_geometry_tests)
+
+    add_executable(pointer_mapping_tests
+        tests/pointer_mapping_tests.cpp
+        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp)
+    target_include_directories(pointer_mapping_tests PRIVATE include ${IMGUI_DIR})
+    add_test(NAME pointer_mapping_tests COMMAND pointer_mapping_tests)
+
     add_executable(audio_output_lifetime_tests
         tests/practice_isolation/audio_output_lifetime_tests.cpp)
     target_include_directories(audio_output_lifetime_tests PRIVATE
@@ -564,6 +579,15 @@ if(BUILD_TESTING)
     add_test(NAME macro_playback_start_policy_tests
              COMMAND macro_playback_start_policy_tests)
 
+    add_executable(collision_display_visibility_tests
+        tests/collision_display_visibility_tests.cpp)
+    target_include_directories(collision_display_visibility_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(collision_display_visibility_tests PRIVATE user32)
+    set_property(TARGET collision_display_visibility_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME collision_display_visibility_tests COMMAND collision_display_visibility_tests)
+
     add_executable(collision_box_policy_tests
         tests/collision_box_policy_tests.cpp)
     target_include_directories(collision_box_policy_tests PRIVATE
@@ -581,6 +605,15 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME move_timing_policy_tests
              COMMAND move_timing_policy_tests)
+
+    add_executable(framebar_presentation_tests
+        tests/framebar_presentation_tests.cpp)
+    target_include_directories(framebar_presentation_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_property(TARGET framebar_presentation_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+    add_test(NAME framebar_presentation_tests
+             COMMAND framebar_presentation_tests)
 
     add_executable(menu_key_policy_tests
         tests/menu_key_policy_tests.cpp)

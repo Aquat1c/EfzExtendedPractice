@@ -285,6 +285,7 @@ bool AnyProjectileInteractionSubLayerEnabled() {
 }
 
 bool HasAnyEnabledLayer() {
+    if (!Config::GetSettings().collisionDisplayEnabled) return false;
     const uint8_t mask = CurrentLayerMaskFromSettings();
     if ((mask & (kLayerHit | kLayerHurt | kLayerCollision)) != 0) {
         return true;

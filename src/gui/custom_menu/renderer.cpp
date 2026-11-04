@@ -906,15 +906,6 @@ struct MainLayout {
     float  colLeftX;
     float  colRightX;
     float  colW;
-    float  tabRectX[TT_COUNT];
-    float  tabRectY;
-    float  tabRectW[TT_COUNT];
-    float  tabRectH;
-    float  subRectX[8];
-    float  subRectW[8];
-    float  subRectY;
-    float  subRectH;
-    int    subRectCount;
 };
 
 void ApplyContentAnimation(MainLayout& L) {
@@ -958,54 +949,6 @@ MainLayout ComputeMainLayout(float contentTopY) {
     }
 
     return L;
-}
-
-void ComputeTabRects(MainLayout& L) {
-    using namespace Theme;
-    const Scale::Metrics& metrics = Scale::Get();
-    ImFont* bFont = Layout::BodyFont();
-    const float bPx = bFont ? bFont->FontSize : 13.0f;
-
-    float totalW = 0.0f;
-    float widths[TT_COUNT];
-    for (int i = 0; i < TT_COUNT; ++i) {
-        widths[i] = Layout::MeasureTextW(bFont, bPx, TopTabLabel(i));
-        totalW += widths[i];
-        if (i + 1 < TT_COUNT) totalW += metrics.tabGapX;
-    }
-    float x = Scale::Snap(L.panelTL.x + (kPanelW - totalW) * 0.5f);
-    if (x < L.panelTL.x + metrics.panelPadX) x = L.panelTL.x + metrics.panelPadX;
-    const float textY = Scale::Snap(L.tabBarY + (metrics.tabBarHeight - bPx) * 0.5f);
-    L.tabRectY = Scale::Snap(textY - 2.0f);
-    L.tabRectH = Scale::Snap(bPx + 6.0f);
-    for (int i = 0; i < TT_COUNT; ++i) {
-        L.tabRectX[i] = Scale::Snap(x);
-        L.tabRectW[i] = widths[i];
-        x += widths[i] + metrics.tabGapX;
-    }
-
-    L.subRectCount = 0;
-    if (L.subBarH <= 0.0f) return;
-    const int top = ClampTopTab(g_shell.activeTopTab);
-    const TopTabInfo& tt = kTopTabs[top];
-    L.subRectCount = tt.subCount;
-    float subTotalW = 0.0f;
-    float subWidths[8];
-    for (int i = 0; i < tt.subCount && i < 8; ++i) {
-        subWidths[i] = Layout::MeasureTextW(bFont, bPx, SubTabLabel(tt.subs[i]));
-        subTotalW += subWidths[i];
-        if (i + 1 < tt.subCount) subTotalW += metrics.tabGapX;
-    }
-    float sx = Scale::Snap(L.panelTL.x + (kPanelW - subTotalW) * 0.5f);
-    if (sx < L.panelTL.x + metrics.panelPadX) sx = L.panelTL.x + metrics.panelPadX;
-    const float subTextY = Scale::Snap(L.subBarY + (L.subBarH - bPx) * 0.5f);
-    L.subRectY = Scale::Snap(subTextY - 2.0f);
-    L.subRectH = Scale::Snap(bPx + 6.0f);
-    for (int i = 0; i < tt.subCount && i < 8; ++i) {
-        L.subRectX[i] = Scale::Snap(sx);
-        L.subRectW[i] = subWidths[i];
-        sx += subWidths[i] + metrics.tabGapX;
-    }
 }
 
 void SetActiveTopTab(int newTop, const char* reason);
@@ -1052,34 +995,40 @@ void ApplyPendingMenuNavigation() {
 bool HandleTabBarClick(const MainLayout& L) {
     if (Screens::IsPopupActive() || Screens::IsKeybindActive() || Screens::IsTextEditorActive()) return false;
     if (!Input::MouseLeftEdge()) return false;
+    const auto mouse = Input::GetMouse();
+    if (!mouse.valid) return false;
+    const ImVec2 point(mouse.x, mouse.y);
 
-    for (int i = 0; i < TT_COUNT; ++i) {
-        if (!Input::MouseHovering(L.tabRectX[i] - 2.0f, L.tabRectY,
-                                  L.tabRectW[i] + 4.0f, L.tabRectH)) {
-            continue;
-        }
-        if (g_shell.activeTopTab != i) {
+    const char* labels[TT_COUNT];
+    for (int i = 0; i < TT_COUNT; ++i) labels[i] = TopTabLabel(i);
+    const int tab = Layout::TabBarIndexAt(L.panelTL.x, L.tabBarY, Theme::kPanelW,
+        labels, TT_COUNT, point);
+    if (tab >= 0) {
+        if (g_shell.activeTopTab != tab) {
             CancelEditMode();
-            SetActiveTopTab(i, "top tab click");
+            SetActiveTopTab(tab, "top tab click");
         } else {
-            LogMenuDetail("Top tab click %s (already active)", kTopTabs[i].label);
+            LogMenuDetail("Top tab click %s (already active)", kTopTabs[tab].label);
         }
         return true;
     }
 
-    for (int i = 0; i < L.subRectCount; ++i) {
-        if (!Input::MouseHovering(L.subRectX[i] - 2.0f, L.subRectY,
-                                  L.subRectW[i] + 4.0f, L.subRectH)) {
-            continue;
+    const int top = ClampTopTab(g_shell.activeTopTab);
+    const TopTabInfo& tt = kTopTabs[top];
+    if (tt.subCount > 1 && L.subBarH > 0.0f) {
+        const char* subLabels[8];
+        const int n = (std::min)(tt.subCount, 8);
+        for (int i = 0; i < n; ++i) subLabels[i] = SubTabLabel(tt.subs[i]);
+        const int sub = Layout::TabBarIndexAt(L.panelTL.x, L.subBarY, Theme::kPanelW,
+            subLabels, n, point);
+        if (sub >= 0) {
+            if (g_shell.subIdxPerTop[top] != sub) {
+                CancelEditMode();
+                SetActiveSubTab(top, sub, "sub tab click");
+            }
+            return true;
         }
-        const int top = ClampTopTab(g_shell.activeTopTab);
-        if (g_shell.subIdxPerTop[top] != i) {
-            CancelEditMode();
-            SetActiveSubTab(top, i, "sub tab click");
-        }
-        return true;
     }
-
     return false;
 }
 
@@ -1865,12 +1814,12 @@ void Render() {
     Screens::CorrectValueLocksForEngineRegenUi(valueLocks);
 
     MainLayout L = ComputeMainLayout(origin.y);
-    ComputeTabRects(L);
     const bool tabClickConsumed = HandleTabBarClick(L);
     MaybeMouseReturnFocusToContent(L, tabClickConsumed);
     const bool tabFocusConsumed = HandleFocusedTabInput();
     if (!ImGuiImpl::IsVisible()) return;
 
+    L = ComputeMainLayout(origin.y);
     RenderTabBar(L);
 
     const int activePane = ActivePane();

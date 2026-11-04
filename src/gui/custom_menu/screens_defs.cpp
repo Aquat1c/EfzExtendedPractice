@@ -147,6 +147,7 @@ void OnComboHideMenu()   { PersistBool ("General", "comboOverlayHideWhenImGuiVis
 void OnComboResume()     { PersistBool ("General", "comboOverlayResumeAfterImGui",  MutableSettings().comboOverlayResumeAfterImGui); }
 void OnComboRfMult()     { PersistBool ("General", "comboOverlayShowRfMultiplier",  MutableSettings().comboOverlayShowRfMultiplier); }
 void OnComboRawScale()   { PersistBool ("General", "comboOverlayShowRawScale",      MutableSettings().comboOverlayShowRawScale); }
+void OnCollisionDisplayEnabled()     { PersistBool("General", "collisionDisplayEnabled", MutableSettings().collisionDisplayEnabled); }
 void OnCollisionDisplayHitboxes()    { PersistBool("General", "collisionDisplayHitboxes", MutableSettings().collisionDisplayHitboxes); }
 void OnCollisionDisplayHurtboxes()   { PersistBool("General", "collisionDisplayHurtboxes", MutableSettings().collisionDisplayHurtboxes); }
 void OnCollisionDisplayPushboxes()   { PersistBool("General", "collisionDisplayCollisionBoxes", MutableSettings().collisionDisplayCollisionBoxes); }
@@ -1822,7 +1823,7 @@ const char* ValDisplaySettings() {
         + (s.collisionDisplayCollisionBoxes && s.collisionDisplayP1CollisionBoxes ? 1 : 0)
         + (s.collisionDisplayCollisionBoxes && s.collisionDisplayP2CollisionBoxes ? 1 : 0)
         + (s.collisionDisplayProjectileInteractions ? 1 : 0);
-    if (enabled == 0) {
+    if (!s.collisionDisplayEnabled || enabled == 0) {
         return "OFF";
     }
     _snprintf_s(buf, sizeof(buf), _TRUNCATE, I18n::Tr("%d ON / %d%%"), enabled, s.collisionDisplayFillAlphaPercent);
@@ -1835,6 +1836,7 @@ Row* BuildDisplayOverlayRows(int& count) {
     auto& s = MutableSettings();
 
     s_rows[n++] = Header("HITBOX / COLLISION DISPLAY");
+    s_rows[n++] = Toggle("SHOW COLLISION OVERLAY", &s.collisionDisplayEnabled, OnCollisionDisplayEnabled);
     s_rows[n++] = Toggle("HITBOXES", &s.collisionDisplayHitboxes, OnCollisionDisplayHitboxes);
     s_rows[n++] = Toggle("  P1 HITBOXES", &s.collisionDisplayP1Hitboxes,
                          OnCollisionDisplayP1Hitboxes, nullptr,

@@ -71,7 +71,9 @@ This project is a DLL mod that loads via EFZ Mod Manager. It adds a configurable
 
 - **Auto-Airtech:** Automatic air recovery with direction (Forward/Neutral/Back) and optional delay; tuned for actionable states around FALLING.
 
-- **Frame Analysis:** Shows frame advantage on block, hit, and RG, plus the gap between blocked hits. The frame bar's MOVE DATA line (Main → Options → Frame Bar) shows each fighter's last attack as startup, active, and recovery.
+- **Frame Analysis:** Shows frame advantage on block, hit, and RG, plus the gap between blocked hits. The frame bar's MOVE DATA line (Main → Options → Frame Bar) shows each fighter's last attack as startup, active, and recovery. Duration labels count consecutive displayed cells; hover over either bar to inspect a recorded sample from both players.
+
+- **Collision Display:** Show character and projectile boxes with separate layer and player choices. SHOW COLLISION OVERLAY hides or restores the display without changing those choices.
 
 - **Jumps and Dashes:**
   - Jumps use immediate input injection (direction respects facing)

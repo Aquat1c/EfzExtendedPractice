@@ -637,6 +637,18 @@ other ID is a phase of the same move. Contact closes the engine's hit gate for
 the rest of the window, so the contact tick and later box frames still count as
 active, which makes hit, block and whiff measure alike.
 
+In Full and Compact detail modes, numbers inside the bars count consecutive
+displayed cells with the same state and move ID. A `+` marks a run clipped by
+the visible history; short runs omit the label if it will not fit. These are
+state durations in the selected CELL STEP units, not a second block-gap
+measurement.
+
+With the menu closed, hovering over either row highlights that column for both
+players and shows their recorded state, move/frame IDs, boxes, timers and guard
+availability. In visual-frame mode the inspector uses the newest raw tick in
+the cell, rather than presenting the merged cell's maxima and flags as a single
+sample. Inspection also works in Bars Only mode and does not pause the game.
+
 A few more decisions shape what you see:
 
 - `TickSample` runs at the start of an engine tick, so what it reads is the previous tick's post-collision state, and the contact journal
@@ -679,6 +691,11 @@ The status text uses these short labels:
 | HST | This side's hit stop |
 
 ## Hit boxes and hurt boxes
+
+SHOW COLLISION OVERLAY controls the whole display while preserving the selected
+layers and player filters. Its `collisionDisplayEnabled` setting defaults to on
+for existing configurations. When hidden, the renderer skips rebuilding the box
+list and reading the game state for it.
 
 The box display (`src/game/collision_display.cpp`) follows the rules in
 `include/game/collision_box_policy.h`, which match Revival's and the engine's:
@@ -873,6 +890,19 @@ leaves a gameplay screen.
 
 ### Menu input
 
+Mouse positions enter ImGui in the overlay's 640×480 coordinates before button
+events. The Win32 backend still owns button, wheel, capture and leave handling;
+its raw position events are replaced before ImGui consumes the queue. Frame
+polling uses the same mapping, so a click cannot overtake its scaled position.
+
+For supported Revival wrappers, training checks that DisplayManager owns the
+known final-blit call before using its configured Fit, Integer or Custom image
+rectangle. The rectangle is projected from the current backbuffer into the
+window client area; clicks in its borders are outside the overlay. Native
+presentation, unknown wrappers and the fallback host keep stretch mapping.
+DisplayManager's startup configuration is read from beside its loaded module;
+this integration does not patch or change DisplayManager.
+
 - Custom menu navigation polls physical inputs rather than ImGui keys, because ImGui's mirror of the game input carries what auto-actions and macros write and would produce false presses. Polling is gated on EFZ being the foreground
   window, so keys typed elsewhere aren't consumed.
 - Input held when the menu opens stays ignored until released, including phantom DirectInput directions and the menu key itself.
@@ -886,6 +916,7 @@ leaves a gameplay screen.
 - Row builders run twice per frame and must stay read-only. Changes that invalidate choice pointers are queued for the next menu tick, because the current frame can still hold `Row` pointers into those vectors.
 - An open dropdown reads input before the list does, through an input-only pass, and is drawn on top afterwards. Otherwise the list would drain the edges first.
 - Info rows take focus so keyboard and pad players can scroll long paragraphs; headers and spacers don't.
+- Top tabs, subtabs and categorized popup tabs share the drawing geometry for hit testing, including font measurements, pixel rounding and label padding.
 - Categorized popups hide empty categories and keep a fixed size, so the tab strip doesn't move between categories.
 - Translations and default help are both looked up by whole string. Popup choices are translated before a marker prefix is added, and rows with translated labels set their help explicitly.
 - ITC Bolt lacks several ASCII symbols and most accents. Noto fills those gaps by merging, which never overwrites existing glyphs. The atlas is shared with the ImGui context, so the default font is rebuilt too.

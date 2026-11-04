@@ -873,6 +873,10 @@ namespace ImGuiGui {
 
                 ImGui::Spacing();
                 ImGui::SeparatorText("Display Overlays");
+                bool showCollisionOverlay = Config::GetSettings().collisionDisplayEnabled;
+                if (ImGui::Checkbox("Show collision overlay", &showCollisionOverlay)) {
+                    Config::SetSetting("General", "collisionDisplayEnabled", showCollisionOverlay ? "1" : "0");
+                }
                 bool showHitboxes = Config::GetSettings().collisionDisplayHitboxes;
                 if (ImGui::Checkbox("Hitboxes", &showHitboxes)) {
                     CollisionDisplay::SetLayerEnabled(0, showHitboxes);

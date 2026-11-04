@@ -298,6 +298,7 @@ namespace Config {
             file << "; FrameBar detail: 0 = full, 1 = compact, 2 = bars only\n";
             file << "frameBarDetailMode = 0\n\n";
             file << "; Collision / hitbox overlay display (Practice only)\n";
+            file << "collisionDisplayEnabled = 1\n";
             file << "collisionDisplayHitboxes = 0\n";
             file << "collisionDisplayHurtboxes = 0\n";
             file << "collisionDisplayCollisionBoxes = 0\n";
@@ -555,6 +556,7 @@ namespace Config {
             if (settings.frameBarDetailMode < 0 || settings.frameBarDetailMode > 2) {
                 settings.frameBarDetailMode = 0;
             }
+            settings.collisionDisplayEnabled = GetValueBool("General", "collisionDisplayEnabled", true);
             settings.collisionDisplayHitboxes = GetValueBool("General", "collisionDisplayHitboxes", false);
             settings.collisionDisplayHurtboxes = GetValueBool("General", "collisionDisplayHurtboxes", false);
             settings.collisionDisplayCollisionBoxes = GetValueBool("General", "collisionDisplayCollisionBoxes", false);
@@ -899,6 +901,7 @@ namespace Config {
             file << "; FrameBar detail: 0 = full, 1 = compact, 2 = bars only\n";
             file << "frameBarDetailMode = " << settings.frameBarDetailMode << "\n\n";
             file << "; Collision / hitbox overlay display (Practice only)\n";
+            file << "collisionDisplayEnabled = " << (settings.collisionDisplayEnabled ? "1" : "0") << "\n";
             file << "collisionDisplayHitboxes = " << (settings.collisionDisplayHitboxes ? "1" : "0") << "\n";
             file << "collisionDisplayHurtboxes = " << (settings.collisionDisplayHurtboxes ? "1" : "0") << "\n";
             file << "collisionDisplayCollisionBoxes = " << (settings.collisionDisplayCollisionBoxes ? "1" : "0") << "\n";
@@ -1088,6 +1091,7 @@ namespace Config {
                 try { settings.frameBarDetailMode = std::stoi(value); } catch (...) { settings.frameBarDetailMode = 0; }
                 if (settings.frameBarDetailMode < 0 || settings.frameBarDetailMode > 2) settings.frameBarDetailMode = 0;
             }
+            if (k == "collisiondisplayenabled") settings.collisionDisplayEnabled = (value == "1" || value == "true");
             if (k == "collisiondisplayhitboxes") settings.collisionDisplayHitboxes = (value == "1" || value == "true");
             if (k == "collisiondisplayhurtboxes") settings.collisionDisplayHurtboxes = (value == "1" || value == "true");
             if (k == "collisiondisplaycollisionboxes") settings.collisionDisplayCollisionBoxes = (value == "1" || value == "true");

@@ -1,4 +1,6 @@
 #include "gui/lifecycle_state.h"
+#include "gui/pointer_mapping.h"
+#include "gui/framebar.h"
 #include "../include/gui/imgui_impl.h"
 #include "compat/overlay_reset_api.h"
 #include "compat/overlay_context_scope.h"
@@ -24,6 +26,8 @@ namespace PracticeOverlayGate { void SetMenuVisible(bool); }
 #include "../include/utils/pause_integration.h"
 #include "../include/utils/config.h"
 #include <cmath>
+#include <climits>
+#include <cwchar>
 #include <chrono>
 #include <thread>
 #include "../include/input/input_handler.h"
@@ -153,6 +157,170 @@ static HWND GetActiveHostWindow() {
     return FindEFZWindow();
 }
 
+struct PointerPresentation {
+    HMODULE display = nullptr;
+    HMODULE wrapper = nullptr;
+    GuiPointer::Settings settings;
+    bool enabled = true;
+    bool active = false;
+    DWORD displaySize = 0;
+    DWORD callRva = 0;
+    DWORD nextProbe = 0;
+    unsigned attempts = 0;
+    unsigned visibility = 0;
+    int backbufferWidth = 0;
+    int backbufferHeight = 0;
+};
+static PointerPresentation g_pointerPresentation;
+
+static bool ReadModuleIdentity(HMODULE module, DWORD& timestamp, DWORD& size) {
+    IMAGE_DOS_HEADER dos{};
+    IMAGE_NT_HEADERS32 nt{};
+    SIZE_T read = 0;
+    if (!module || !ReadProcessMemory(GetCurrentProcess(), module, &dos, sizeof(dos), &read)
+        || read != sizeof(dos) || dos.e_magic != IMAGE_DOS_SIGNATURE
+        || dos.e_lfanew <= 0 || dos.e_lfanew > 0x1000) return false;
+    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const BYTE*>(module) + dos.e_lfanew,
+                           &nt, sizeof(nt), &read) || read != sizeof(nt)
+        || nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_I386
+        || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) return false;
+    timestamp = nt.FileHeader.TimeDateStamp;
+    size = nt.OptionalHeader.SizeOfImage;
+    return size > DWORD(dos.e_lfanew) + sizeof(nt);
+}
+
+static int ReadDisplayInteger(const wchar_t* path, const wchar_t* key, int fallback,
+                              int minimum, int maximum) {
+    wchar_t text[64]{};
+    if (GetPrivateProfileStringW(L"Display", key, L"", text, 64, path) == 63) return fallback;
+    const wchar_t* p = text;
+    if (*p == L'+') ++p;
+    unsigned base = 10;
+    if (p[0] == L'0' && (p[1] == L'x' || p[1] == L'X')) { base = 16; p += 2; }
+    if (!*p) return fallback;
+    uint64_t value = 0;
+    for (; *p; ++p) {
+        unsigned digit = 16;
+        if (*p >= L'0' && *p <= L'9') digit = unsigned(*p - L'0');
+        else if (*p >= L'a' && *p <= L'f') digit = unsigned(*p - L'a') + 10;
+        else if (*p >= L'A' && *p <= L'F') digit = unsigned(*p - L'A') + 10;
+        if (digit >= base || value > (uint64_t(maximum) - digit) / base) return fallback;
+        value = value * base + digit;
+        if (value > unsigned(maximum)) return fallback;
+    }
+    return value >= unsigned(minimum) ? int(value) : fallback;
+}
+
+static void LoadPointerPresentation(HMODULE display, HMODULE wrapper) {
+    g_pointerPresentation = {};
+    auto& state = g_pointerPresentation;
+    state.display = display;
+    state.wrapper = wrapper;
+    DWORD wrapperTimestamp = 0, wrapperSize = 0, unused = 0;
+    if (!ReadModuleIdentity(display, unused, state.displaySize)
+        || !ReadModuleIdentity(wrapper, wrapperTimestamp, wrapperSize)) return;
+    state.callRva = GuiPointer::FinalBlitRva(wrapperTimestamp);
+    if (state.callRva == 0 || state.callRva > wrapperSize || wrapperSize - state.callRva < 6) {
+        state.callRva = 0;
+        return;
+    }
+    state.settings.mode = GuiPointer::ScaleMode::Fit;
+    wchar_t path[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(display, path, MAX_PATH);
+    if (!length || length >= MAX_PATH) return;
+    wchar_t* slash = wcsrchr(path, L'\\');
+    const wchar_t name[] = L"DisplayManager.ini";
+    if (!slash || size_t(slash - path) + 1 + _countof(name) > _countof(path)) return;
+    wcscpy_s(slash + 1, _countof(path) - size_t(slash + 1 - path), name);
+    state.enabled = ReadDisplayInteger(path, L"Enabled", 1, 0, 1) != 0;
+    state.settings.integerScale = ReadDisplayInteger(path, L"IntegerScale", 0, 0, INT_MAX);
+    state.settings.customWidth = ReadDisplayInteger(path, L"CustomWidth", 640, 1, INT_MAX);
+    state.settings.customHeight = ReadDisplayInteger(path, L"CustomHeight", 480, 1, INT_MAX);
+    wchar_t mode[32]{};
+    const DWORD count = GetPrivateProfileStringW(L"Display", L"Mode", L"FitToScreen", mode, 32, path);
+    if (count != 31 && lstrcmpiW(mode, L"IntegerScaling") == 0)
+        state.settings.mode = GuiPointer::ScaleMode::Integer;
+    else if (count != 31 && lstrcmpiW(mode, L"CustomResolution") == 0)
+        state.settings.mode = GuiPointer::ScaleMode::Custom;
+}
+
+static void RefreshPointerPresentation() {
+    const HMODULE display = GetModuleHandleW(L"DisplayManager.dll");
+    const HMODULE wrapper = GetModuleHandleW(L"ddraw.dll");
+    if (display != g_pointerPresentation.display || wrapper != g_pointerPresentation.wrapper)
+        LoadPointerPresentation(display, wrapper);
+    auto& state = g_pointerPresentation;
+    state.backbufferWidth = state.backbufferHeight = 0;
+    IDirect3DSurface9* backbuffer = nullptr;
+    if (g_d3dDevice && SUCCEEDED(g_d3dDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer))) {
+        D3DSURFACE_DESC desc{};
+        if (SUCCEEDED(backbuffer->GetDesc(&desc))) {
+            state.backbufferWidth = int(desc.Width);
+            state.backbufferHeight = int(desc.Height);
+        }
+        backbuffer->Release();
+    }
+    if (state.active || !state.enabled || !state.callRva || g_externalFallbackHost) return;
+    const unsigned visibility = g_visibilityGeneration.load();
+    if (state.visibility != visibility) {
+        state.visibility = visibility;
+        state.attempts = 0;
+    }
+    const DWORD now = GetTickCount();
+    if (state.attempts >= 120 || (state.attempts != 0 && LONG(now - state.nextProbe) < 0)) return;
+    ++state.attempts;
+    state.nextProbe = now + 250;
+    const BYTE* site = reinterpret_cast<const BYTE*>(wrapper) + state.callRva;
+    BYTE bytes[6]{};
+    SIZE_T read = 0;
+    if (ReadProcessMemory(GetCurrentProcess(), site, bytes, sizeof(bytes), &read) && read == sizeof(bytes))
+        state.active = GuiPointer::OwnsFinalBlit(bytes, sizeof(bytes), uint32_t(reinterpret_cast<uintptr_t>(site)),
+            uint32_t(reinterpret_cast<uintptr_t>(display)), state.displaySize);
+}
+
+static ImVec2 MapClientPointer(HWND hwnd, float x, float y) {
+    RECT client{};
+    if (!hwnd || !GetClientRect(hwnd, &client)) return ImVec2(-FLT_MAX, -FLT_MAX);
+    const auto& state = g_pointerPresentation;
+    const bool adapted = !g_externalFallbackHost && state.active
+        && state.backbufferWidth > 0 && state.backbufferHeight > 0;
+    return GuiPointer::Map(x, y, client.right - client.left, client.bottom - client.top,
+        state.backbufferWidth, state.backbufferHeight, adapted ? state.settings : GuiPointer::Settings{});
+}
+
+static void SetMappedPointer(HWND hwnd, const ImVec2& position) {
+    RECT client{};
+    if (!hwnd || !GetClientRect(hwnd, &client)) return;
+    const auto& state = g_pointerPresentation;
+    const bool adapted = !g_externalFallbackHost && state.active
+        && state.backbufferWidth > 0 && state.backbufferHeight > 0;
+    const ImVec2 point = GuiPointer::Unmap(position.x, position.y,
+        client.right - client.left, client.bottom - client.top,
+        state.backbufferWidth, state.backbufferHeight, adapted ? state.settings : GuiPointer::Settings{});
+    if (point.x == -FLT_MAX) return;
+    POINT screen{LONG(point.x), LONG(point.y)};
+    if (ClientToScreen(hwnd, &screen)) SetCursorPos(screen.x, screen.y);
+}
+
+static ImVec2 ReadMappedPointer(HWND hwnd) {
+    POINT point{};
+    if (!hwnd || GetForegroundWindow() != hwnd || !GetCursorPos(&point)
+        || !ScreenToClient(hwnd, &point)) return ImVec2(-FLT_MAX, -FLT_MAX);
+    return MapClientPointer(hwnd, float(point.x), float(point.y));
+}
+
+static void ForwardWin32Input(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    ImGuiContext& context = *ImGui::GetCurrentContext();
+    const int firstEvent = context.InputEventsQueue.Size;
+    ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
+    if (msg == WM_MOUSEMOVE || msg == WM_NCMOUSEMOVE) {
+        POINT point{LONG(short(LOWORD(lParam))), LONG(short(HIWORD(lParam)))};
+        const bool valid = msg == WM_MOUSEMOVE || ScreenToClient(hwnd, &point);
+        GuiPointer::ReplaceBackendMousePosition(context, firstEvent,
+            valid ? MapClientPointer(hwnd, float(point.x), float(point.y)) : ImVec2(-FLT_MAX, -FLT_MAX));
+    }
+}
+
 static inline float ClampF(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -274,7 +442,8 @@ static void UpdateVirtualCursor(ImGuiIO& io) {
     float clientH = io.DisplaySize.y;
     bool fullscreen = false;
     if (hwnd) {
-        GetCachedWindowMetrics(hwnd, fullscreen, clientW, clientH);
+        float physicalW = 0.0f, physicalH = 0.0f;
+        GetCachedWindowMetrics(hwnd, fullscreen, physicalW, physicalH);
     }
     
     static ImVec2 s_lastMousePos = ImVec2(-1.0f, -1.0f);
@@ -358,9 +527,7 @@ static void UpdateVirtualCursor(ImGuiIO& io) {
                 SetActiveWindow(hwnd);
                 SetFocus(hwnd);
             }
-            POINT pt{ (LONG)target.x, (LONG)target.y };
-            ClientToScreen(hwnd, &pt);
-            SetCursorPos(pt.x, pt.y);
+            SetMappedPointer(hwnd, target);
             ReleaseCapture();
             io.AddMouseButtonEvent(0, false); // left up
             io.AddMouseButtonEvent(1, false); // right up
@@ -673,14 +840,7 @@ static void UpdateVirtualCursor(ImGuiIO& io) {
     }
 
     if (g_useVirtualCursor && hwnd) {
-        POINT pt;
-        if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
-            g_virtualCursorPos.x = (float)pt.x;
-            g_virtualCursorPos.y = (float)pt.y;
-
-            g_virtualCursorPos.x = ClampF(g_virtualCursorPos.x, 0.0f, clientW - 1.0f);
-            g_virtualCursorPos.y = ClampF(g_virtualCursorPos.y, 0.0f, clientH - 1.0f);
-        }
+        g_virtualCursorPos = ReadMappedPointer(hwnd);
     }
 
     if (g_useVirtualCursor) {
@@ -734,7 +894,7 @@ LRESULT CALLBACK ImGuiWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     // Hidden/out-of-Battle menus must not accumulate input events.
-    ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+    ForwardWin32Input(hWnd, msg, wParam, lParam);
 
     if (g_imguiVisible) {
         ImGuiIO& io = ImGui::GetIO();
@@ -1565,7 +1725,7 @@ namespace ImGuiImpl {
     LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         DeviceRenderScope input;
         if (!input.Admitted() || !g_imguiInitialization.IsReady() || !TrainingUiInputActive()) return 0;
-        ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+        ForwardWin32Input(hWnd, msg, wParam, lParam);
 
         if (g_imguiVisible) {
             ImGuiIO& io = ImGui::GetIO();
@@ -1578,66 +1738,34 @@ namespace ImGuiImpl {
         return 0;
     }
     
+    void NewFrameInputs() {
+        ImGuiContext& context = *ImGui::GetCurrentContext();
+        ImGuiIO& io = context.IO;
+        const bool inputActive = TrainingUiInputActive();
+        const HWND hwnd = GetActiveHostWindow();
+        const bool wantSetMousePos = io.WantSetMousePos && inputActive && GetForegroundWindow() == hwnd;
+        if (inputActive || FrameBar::g_enabled.load()) {
+            RefreshPointerPresentation();
+            if (wantSetMousePos) SetMappedPointer(hwnd, io.MousePos);
+            const ImVec2 point = ReadMappedPointer(hwnd);
+            io.AddMousePosEvent(point.x, point.y);
+        }
+        const int firstEvent = context.InputEventsQueue.Size;
+        io.WantSetMousePos = false;
+        ImGui_ImplWin32_NewFrame();
+        io.WantSetMousePos = wantSetMousePos;
+        GuiPointer::DiscardBackendMousePositions(context, firstEvent);
+    }
+
     void PreNewFrameInputs() {
         if (!g_imguiInitialization.IsReady() || g_isShuttingDown.load()) return;
         if (!ImGui::GetCurrentContext()) return;
-
         ImGuiIO& io = ImGui::GetIO();
-
-        const float baseW = 640.0f;
-        const float baseH = 480.0f;
-
         io.KeyRepeatDelay = 9999.f;
-        io.KeyRepeatRate  = 9999.f;
-
-        io.DisplaySize = ImVec2(baseW, baseH);
+        io.KeyRepeatRate = 9999.f;
+        io.DisplaySize = ImVec2(640.0f, 480.0f);
         io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
         if (!TrainingUiInputActive()) return;
-
-        HWND hwnd = GetActiveHostWindow();
-        if (hwnd) {
-            RECT rcClient{};
-            if (GetClientRect(hwnd, &rcClient)) {
-                POINT tl{rcClient.left, rcClient.top};
-                POINT br{rcClient.right, rcClient.bottom};
-                ClientToScreen(hwnd, &tl);
-                ClientToScreen(hwnd, &br);
-                const float cw_px = float(br.x - tl.x);
-                const float ch_px = float(br.y - tl.y);
-                if (cw_px > 0.0f && ch_px > 0.0f) {
-                    const float sx = cw_px / baseW;
-                    const float sy = ch_px / baseH;
-                    const float aspectClient = cw_px / ch_px;
-                    const float aspectBase = baseW / baseH;
-                    const float aspectDelta = fabsf(aspectClient - aspectBase) / aspectBase;
-                    const bool useUniformLetterbox = (aspectDelta < 0.02f);
-                    const float scale = (sx < sy) ? sx : sy;
-                    const float gw = baseW * scale;
-                    const float gh = baseH * scale;
-                    const float ox = (cw_px - gw) * 0.5f;
-                    const float oy = (ch_px - gh) * 0.5f;
-
-                    POINT pt{};
-                    if (GetCursorPos(&pt)) {
-                        const float cx = float(pt.x - tl.x);
-                        const float cy = float(pt.y - tl.y);
-                        float mx, my;
-                        if (useUniformLetterbox) {
-                            mx = (cx - ox) / (scale > 0.0f ? scale : 1.0f);
-                            my = (cy - oy) / (scale > 0.0f ? scale : 1.0f);
-                        } else {
-                            mx = cx / (sx > 0.0f ? sx : 1.0f);
-                            my = cy / (sy > 0.0f ? sy : 1.0f);
-                        }
-                        if (mx < 0.0f) mx = 0.0f; else if (mx > baseW - 1.0f) mx = baseW - 1.0f;
-                        if (my < 0.0f) my = 0.0f; else if (my > baseH - 1.0f) my = baseH - 1.0f;
-
-                        io.AddMousePosEvent(mx, my);
-                    }
-                }
-            }
-        }
-
         UpdateVirtualCursor(io);
     }
 
@@ -1661,7 +1789,7 @@ namespace ImGuiImpl {
             }
 
             ImGui_ImplDX9_NewFrame();
-            ImGui_ImplWin32_NewFrame();
+            NewFrameInputs();
             // Feed our corrected mouse/gamepad inputs after backend NewFrame, before ImGui::NewFrame.
             PreNewFrameInputs();
             ImGui::NewFrame();

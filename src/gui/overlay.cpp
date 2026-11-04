@@ -835,7 +835,7 @@ HRESULT WINAPI HookedEndScene(LPDIRECT3DDEVICE9 pDevice) {
 
     SetEndScenePhase("ImGui DX9 NewFrame");
     ImGui_ImplDX9_NewFrame();
-    ImGui_ImplWin32_NewFrame();
+    ImGuiImpl::NewFrameInputs();
     SetEndScenePhase("ImGui input feed");
     ImGuiImpl::PreNewFrameInputs();
     SetEndScenePhase("ImGui::NewFrame");
@@ -1089,7 +1089,7 @@ void DirectDrawHook::RenderD3D9Overlays(LPDIRECT3DDEVICE9 pDevice, UINT rtW, UIN
     const bool tutorialActive = Mission::TutorialSession::WantsDraw();
     const bool missionRecipeActive = Mission::Render::WantsDraw();
     if (!menuVisibleNow && !g_ShowOverlayDebugBorders.load() && !haveMessages &&
-        !haveCollisionOverlay && !titleScreenActive && !missionPauseActive &&
+        !FrameBar::g_enabled.load() && !haveCollisionOverlay && !titleScreenActive && !missionPauseActive &&
         !tutorialActive && !missionRecipeActive) {
         return;
     }

@@ -28,7 +28,7 @@ void DrawTabBar(ImDrawList* dl, float x, float y, float w,
                 const char* const* labels, int count, int activeIdx,
                 int focusedIdx /* -1 = none */);
 float TabBarWidth(const char* const* labels, int count);
-int TabBarIndexAt(float x, float w, const char* const* labels, int count, float pointX);
+int TabBarIndexAt(float x, float y, float w, const char* const* labels, int count, const ImVec2& point);
 
 void DrawHeader(ImDrawList* dl, float x, float y, float w, const char* text);
 

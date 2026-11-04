@@ -27,6 +27,7 @@ namespace Config {
     int  seVolumePercent;        // 0..100, 100 = current/default SE level
     int  frameBarTimingMode;     // 0 = subframes, 1 = visual frames
     int  frameBarDetailMode;     // 0 = full, 1 = compact, 2 = bars only
+    bool collisionDisplayEnabled = true;
     bool collisionDisplayHitboxes;
     bool collisionDisplayHurtboxes;
     bool collisionDisplayCollisionBoxes;
