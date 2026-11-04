@@ -11,6 +11,7 @@
 #include "../../../include/gui/custom_menu/scale.h"
 #include "../../../include/gui/custom_menu/screens.h"
 #include "../../../include/gui/gui.h"
+#include "../../../include/gui/lifecycle_state.h"
 #include "../../../include/gui/imgui_impl.h"
 #include "../../../include/gui/overlay.h"
 #include "../../../include/core/logger.h"
@@ -65,7 +66,7 @@ enum class Item : int {
 };
 
 struct State {
-    bool open = false;
+    GuiLifecycle::ConfirmationMenu page;
     Context context = Context::Mission;
     int selection = 0;
     std::string title;
@@ -75,7 +76,6 @@ struct State {
     std::vector<Item> items;
     bool hasDemo = false;
     bool captureSuspensionOwned = false;
-    bool confirming = false;
     Item confirmationItem = Item::DiscardRecording;
     int confirmationSelection = 0; // KEEP (safe choice) is always index 0
     bool borrowedTutorialFreeze = false;
@@ -201,7 +201,7 @@ bool ConfigureRecorderStateLocked(Rec::Phase phase) {
     g_state.sessionName = "NEW RECORDING";
     g_state.items.clear();
     g_state.selection = 0;
-    g_state.confirming = false;
+    g_state.page.CancelConfirmation();
     g_state.confirmationSelection = 0;
 
     const int steps = Rec::GetStepCount();
@@ -267,7 +267,7 @@ bool ConfigureRecorderStateLocked(Rec::Phase phase) {
 }
 
 bool SyncRecorderContextLocked() {
-    if (!g_state.open || !IsRecorderContext(g_state.context)) return true;
+    if (!g_state.page.IsOpen() || !IsRecorderContext(g_state.context)) return true;
 
     const Rec::Phase phase = Rec::GetPhase();
     if (!Rec::UsesDedicatedPauseMenu(phase)) return false;
@@ -511,16 +511,15 @@ void Execute(Item item, Context ctx) {
 }
 
 void CloseLocked() {
-    if (!g_state.open) return;
+    if (!g_state.page.IsOpen()) return;
     const bool borrowedTutorialFreeze = g_state.borrowedTutorialFreeze;
     const bool recorderContext = IsRecorderContext(g_state.context);
     const bool captureSuspensionOwned =
         recorderContext && g_state.captureSuspensionOwned;
     const bool recorderStillCapturing = Rec::NeedsCaptureMenuHandoff(
         captureSuspensionOwned, Rec::GetPhase());
-    g_state.open = false;
+    g_state.page.Close();
     g_state.borrowedTutorialFreeze = false;
-    g_state.confirming = false;
     g_state.confirmationSelection = 0;
     g_state.captureSuspensionOwned = false;
     g_openFlag.store(false, std::memory_order_release);
@@ -570,14 +569,14 @@ bool Open() {
         }
     }
     std::lock_guard<std::mutex> lk(g_mx);
-    if (g_state.open) return true;
+    if (g_state.page.IsOpen()) return true;
     g_state.items.clear();
     g_state.nextLessonName.clear();
     g_state.selection = 0;
     g_state.hasDemo = false;
     g_state.borrowedTutorialFreeze = false;
     g_state.captureSuspensionOwned = false;
-    g_state.confirming = false;
+    g_state.page.CancelConfirmation();
     g_state.confirmationSelection = 0;
 
     if (recorderSession) {
@@ -638,7 +637,7 @@ bool Open() {
         g_state.items.push_back(Item::ReturnToBrowser);
     }
 
-    g_state.open = true;
+    g_state.page.Open();
     g_state.borrowedTutorialFreeze = false;
     g_openFlag.store(true, std::memory_order_release);
     g_inputSyncRequested.store(true, std::memory_order_release);
@@ -678,8 +677,8 @@ void Toggle() {
         bool dismissedConfirmation = false;
         {
             std::lock_guard<std::mutex> lk(g_mx);
-            if (g_state.open && g_state.confirming) {
-                g_state.confirming = false;
+            if (g_state.page.IsOpen() && g_state.page.IsConfirming()) {
+                g_state.page.CancelConfirmation();
                 g_state.confirmationSelection = 0;
                 dismissedConfirmation = true;
                 g_inputSyncRequested.store(true, std::memory_order_release);
@@ -809,8 +808,8 @@ void Tick() {
         bool closeMenu = true;
         {
             std::lock_guard<std::mutex> lk(g_mx);
-            if (g_state.open && g_state.confirming) {
-                g_state.confirming = false;
+            if (g_state.page.IsOpen() && g_state.page.IsConfirming()) {
+                g_state.page.CancelConfirmation();
                 g_state.confirmationSelection = 0;
                 closeMenu = false;
             }
@@ -824,8 +823,8 @@ void Tick() {
     bool doExecute = false;
     {
         std::lock_guard<std::mutex> lk(g_mx);
-        if (!g_state.open) return;
-        if (g_state.confirming) {
+        if (!g_state.page.IsOpen()) return;
+        if (g_state.page.IsConfirming()) {
             constexpr int kConfirmationChoices = 2;
             if (vertEdge != 0) {
                 g_state.confirmationSelection =
@@ -835,7 +834,7 @@ void Tick() {
             }
             if (confirmEdge) {
                 if (g_state.confirmationSelection == 0) {
-                    g_state.confirming = false;
+                    g_state.page.CancelConfirmation();
                     g_state.confirmationSelection = 0;
                 } else {
                     confirmed = g_state.confirmationItem;
@@ -858,7 +857,7 @@ void Tick() {
                 confirmed = g_state.items[g_state.selection];
                 ctx = g_state.context;
                 if (NeedsConfirmation(confirmed)) {
-                    g_state.confirming = true;
+                    g_state.page.Confirm();
                     g_state.confirmationItem = confirmed;
                     g_state.confirmationSelection = 0;
                 } else {
@@ -888,7 +887,7 @@ void Draw(ImDrawList* dl) {
         std::lock_guard<std::mutex> lk(g_mx);
         s = g_state;
     }
-    if (!s.open) return;
+    if (!s.page.IsOpen()) return;
 
     CustomMenu::Scale::Update(Config::GetSettings().uiScale);
     ImFont* body = L::BodyFont();
@@ -898,7 +897,7 @@ void Draw(ImDrawList* dl) {
     const float barH = T::kBarH * ls;
     const bool sessionContext = s.context == Context::Mission ||
                                 s.context == Context::Lesson;
-    const bool confirmation = s.confirming;
+    const bool confirmation = s.page.IsConfirming();
     const char* displayTitle = confirmation
         ? ConfirmationPrompt(s.confirmationItem, s.context)
         : s.title.c_str();

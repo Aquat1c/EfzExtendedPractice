@@ -1,3 +1,4 @@
+#include "game/mission/mission_engine_state.h"
 #include "../../../include/game/mission/mission_engine.h"
 #include "../../../include/game/mission/mission_data.h"
 #include "../../../include/game/mission/mission_authoring.h"
@@ -128,18 +129,15 @@ uint32_t g_contactReadEpoch = 0;
 uint32_t g_contactOverflowLoggedEpoch = 0;
 uint32_t g_contactOverflowLoggedCursor = 0;
 std::atomic<bool> g_inspector{false};
-std::atomic<bool> g_pendingMissionMode{false};
-std::atomic<bool> g_pendingMissionSawCharacterSelect{false};
+State::PendingEntry g_pendingMissionEntry;
 std::atomic<bool> g_pendingStartupInputHeld{false};
-std::atomic<bool> g_pendingRecordMode{false};
-std::atomic<bool> g_pendingRecordSawCharacterSelect{false};
+State::PendingEntry g_pendingRecordEntry;
 // Path and parsed Mission publish, consume and clear together under g_pendingLoadMx.
 // Never reopen the file at match entry.
 std::mutex  g_pendingLoadMx;
 std::string g_pendingLoadPath;
 std::optional<::Mission::Mission> g_pendingLoadMission;
-std::atomic<bool> g_pendingHaveChars{false};
-std::atomic<bool> g_pendingCsQueued{false};
+State::MatchupSelection g_pendingMatchupSelection;
 std::atomic<int>  g_pendingP1SelectId{-1};
 std::atomic<int>  g_pendingP2SelectId{-1};
 std::atomic<int>  g_pendingP1Palette{0};
@@ -148,8 +146,7 @@ std::atomic<int>  g_pendingStage{-1};
 std::atomic<int>  g_pendingBgm{-1};
 
 void ClearPendingMatchMetadata() {
-    g_pendingHaveChars.store(false, std::memory_order_release);
-    g_pendingCsQueued.store(false, std::memory_order_release);
+    g_pendingMatchupSelection.Reset(std::memory_order_release);
     g_pendingP1SelectId.store(-1, std::memory_order_relaxed);
     g_pendingP2SelectId.store(-1, std::memory_order_relaxed);
     g_pendingP1Palette.store(0, std::memory_order_relaxed);
@@ -205,29 +202,21 @@ struct RecorderBannerInputs {
 std::mutex g_recBannerMx;
 RecorderBannerInputs g_recBannerInputs;
 bool g_recBannerInputsValid = false;
-int g_recCountInFrames = 0;
-int g_recCountInTargetTicks = 0;
-bool g_recCountInElapsed = false;
+State::RecorderCountIn g_recCountIn;
 int g_recLeasePollWaitTicks = 0;
 bool g_recInputLeaseHeld = false;
 bool g_recPollSnapshotValid = false;
 bool g_recPollSavedActive = false;
 bool g_recPollSavedObservation = false;
 uint8_t g_recPollSavedMask = 0;
-std::atomic<bool> g_recCaptureMenuRequested{false};
-std::atomic<bool> g_recCaptureMenuReleasePending{false};
-std::atomic<bool> g_recCaptureMenuSuspendedView{false};
-bool g_recCaptureMenuSuspended = false;
+State::RecorderCaptureMenu g_recCaptureMenu;
 uint32_t g_recCaptureMenuLastPollSerial = 0;
 int g_recCaptureMenuNeutralPolls = 0;
-std::atomic<bool> g_recMenuCommandHandoffRequested{false};
-std::atomic<bool> g_recMenuCommandHandoffDone{false};
-bool g_recMenuCommandHandoffActive = false;
+State::RecorderCommandHandoff g_recCommandHandoff;
 bool g_recMenuCommandPauseOwned = false;
 uint32_t g_recMenuCommandHandoffLastPollSerial = 0;
 int g_recMenuCommandHandoffNeutralPolls = 0;
-bool g_recStopPending = false;
-bool g_recStopSawPostRequestTick = false;
+State::RecorderStop g_recStop;
 int g_recStopWaitTicks = 0;
 bool g_recStartedThisTick = false;
 bool g_recTakeIntegrityValid = true;
@@ -489,8 +478,7 @@ uint16_t g_runEntityAllocationCursor = 0;
 std::size_t g_runEntityProducerHistoryCount = 0;
 uint64_t g_runEntitySampleSerial = 0;
 ::Mission::SequencePolicy::SegmentScore g_runScore;
-bool g_runSavePending = false;
-bool g_runStateSaved = false;
+State::RunnerBaseline g_runCheckpoint;
 int  g_runSaveSettle = 0;
 int  g_runSaveRetries = 0;
 int  g_runSaveElapsed = 0;
@@ -506,7 +494,6 @@ public:
 private:
     bool previous_;
 };
-bool g_runRestorePending = false;
 int  g_runRestoreSettle = 0;
 int  g_runRestoreTimeout = 0;
 std::atomic<bool> g_runStartupInputHeld{false};
@@ -2719,7 +2706,7 @@ bool TickAutoRetry() {
         return false;
     }
     if (--g_runRetryDelay > 0) return true;
-    if (g_runStateSaved && SavestateHook::IsInstalled() &&
+    if (g_runCheckpoint.Ready() && SavestateHook::IsInstalled() &&
         !g_recActive.load() &&
         GetCurrentGamePhase() == GamePhase::Match &&
         !CharacterHotswap::IsBusy() && !::Mission::Setup::IsPending()) {
@@ -4184,8 +4171,7 @@ void ResetRecorderCaptureState() {
     g_recPendingAttacks.fill(PendingRecorderAttack{});
     g_recPendingAttackCount = 0;
     g_recPendingAttackOverflow = false;
-    g_recStopPending = false;
-    g_recStopSawPostRequestTick = false;
+    g_recStop.Reset();
     g_recStopWaitTicks = 0;
     g_recStartedThisTick = false;
     g_recTakeIntegrityValid = true;
@@ -4264,7 +4250,6 @@ void SetRecorderInputLease(bool on) {
 }
 
 void ClearRecorderCaptureMenuSuspension() {
-    g_recCaptureMenuSuspended = false;
     g_recCaptureMenuLastPollSerial = 0;
     g_recCaptureMenuNeutralPolls = 0;
     MacroController::SetRecordingCaptureSuspended(false);
@@ -4272,40 +4257,26 @@ void ClearRecorderCaptureMenuSuspension() {
         PauseIntegration::MenuSurface::RecorderHandoff, false);
     // Retire the physical owner before publishing gate release;
     // over-suppression is safe, a gate-free frozen interval is not.
-    g_recCaptureMenuRequested.store(false, std::memory_order_release);
-    g_recCaptureMenuReleasePending.store(false, std::memory_order_release);
-    g_recCaptureMenuSuspendedView.store(false, std::memory_order_release);
+    g_recCaptureMenu.Reset();
 }
 
 void ClearRecorderMenuCommandHandoff() {
-    g_recMenuCommandHandoffDone.store(false, std::memory_order_release);
-    g_recMenuCommandHandoffActive = false;
     g_recMenuCommandPauseOwned = false;
     g_recMenuCommandHandoffLastPollSerial = 0;
     g_recMenuCommandHandoffNeutralPolls = 0;
     PauseIntegration::OnMenuSurfaceVisibilityChanged(
         PauseIntegration::MenuSurface::RecorderCommandHandoff, false);
     // Publish the gate release last; blocked-a-bit-longer is safe, the inverse is not.
-    g_recMenuCommandHandoffRequested.store(false, std::memory_order_release);
+    g_recCommandHandoff.Reset();
 }
 
 void TickRecorderMenuCommandHandoff() {
-    if (!g_recMenuCommandHandoffRequested.load(std::memory_order_acquire)) return;
-
-    if (!g_recMenuCommandHandoffActive) {
-        g_recMenuCommandHandoffActive = true;
-        g_recMenuCommandHandoffLastPollSerial = GetInputPollSerial(1);
-        g_recMenuCommandHandoffNeutralPolls = 0;
-        ResetInputPollOverrideHitCount(1);
-        uint32_t discardedSerial = 0;
-        (void)ConsumeInputPollAttackEdgeBatch(1, discardedSerial);
-        LogOut("[MISSION][REC] recorder menu command handoff acquired", true);
-    }
+    if (!g_recCommandHandoff.Pending()) return;
 
     SetRecorderInputLease(true);
     uint32_t discardedSerial = 0;
     (void)ConsumeInputPollAttackEdgeBatch(1, discardedSerial);
-    if (!g_recMenuCommandHandoffDone.load(std::memory_order_acquire)) return;
+    if (!g_recCommandHandoff.WaitingForNeutral()) return;
 
     const bool anyMenuVisible =
         ::Mission::PauseMenu::IsOpen() || ImGuiImpl::IsVisible();
@@ -4346,14 +4317,12 @@ bool TickRecorderCaptureMenuSuspension() {
     const bool capturePhase = phase == RecorderPhase::CountIn ||
                               phase == RecorderPhase::Recording;
     const bool requested =
-        g_recCaptureMenuRequested.load(std::memory_order_acquire);
+        g_recCaptureMenu.IsOpen();
     const bool releasePending = !requested &&
-        g_recCaptureMenuReleasePending.exchange(false,
-                                                std::memory_order_acq_rel);
+        g_recCaptureMenu.ConsumeRelease();
 
     auto beginSuspension = [&]() {
-        g_recCaptureMenuSuspended = true;
-        g_recCaptureMenuSuspendedView.store(true, std::memory_order_release);
+        g_recCaptureMenu.AcquireSuspension();
         g_recCaptureMenuLastPollSerial = GetInputPollSerial(1);
         g_recCaptureMenuNeutralPolls = 0;
         ResetInputPollOverrideHitCount(1);
@@ -4362,7 +4331,7 @@ bool TickRecorderCaptureMenuSuspension() {
     };
 
     if (requested && capturePhase) {
-        if (!g_recCaptureMenuSuspended) {
+        if (!g_recCaptureMenu.Suspended()) {
             beginSuspension();
             LogOut("[MISSION][REC] capture suspended for recorder menu", true);
         }
@@ -4373,7 +4342,7 @@ bool TickRecorderCaptureMenuSuspension() {
         return true;
     }
 
-    if (!g_recCaptureMenuSuspended) {
+    if (!g_recCaptureMenu.Suspended()) {
         if (!releasePending || !capturePhase) {
             if (releasePending) {
                 MacroController::SetRecordingCaptureSuspended(false);
@@ -4413,18 +4382,16 @@ bool TickRecorderCaptureMenuSuspension() {
             return true;
         }
         MacroController::SetRecordingCaptureSuspended(false);
-        g_recCaptureMenuSuspended = false;
         g_recCaptureMenuNeutralPolls = 0;
         PauseIntegration::OnMenuSurfaceVisibilityChanged(
             PauseIntegration::MenuSurface::RecorderHandoff, false);
-        g_recCaptureMenuSuspendedView.store(false, std::memory_order_release);
+        g_recCaptureMenu.EndSuspension();
         LogOut("[MISSION][REC] countdown resumed after two neutral P1 polls", true);
         return false;
     }
 
     if (phase != RecorderPhase::Recording) {
-        if (!g_recMenuCommandHandoffRequested.load(
-                std::memory_order_acquire)) {
+        if (!g_recCommandHandoff.Pending()) {
             SetRecorderInputLease(false);
         }
         ClearRecorderCaptureMenuSuspension();
@@ -4464,11 +4431,10 @@ bool TickRecorderCaptureMenuSuspension() {
 
     MacroController::SetRecordingCaptureSuspended(false);
     SetRecorderInputLease(false);
-    g_recCaptureMenuSuspended = false;
     g_recCaptureMenuNeutralPolls = 0;
     PauseIntegration::OnMenuSurfaceVisibilityChanged(
         PauseIntegration::MenuSurface::RecorderHandoff, false);
-    g_recCaptureMenuSuspendedView.store(false, std::memory_order_release);
+    g_recCaptureMenu.EndSuspension();
     LogOut("[MISSION][REC] capture resumed after two neutral P1 polls", true);
     return false;
 }
@@ -4479,13 +4445,11 @@ void ShowRecorderState(const char* text, COLORREF color, int duration = 900) {
 
 void EnterRecorderPreRecord(bool keepSetup) {
     ClearRecorderCaptureMenuSuspension();
-    if (!g_recMenuCommandHandoffRequested.load(std::memory_order_acquire)) {
+    if (!g_recCommandHandoff.Pending()) {
         SetRecorderInputLease(false);
     }
     g_recActive.store(false, std::memory_order_release);
-    g_recCountInFrames = 0;
-    g_recCountInTargetTicks = 0;
-    g_recCountInElapsed = false;
+    g_recCountIn.Reset();
     g_recLeasePollWaitTicks = 0;
     g_recCountInView.store(0, std::memory_order_release);
     if (!keepSetup) {
@@ -4542,24 +4506,22 @@ void ProcessRecorderCommand() {
         bool armed = false;
         ~CompleteMenuCommandHandoff() {
             if (armed) {
-                g_recMenuCommandHandoffDone.store(true,
-                                                   std::memory_order_release);
+                g_recCommandHandoff.CommandCompleted();
             }
         }
     } completeHandoff{
-        g_recMenuCommandHandoffRequested.load(std::memory_order_acquire)};
+        g_recCommandHandoff.Pending()};
 
     const RecorderPhase phase = g_recPhase.load(std::memory_order_acquire);
     if (cmd == RecorderCommand::Cancel) {
         if (MacroController::GetState() != MacroController::State::Idle) MacroController::Stop();
         ClearRecorderCaptureMenuSuspension();
-        if (!g_recMenuCommandHandoffRequested.load(std::memory_order_acquire)) {
+        if (!g_recCommandHandoff.Pending()) {
             SetRecorderInputLease(false);
         }
         g_recActive.store(false, std::memory_order_release);
         g_recPhase.store(RecorderPhase::Idle, std::memory_order_release);
-        g_recCountInTargetTicks = 0;
-        g_recCountInElapsed = false;
+        g_recCountIn.Reset();
         g_recLeasePollWaitTicks = 0;
         ResetRecorderCaptureState();
         g_recSetup = ::Mission::Mission();
@@ -4608,11 +4570,9 @@ void ProcessRecorderCommand() {
         CancelAutoActionsAndMacros();
         ResetRecorderCaptureState();
         g_recSetup = ::Mission::Mission();
-        g_recCountInFrames = 0;
-        g_recCountInTargetTicks =
+        g_recCountIn.Begin(
             ::Mission::SequencePolicy::RecorderCountInTicksFromMs(
-                Config::GetSettings().missionRecorderCountInMs);
-        g_recCountInElapsed = false;
+                Config::GetSettings().missionRecorderCountInMs));
         g_recCountInView.store(
             (std::max)(0, Config::GetSettings().missionRecorderCountInMs),
             std::memory_order_release);
@@ -4626,9 +4586,7 @@ void ProcessRecorderCommand() {
         LogOut("[MISSION][REC] waiting for neutral count-in ms=" +
                std::to_string(Config::GetSettings().missionRecorderCountInMs), true);
     } else if (advance == ::Mission::Engine::Recorder::AdvanceEffect::CancelCountIn) {
-        g_recCountInFrames = 0;
-        g_recCountInTargetTicks = 0;
-        g_recCountInElapsed = false;
+        g_recCountIn.Reset();
         g_recLeasePollWaitTicks = 0;
         g_recCountInView.store(0, std::memory_order_release);
         ResetRecorderCaptureState();
@@ -4637,9 +4595,7 @@ void ProcessRecorderCommand() {
                           RGB(255, 220, 120), 1200);
         LogOut("[MISSION][REC] count-in canceled", true);
     } else if (advance == ::Mission::Engine::Recorder::AdvanceEffect::StopToReview) {
-        if (!g_recStopPending) {
-            g_recStopPending = true;
-            g_recStopSawPostRequestTick = false;
+        if (g_recStop.Request()) {
             g_recStopWaitTicks = 0;
             ShowRecorderState("Finishing the current input frame...",
                               RGB(180, 230, 255), 900);
@@ -4685,11 +4641,10 @@ void TickRecorderFrontend(const Snapshot& s) {
     else if (PauseIntegration::IsPracticePaused())      blocker = "practice is paused";
     else if (PauseIntegration::IsGameSpeedFrozen())     blocker = "game speed is frozen";
     if (blocker) {
-        g_recCountInFrames = 0;
-        g_recCountInElapsed = false;
+        g_recCountIn.Restart();
         g_recCountInView.store(
             ::Mission::SequencePolicy::RecorderCountInRemainingMs(
-                g_recCountInTargetTicks),
+                g_recCountIn.Target()),
             std::memory_order_release);
         if (++s_countInBlockedTicks % 192 == 0) {
             ShowRecorderState((std::string("COUNT-IN waiting: ") + blocker).c_str(),
@@ -4699,18 +4654,11 @@ void TickRecorderFrontend(const Snapshot& s) {
         return;
     }
     s_countInBlockedTicks = 0;
-    if (!g_recCountInElapsed) {
-        if (!s.freezeActive && g_recCountInFrames < g_recCountInTargetTicks) {
-            ++g_recCountInFrames;
-        }
-        const int remainingTicks =
-            (std::max)(0, g_recCountInTargetTicks - g_recCountInFrames);
+    if (!g_recCountIn.WaitingForLease()) {
+        (void)g_recCountIn.Advance(s.freezeActive);
         g_recCountInView.store(
-            ::Mission::SequencePolicy::RecorderCountInRemainingMs(remainingTicks),
+            ::Mission::SequencePolicy::RecorderCountInRemainingMs(g_recCountIn.Remaining()),
             std::memory_order_release);
-        if (g_recCountInFrames < g_recCountInTargetTicks) return;
-
-        g_recCountInElapsed = true;
         return;
     }
 
@@ -4773,8 +4721,7 @@ void TickRecorderFrontend(const Snapshot& s) {
     g_recPrevFrameIdx = ReadShort(frameZeroP1, 0xA);
     g_recLastAttackId = g_recPrevMove;
     g_recCountInView.store(0, std::memory_order_release);
-    g_recCountInTargetTicks = 0;
-    g_recCountInElapsed = false;
+    g_recCountIn.Reset();
     g_recActive.store(true, std::memory_order_release);
     g_recPhase.store(RecorderPhase::Recording, std::memory_order_release);
     g_recStartedThisTick = true;
@@ -4783,14 +4730,11 @@ void TickRecorderFrontend(const Snapshot& s) {
 }
 
 void FinishRecorderStopAfterCapture(bool macroTickAdvanced) {
-    if (!g_recStopPending ||
+    if (!g_recStop.Pending() ||
         g_recPhase.load(std::memory_order_acquire) != RecorderPhase::Recording) {
         return;
     }
-    if (!g_recStopSawPostRequestTick) {
-        g_recStopSawPostRequestTick = true;
-        return;
-    }
+    if (!g_recStop.ObserveCaptureTick()) return;
     constexpr int kStopSealWatchdogTicks = 384; // 2s at monitor cadence
     const bool paused = PauseIntegration::IsPausedOrFrozen();
     bool sealedByWatchdog = false;
@@ -4808,7 +4752,7 @@ void FinishRecorderStopAfterCapture(bool macroTickAdvanced) {
     MacroController::RequestRecordingStopAtBoundary();
     std::string sealedDemo;
     if (!MacroController::FinishPlayerRecordingAndSerialize(sealedDemo, true)) {
-        g_recStopPending = false;
+        g_recStop.Reset();
         g_recStopWaitTicks = 0;
         g_recTakeIntegrityValid = false;
         g_recTakeIntegrityError = "the demonstration input stream did not seal";
@@ -4842,7 +4786,7 @@ void FinishRecorderStopAfterCapture(bool macroTickAdvanced) {
     }
     g_recPreviewAvailableView.store(!g_recSealedDemo.empty(),
                                     std::memory_order_release);
-    g_recStopPending = false;
+    g_recStop.Reset();
     g_recStopWaitTicks = 0;
     g_recActive.store(false, std::memory_order_release);
     g_recPhase.store(RecorderPhase::Review, std::memory_order_release);
@@ -4973,7 +4917,7 @@ std::string RunnerBaselineSaveBlocker(const Snapshot& s) {
     if (!g_runActive.load(std::memory_order_acquire)) {
         return "the mission session stopped";
     }
-    if (g_runRestorePending) {
+    if (g_runCheckpoint.RestorePending()) {
         return "the exact start-state restore did not finish";
     }
     if (!s.valid) {
@@ -5016,12 +4960,11 @@ void FailRunnerBaselineSave(const std::string& blocker) {
     const std::string reason = blocker.empty()
         ? std::string("the checkpoint system did not become ready")
         : blocker;
-    g_runSavePending = false;
+    g_runCheckpoint.Complete(false);
     g_runSaveSettle = 0;
     g_runSaveRetries = 0;
     g_runSaveElapsed = 0;
     g_runSaveBlocker.clear();
-    g_runStateSaved = false;
 
     const bool lesson = g_runMission.tutorialSchema > 0 && g_runMission.hasLesson;
     const std::string message = lesson
@@ -5044,7 +4987,7 @@ bool RestoreDemoBaseline(std::string& errorOut) {
     ScopedRunnerSelfLoad selfLoad;
     const auto source = ::Mission::SequencePolicy::DecideDemoBaselineSource(
         g_demoFromRecorder,
-        g_runStateSaved && SavestateHook::IsInstalled(),
+        g_runCheckpoint.Ready() && SavestateHook::IsInstalled(),
         !baseline.savestate.empty() && ::Mission::StateDump::Available());
     if (source == ::Mission::SequencePolicy::DemoBaselineSource::RunnerCheckpoint) {
         ok = SavestateHook::TriggerLoad();
@@ -5216,7 +5159,7 @@ void TickDemo(const Snapshot& s) {
     HoldDemoP1Neutral(true);
     if (ImGuiImpl::IsVisible() || ::Mission::Setup::IsPending() ||
         CharacterHotswap::IsBusy() ||
-        (!g_demoFromRecorder && (g_runRestorePending || g_runSavePending))) {
+        (!g_demoFromRecorder && (g_runCheckpoint.RestorePending() || g_runCheckpoint.SavePending()))) {
         return;
     }
 
@@ -6475,10 +6418,8 @@ void Tick() {
     ::Mission::Setup::Tick();
     std::string setupFailure;
     if (::Mission::Setup::TakeFailure(setupFailure)) {
-        g_runSavePending = false;
-        g_runRestorePending = false;
+        g_runCheckpoint.Complete(false);
         g_runSaveRetries = 0;
-        g_runStateSaved = false;
         const std::string playerMessage =
             "The lesson start state could not be applied: " + setupFailure +
             ". Return to Lessons and try again.";
@@ -6514,14 +6455,14 @@ void Tick() {
 
     const bool startupInputOwned = PendingLaunchPolicy::StartupInputOwned(
         g_pendingStartupInputHeld.load(std::memory_order_acquire),
-        g_runRestorePending, g_runSavePending);
+        g_runCheckpoint.RestorePending(), g_runCheckpoint.SavePending());
     if (g_runStartupInputHeld.load(std::memory_order_acquire) &&
         startupInputOwned && s.valid &&
         GetCurrentGamePhase() == GamePhase::Match) {
         SetRunnerStartupInputHold(true);
     }
 
-    if (g_runRestorePending && s.valid && g_runActive.load() &&
+    if (g_runCheckpoint.RestorePending() && s.valid && g_runActive.load() &&
         GetCurrentGamePhase() == GamePhase::Match) {
         const bool worldSettled =
             !ImGuiImpl::IsVisible() && !::Mission::Setup::IsPending() &&
@@ -6539,7 +6480,7 @@ void Tick() {
         if (doRestore || doTimeout) {
             g_runRestoreSettle = 0;
             g_runRestoreTimeout = 0;
-            g_runRestorePending = false;
+            g_runCheckpoint.BeginRestore();
             std::string sdErr = doTimeout
                 ? (practiceControllerReady
                        ? std::string("restore window never settled")
@@ -6563,12 +6504,10 @@ void Tick() {
                 }
             }
             if (ok) {
-                g_runSavePending = false;
-                g_runStateSaved = true;
+                g_runCheckpoint.Complete(true);
                 LogOut("[MISSION][RUN] embedded start state restored (auto-retry armed)", true);
             } else {
-                g_runSavePending = false;
-                g_runStateSaved = false;
+                g_runCheckpoint.Complete(false);
                 const std::string message =
                     "The exact mission start state could not be restored: " + sdErr;
                 LogOut("[MISSION][RUN] " + message, true);
@@ -6583,10 +6522,10 @@ void Tick() {
         }
     } else {
         g_runRestoreSettle = 0;
-        if (!g_runRestorePending) g_runRestoreTimeout = 0;
+        if (!g_runCheckpoint.RestorePending()) g_runRestoreTimeout = 0;
     }
 
-    if (g_runSavePending) {
+    if (g_runCheckpoint.SavePending()) {
         ++g_runSaveElapsed;
         const std::string blocker = RunnerBaselineSaveBlocker(s);
         if (!blocker.empty()) {
@@ -6595,11 +6534,10 @@ void Tick() {
         } else if (++g_runSaveSettle >= 2) {
             g_runSaveSettle = 0;
             if (SavestateHook::TriggerSave()) {
-                g_runSavePending = false;
                 g_runSaveRetries = 0;
                 g_runSaveElapsed = 0;
                 g_runSaveBlocker.clear();
-                g_runStateSaved = true;
+                g_runCheckpoint.Complete(true);
                 LogOut("[MISSION][RUN] baseline savestate captured (auto-retry armed)", true);
             } else {
                 ++g_runSaveRetries;
@@ -6610,7 +6548,7 @@ void Tick() {
                 }
             }
         }
-        if (g_runSavePending && g_runSaveElapsed >= kRunSaveDeadlineTicks) {
+        if (g_runCheckpoint.SavePending() && g_runSaveElapsed >= kRunSaveDeadlineTicks) {
             FailRunnerBaselineSave(g_runSaveBlocker);
         }
     } else {
@@ -6624,31 +6562,31 @@ void Tick() {
         g_runStartupInputHeld.load(std::memory_order_acquire) &&
         PendingLaunchPolicy::CanReleaseStartupInput(
             g_pendingStartupInputHeld.load(std::memory_order_acquire),
-            g_runRestorePending, g_runSavePending,
+            g_runCheckpoint.RestorePending(), g_runCheckpoint.SavePending(),
             tutorialStartupHandoff,
             false)) {
         SetRunnerStartupInputHold(false);
     }
 
     const GamePhase pendingMissionPhase = GetCurrentGamePhase();
-    if (g_pendingMissionMode.load(std::memory_order_acquire) &&
+    if (g_pendingMissionEntry.Pending(std::memory_order_acquire) &&
         pendingMissionPhase == GamePhase::CharacterSelect) {
-        g_pendingMissionSawCharacterSelect.store(true, std::memory_order_release);
+        g_pendingMissionEntry.ObserveCharacterSelect();
     }
     if (PendingLaunchPolicy::ReachedSelectorExit(
-            g_pendingMissionMode.load(std::memory_order_acquire),
-            g_pendingMissionSawCharacterSelect.load(std::memory_order_acquire),
+            g_pendingMissionEntry.Pending(std::memory_order_acquire),
+            g_pendingMissionEntry.SawCharacterSelect(),
             pendingMissionPhase == GamePhase::Menu)) {
         const bool canceled = CancelPendingMissionLoad("Character Select exit");
-        g_pendingMissionSawCharacterSelect.store(false, std::memory_order_release);
+        g_pendingMissionEntry.ClearCharacterSelect();
         if (canceled) {
             CharacterHotswap::CancelDirectPracticeLoad("Character Select exit");
             LogOut("[MISSION] pending title launch canceled after player left Character Select",
                    true);
         }
     }
-    if (g_pendingMissionMode.load() && g_pendingHaveChars.load() &&
-        !g_pendingCsQueued.load() &&
+    if (g_pendingMissionEntry.Pending() && g_pendingMatchupSelection.HasCharacters() &&
+        !g_pendingMatchupSelection.Queued() &&
         pendingMissionPhase == GamePhase::CharacterSelect &&
         CharacterHotswap::CanQueueReload()) {
         const int stage = g_pendingStage.load() >= 0 ? g_pendingStage.load() : 0;
@@ -6659,19 +6597,19 @@ void Tick() {
         if (CharacterHotswap::QueueReload(g_pendingP1SelectId.load(),
                                           g_pendingP2SelectId.load(), stage,
                                           palette, bgm)) {
-            g_pendingCsQueued.store(true);
+            g_pendingMatchupSelection.Queue();
             LogOut("[MISSION] char select auto-drive queued (mission chars)", true);
         }
     }
 
     static int s_pendingCsDriveIdle = 0;
-    if (g_pendingMissionMode.load() && g_pendingHaveChars.load() &&
-        g_pendingCsQueued.load() &&
+    if (g_pendingMissionEntry.Pending() && g_pendingMatchupSelection.HasCharacters() &&
+        g_pendingMatchupSelection.Queued() &&
         GetCurrentGamePhase() == GamePhase::CharacterSelect &&
         !CharacterHotswap::IsBusy()) {
         if (++s_pendingCsDriveIdle > 30) {
             s_pendingCsDriveIdle = 0;
-            g_pendingHaveChars.store(false);
+            g_pendingMatchupSelection.Reset();
             LogOut("[MISSION] character-select auto-drive stopped; revealing manual selection",
                    true);
             DirectDrawHook::AddMessage(
@@ -6683,13 +6621,13 @@ void Tick() {
     }
 
     static int s_missionEntrySettle = 0;
-    if (g_pendingMissionMode.load() && s.valid &&
+    if (g_pendingMissionEntry.Pending() && s.valid &&
         GetCurrentGamePhase() == GamePhase::Match) {
         SkipRoundIntro("pending mission entry");
         if (!CharacterHotswap::IsBusy() && ++s_missionEntrySettle >= 2) {
             s_missionEntrySettle = 0;
-            g_pendingMissionMode.store(false);
-            g_pendingMissionSawCharacterSelect.store(false, std::memory_order_release);
+            g_pendingMissionEntry.SetPending(false);
+            g_pendingMissionEntry.ClearCharacterSelect();
             std::string path;
             std::optional<::Mission::Mission> preparedMission;
             {
@@ -6735,24 +6673,24 @@ void Tick() {
     {
         static int s_recSettle = 0;
         const GamePhase recordPhase = GetCurrentGamePhase();
-        if (g_pendingRecordMode.load() && recordPhase == GamePhase::CharacterSelect) {
-            g_pendingRecordSawCharacterSelect.store(true, std::memory_order_release);
+        if (g_pendingRecordEntry.Pending() && recordPhase == GamePhase::CharacterSelect) {
+            g_pendingRecordEntry.ObserveCharacterSelect();
         }
-        if (g_pendingRecordMode.load() &&
-            g_pendingRecordSawCharacterSelect.load(std::memory_order_acquire) &&
+        if (g_pendingRecordEntry.Pending() &&
+            g_pendingRecordEntry.SawCharacterSelect() &&
             recordPhase == GamePhase::Menu) {
-            g_pendingRecordMode.store(false, std::memory_order_release);
-            g_pendingRecordSawCharacterSelect.store(false, std::memory_order_release);
+            g_pendingRecordEntry.SetPending(false, std::memory_order_release);
+            g_pendingRecordEntry.ClearCharacterSelect();
             LogOut("[MISSION][REC] pending title authoring canceled on Character Select exit", true);
         }
-        if (g_pendingRecordMode.load() && s.valid &&
+        if (g_pendingRecordEntry.Pending() && s.valid &&
             recordPhase == GamePhase::Match &&
             !CharacterHotswap::IsBusy() && !::Mission::Setup::IsPending()) {
             SkipRoundIntro("mission authoring entry");
             if (++s_recSettle >= 2) {
                 s_recSettle = 0;
-                g_pendingRecordMode.store(false);
-                g_pendingRecordSawCharacterSelect.store(false, std::memory_order_release);
+                g_pendingRecordEntry.SetPending(false);
+                g_pendingRecordEntry.ClearCharacterSelect();
                 CustomMenu::Screens::PrepareNewMissionAuthoringSession();
                 Recorder::Arm();
                 ProcessRecorderCommand();
@@ -6776,8 +6714,8 @@ void Tick() {
     }
     TickRecorderFrontend(s);
     if (s.valid && g_recActive.load() &&
-        !g_recCaptureMenuSuspendedView.load(std::memory_order_acquire) &&
-        !g_recCaptureMenuRequested.load(std::memory_order_acquire)) {
+        !g_recCaptureMenu.Suspended() &&
+        !g_recCaptureMenu.IsOpen()) {
         if (g_recStartedThisTick) {
             g_recStartedThisTick = false;
         } else {
@@ -6786,8 +6724,8 @@ void Tick() {
             FinishRecorderStopAfterCapture(macroTickAdvanced);
         }
     } else if (s.valid && g_recActive.load() && !g_recStartedThisTick &&
-               (g_recCaptureMenuSuspendedView.load(std::memory_order_acquire) ||
-                 g_recCaptureMenuRequested.load(std::memory_order_acquire))) {
+               (g_recCaptureMenu.Suspended() ||
+                 g_recCaptureMenu.IsOpen())) {
         Snapshot evidenceOnly = s;
         evidenceOnly.p1PolledAttackEdges = 0;
         evidenceOnly.p1PolledAttackEdgeSerial = 0;
@@ -6802,7 +6740,7 @@ void Tick() {
         ::Mission::SequencePolicy::SnapshotCanResumeAfterRestore(
             g_worldRestoredThisTick, Demo::IsActive(),
             g_demoFinishedThisTick);
-    if (s.valid && g_runActive.load() && !g_runRestorePending && !g_runSavePending &&
+    if (s.valid && g_runActive.load() && !g_runCheckpoint.RestorePending() && !g_runCheckpoint.SavePending() &&
         !::Mission::Setup::IsPending() && demoSnapshotCanValidate) {
         if (::Mission::TutorialSession::IsActive()) {
             ::Mission::TutorialSession::Tick(s);
@@ -6811,7 +6749,7 @@ void Tick() {
             if (g_runStartupInputHeld.load(std::memory_order_acquire) &&
                 PendingLaunchPolicy::CanReleaseStartupInput(
                     g_pendingStartupInputHeld.load(std::memory_order_acquire),
-                    g_runRestorePending, g_runSavePending,
+                    g_runCheckpoint.RestorePending(), g_runCheckpoint.SavePending(),
                     true,
                     tutorialOwnerEstablished)) {
                 SetRunnerStartupInputHold(false);
@@ -6833,7 +6771,7 @@ Snapshot GetSnapshot() {
 }
 
 void SetPendingMissionMode(bool on) {
-    g_pendingMissionMode.store(on);
+    g_pendingMissionEntry.SetPending(on);
     if (on) {
         ReleasePendingStartupInputHold("replaced by generic browser entry");
         {
@@ -6843,19 +6781,19 @@ void SetPendingMissionMode(bool on) {
         }
         ClearPendingMatchMetadata();
         CharacterHotswap::CancelDirectPracticeLoad("generic mission browser entry");
-        g_pendingMissionSawCharacterSelect.store(false, std::memory_order_release);
-        g_pendingRecordMode.store(false);
-        g_pendingRecordSawCharacterSelect.store(false, std::memory_order_release);
+        g_pendingMissionEntry.ClearCharacterSelect();
+        g_pendingRecordEntry.SetPending(false);
+        g_pendingRecordEntry.ClearCharacterSelect();
     } else {
         ReleasePendingStartupInputHold("pending mission mode disabled");
     }
 }
 
 void SetPendingRecordMode(bool on) {
-    g_pendingRecordMode.store(on);
-    g_pendingRecordSawCharacterSelect.store(false, std::memory_order_release);
+    g_pendingRecordEntry.SetPending(on);
+    g_pendingRecordEntry.ClearCharacterSelect();
     if (on) {
-        g_pendingMissionMode.store(false);
+        g_pendingMissionEntry.SetPending(false);
         {
             std::lock_guard<std::mutex> lk(g_pendingLoadMx);
             g_pendingLoadPath.clear();
@@ -6899,8 +6837,7 @@ bool SetPendingMissionLoad(const std::string& missionPath, std::string& errorOut
         g_pendingLoadPath = missionPath;
         g_pendingLoadMission = m;
     }
-    g_pendingHaveChars.store(false);
-    g_pendingCsQueued.store(false);
+    g_pendingMatchupSelection.Reset();
     if (p1SelectId >= 0 && p2SelectId >= 0) {
             g_pendingP1SelectId.store(p1SelectId);
             g_pendingP2SelectId.store(p2SelectId);
@@ -6908,7 +6845,7 @@ bool SetPendingMissionLoad(const std::string& missionPath, std::string& errorOut
             g_pendingP2Palette.store(m.dummy.palette);
             g_pendingStage.store(m.stage);
             g_pendingBgm.store(m.bgm);
-            g_pendingHaveChars.store(true);
+            g_pendingMatchupSelection.Publish();
             LogOut("[MISSION] pending resource-to-select mapping " +
                    m.player.character + "=" + std::to_string(p1SelectId) + " " +
                    m.dummy.character + "=" + std::to_string(p2SelectId), true);
@@ -6927,15 +6864,15 @@ bool SetPendingMissionLoad(const std::string& missionPath, std::string& errorOut
         LogOut("[MISSION] cannot prepare pinned matchup: unresolved resource names p1='" +
                m.player.character + "' p2='" + m.dummy.character + "'", true);
     }
-    g_pendingMissionSawCharacterSelect.store(false, std::memory_order_release);
-    g_pendingMissionMode.store(true);
-    g_pendingRecordMode.store(false);
-    g_pendingRecordSawCharacterSelect.store(false, std::memory_order_release);
+    g_pendingMissionEntry.ClearCharacterSelect();
+    g_pendingMissionEntry.SetPending(true);
+    g_pendingRecordEntry.SetPending(false);
+    g_pendingRecordEntry.ClearCharacterSelect();
     AcquirePendingStartupInputHold();
     LogOut("[MISSION] pending mission load queued: " + missionPath +
             (CharacterHotswap::IsDirectPracticeLoadPending()
                 ? " (direct Loading)"
-                : (g_pendingHaveChars.load() ? " (Character Select fallback)"
+                : (g_pendingMatchupSelection.HasCharacters() ? " (Character Select fallback)"
                                        : " (no chars in json - manual select)")), true);
     return true;
 }
@@ -6956,8 +6893,8 @@ bool CancelPendingMissionLoad(const char* reason) {
         return false;
     }
 
-    g_pendingMissionMode.store(false, std::memory_order_release);
-    g_pendingMissionSawCharacterSelect.store(false, std::memory_order_release);
+    g_pendingMissionEntry.SetPending(false, std::memory_order_release);
+    g_pendingMissionEntry.ClearCharacterSelect();
     ClearPendingMatchMetadata();
     ReleasePendingStartupInputHold(reason && *reason ? reason
                                                      : "pending launch canceled");
@@ -6993,38 +6930,33 @@ bool OwnsCaptureHotkeys() {
 }
 void SetCaptureMenuOpen(bool open) {
     if (open) {
-        g_recCaptureMenuReleasePending.store(false, std::memory_order_release);
-        g_recCaptureMenuRequested.store(true, std::memory_order_release);
+        g_recCaptureMenu.Open();
         MacroController::SetRecordingCaptureSuspended(true);
         return;
     }
-    if (IsCapturePhase(g_recPhase.load(std::memory_order_acquire))) {
-        g_recCaptureMenuReleasePending.store(true, std::memory_order_release);
-    }
-    g_recCaptureMenuRequested.store(false, std::memory_order_release);
+    g_recCaptureMenu.Close(IsCapturePhase(g_recPhase.load(std::memory_order_acquire)));
 }
+
 bool IsCaptureMenuSuspended() {
-    return g_recCaptureMenuSuspendedView.load(std::memory_order_acquire) ||
-           g_recCaptureMenuRequested.load(std::memory_order_acquire);
+    return g_recCaptureMenu.Suspended() ||
+           g_recCaptureMenu.IsOpen();
 }
 bool IsMenuInputHandoffActive() {
     return IsCaptureMenuSuspended() ||
-           g_recCaptureMenuReleasePending.load(std::memory_order_acquire) ||
-           g_recMenuCommandHandoffRequested.load(std::memory_order_acquire);
+           g_recCaptureMenu.HasReleaseRequest() ||
+           g_recCommandHandoff.Pending();
 }
 void BeginMenuCommandHandoff() {
     SetRecorderInputLease(true);
     ResetInputPollOverrideHitCount(1);
     uint32_t discardedSerial = 0;
     (void)ConsumeInputPollAttackEdgeBatch(1, discardedSerial);
-    g_recMenuCommandHandoffActive = true;
     g_recMenuCommandHandoffLastPollSerial = GetInputPollSerial(1);
     g_recMenuCommandHandoffNeutralPolls = 0;
-    g_recMenuCommandHandoffDone.store(false, std::memory_order_release);
     PauseIntegration::OnMenuSurfaceVisibilityChanged(
         PauseIntegration::MenuSurface::RecorderCommandHandoff, true);
     g_recMenuCommandPauseOwned = true;
-    g_recMenuCommandHandoffRequested.store(true, std::memory_order_release);
+    g_recCommandHandoff.Begin();
 }
 Phase GetPhase() { return g_recPhase.load(std::memory_order_acquire); }
 int  GetStepCount() { return g_recStepCountView.load(std::memory_order_acquire); }
@@ -7209,9 +7141,7 @@ void NotifyPracticeSessionReset(const char* reason) {
     SetRecorderInputLease(false);
     g_recActive.store(false, std::memory_order_release);
     g_recPhase.store(RecorderPhase::Idle, std::memory_order_release);
-    g_recCountInFrames = 0;
-    g_recCountInTargetTicks = 0;
-    g_recCountInElapsed = false;
+    g_recCountIn.Reset();
     ResetRecorderCaptureState();
     g_recSetup = ::Mission::Mission();
     DirectDrawHook::RemoveMessagesByCategory("mission_record");
@@ -7261,9 +7191,7 @@ void NotifyStateLoaded() {
         SetRecorderInputLease(false);
         g_recActive.store(false, std::memory_order_release);
         ResetRecorderCaptureState();
-        g_recCountInFrames = 0;
-        g_recCountInTargetTicks = 0;
-        g_recCountInElapsed = false;
+        g_recCountIn.Reset();
         g_recPhase.store(RecorderPhase::PreRecord, std::memory_order_release);
         ShowRecorderState("State loaded: take discarded; press Macro Record for a fresh count-in",
                           RGB(255, 200, 120), 1800);
@@ -8674,7 +8602,7 @@ bool LoadPrepared(::Mission::Mission mission, const std::string& sourcePath,
     g_runMission = std::move(mission);
     g_runAttempts = 0;
     ResetProgress();
-    g_runStateSaved = false;
+    g_runCheckpoint.Reset();
     g_runSaveSettle = 0;
     g_runSaveRetries = 0;
     g_runSaveElapsed = 0;
@@ -8683,17 +8611,15 @@ bool LoadPrepared(::Mission::Mission mission, const std::string& sourcePath,
     g_runRestoreTimeout = 0;
     const bool isTutorial =
         g_runMission.tutorialSchema > 0 && g_runMission.hasLesson;
-    g_runRestorePending = !g_runMission.savestate.empty() && ::Mission::StateDump::Available();
-    g_runSavePending = !g_runRestorePending;
+    g_runCheckpoint.Begin(!g_runMission.savestate.empty() && ::Mission::StateDump::Available());
     g_runActive.store(true);
     SetRunnerStartupInputHold(true);
     if (!::Mission::Setup::Apply(g_runMission,
-                                 !g_runRestorePending,
+                                 !g_runCheckpoint.RestorePending(),
                                  forceFreshMatch,
                                  true,
                                  !forceFreshMatch)) {
-        g_runSavePending = false;
-        g_runRestorePending = false;
+        g_runCheckpoint.Complete(false);
         std::string setupFailure;
         const std::string failureMessage = ::Mission::Setup::TakeFailure(setupFailure)
             ? "lesson start state could not be applied: " + setupFailure
@@ -8719,7 +8645,7 @@ bool LoadPrepared(::Mission::Mission mission, const std::string& sourcePath,
         LogOut("[MISSION][RUN] load aborted: " + outMsg, true);
         return false;
     }
-    if (g_runRestorePending) {
+    if (g_runCheckpoint.RestorePending()) {
         LogOut("[MISSION][RUN] embedded start state present - will restore on settle", true);
     }
     outMsg = g_runMission.name.empty() ? sourcePath : g_runMission.name;
@@ -8770,12 +8696,10 @@ void Unload() {
     }
     ClearDemoTutorialHandoff(true);
     g_runActive.store(false);
-    g_runSavePending = false;
-    g_runStateSaved = false;
+    g_runCheckpoint.Reset();
     g_runSaveRetries = 0;
     g_runSaveElapsed = 0;
     g_runSaveBlocker.clear();
-    g_runRestorePending = false;
     g_runRestoreSettle = 0;
     g_runRestoreTimeout = 0;
     SetRunnerStartupInputHold(false);
@@ -8806,7 +8730,7 @@ Phase GetPhase() {
 bool RequestBaselineRestore(std::string& outMsg) {
     std::lock_guard<std::recursive_mutex> lock(g_runStateMx);
     if (!g_runActive.load(std::memory_order_acquire)) { outMsg = "no active session"; return false; }
-    if (!g_runStateSaved || !SavestateHook::IsInstalled()) { outMsg = "no baseline saved"; return false; }
+    if (!g_runCheckpoint.Ready() || !SavestateHook::IsInstalled()) { outMsg = "no baseline saved"; return false; }
     if (g_recActive.load() || CharacterHotswap::IsBusy() || ::Mission::Setup::IsPending()) {
         outMsg = "restore blocked (busy)";
         return false;
@@ -8827,7 +8751,7 @@ bool RequestBaselineRestore(std::string& outMsg) {
 bool HasBaseline() {
     std::lock_guard<std::recursive_mutex> lock(g_runStateMx);
     return g_runActive.load(std::memory_order_acquire) &&
-           g_runStateSaved && SavestateHook::IsInstalled();
+           g_runCheckpoint.Ready() && SavestateHook::IsInstalled();
 }
 bool HasDemo() {
     std::lock_guard<std::recursive_mutex> lock(g_runStateMx);
@@ -8872,7 +8796,7 @@ bool CurrentStepArmed() {
 bool IsReadyForPlayer() {
     std::lock_guard<std::recursive_mutex> lock(g_runStateMx);
     return g_runActive.load(std::memory_order_acquire) &&
-           !g_runRestorePending && !g_runSavePending &&
+           !g_runCheckpoint.RestorePending() && !g_runCheckpoint.SavePending() &&
            !g_runStartupInputHeld.load(std::memory_order_acquire) &&
            !Demo::IsActive();
 }
@@ -8896,7 +8820,7 @@ bool GetRenderSnapshot(::Mission::Mission& missionOut, int& currentStepOut,
                 true,
                 !g_runMission.steps.empty());
         const bool playerRecipe =
-            !g_runRestorePending && !g_runSavePending &&
+            !g_runCheckpoint.RestorePending() && !g_runCheckpoint.SavePending() &&
             !g_runStartupInputHeld.load(std::memory_order_acquire) &&
             g_demoPhase.load(std::memory_order_acquire) == DemoPhase::Idle;
         if (!demoRecipe && !playerRecipe) return false;

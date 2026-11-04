@@ -1,3 +1,4 @@
+#include "game/auto_jump_state.h"
 #include "../include/game/auto_jump.h"
 #include "../include/game/auto_action.h"
 #include "../include/core/constants.h"
@@ -150,18 +151,13 @@ void MonitorAutoJump() {
     if (GetCurrentGameMode() != GameMode::Practice) return;
     if (IsNetplaySuspendActive()) return;
 
-    constexpr int kLandingNeutralTicks = 3;
-    using clock = std::chrono::steady_clock;
-    static clock::time_point holdUntil[3] = { clock::time_point(), clock::time_point(), clock::time_point() };
-    static clock::time_point nextApplyAt[3] = { clock::time_point(), clock::time_point(), clock::time_point() };
-
     // Landing-edge handling: we must present a neutral frame between jumps so the game sees a new UP press.
     static bool s_wasGrounded[3] = { true, true, true };
-    static int  s_neutralUntilTick[3] = { 0, 0, 0 };
+    static AutoJumpState::LandingInput s_landingInput[3];
     static int  s_prevTarget = 0;
     const int tickNow = GetEngineTick();
     for (int p = 1; p <= 2; ++p) {
-        if (s_neutralUntilTick[p] > tickNow + kLandingNeutralTicks) s_neutralUntilTick[p] = 0;
+        s_landingInput[p].ObserveTick(tickNow);
     }
 
     auto isGrounded = [](int p) -> bool {
@@ -202,12 +198,8 @@ void MonitorAutoJump() {
     if (!autoJumpEnabled.load()) {
         releaseIfOurJump(1);
         releaseIfOurJump(2);
-        holdUntil[1] = holdUntil[2] = clock::time_point();
-        nextApplyAt[1] = nextApplyAt[2] = clock::time_point();
         return;
     }
-
-    const auto now = clock::now();
 
     uintptr_t moveIDAddr1 = 0;
     uintptr_t moveIDAddr2 = 0;
@@ -220,9 +212,6 @@ void MonitorAutoJump() {
         if (targetPlayer != 2 && targetPlayer != 3) releaseIfOurJump(2);
         s_prevTarget = targetPlayer;
     }
-
-    const auto holdDuration = std::chrono::milliseconds(1000);
-    const auto reapplyInterval = std::chrono::milliseconds(1000);
 
     if (targetPlayer == 1 || targetPlayer == 3) {
         if (IsAutoActionActiveForPlayer(1)) {
@@ -241,17 +230,16 @@ void MonitorAutoJump() {
             uint8_t curMask = ImmediateInput::GetCurrentDesired(1);
 
             if (landing) {
-                s_neutralUntilTick[1] = tickNow + kLandingNeutralTicks;
+                s_landingInput[1].Landed(tickNow);
                 if (ValidationMetricsEnabled()) { GetValidationMetrics().p1ForcedNeutralFrames++; }
             }
 
-            if (tickNow < s_neutralUntilTick[1]) {
+            if (s_landingInput[1].phase == AutoJumpState::Phase::Neutralizing) {
                 ImmediateInput::Set(1, 0);
             } else {
                 bool needApply = curMask != wantMask || curMask == 0;
                 if (needApply) {
                     ApplyJump(moveIDAddr1, 1, direction);
-                    holdUntil[1] = now + holdDuration;
                 }
             }
         }
@@ -274,17 +262,16 @@ void MonitorAutoJump() {
             uint8_t curMask = ImmediateInput::GetCurrentDesired(2);
 
             if (landing) {
-                s_neutralUntilTick[2] = tickNow + kLandingNeutralTicks;
+                s_landingInput[2].Landed(tickNow);
                 if (ValidationMetricsEnabled()) { GetValidationMetrics().p2ForcedNeutralFrames++; }
             }
 
-            if (tickNow < s_neutralUntilTick[2]) {
+            if (s_landingInput[2].phase == AutoJumpState::Phase::Neutralizing) {
                 ImmediateInput::Set(2, 0);
             } else {
                 bool needApply = curMask != wantMask || curMask == 0;
                 if (needApply) {
                     ApplyJump(moveIDAddr2, 2, direction);
-                    holdUntil[2] = now + holdDuration;
                 }
             }
         }

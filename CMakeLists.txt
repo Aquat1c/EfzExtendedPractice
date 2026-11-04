@@ -889,6 +889,14 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME gui_lifecycle_state_tests COMMAND gui_lifecycle_state_tests)
 
+    foreach(state_test IN ITEMS mission_engine sayuri_counter immediate_input)
+        add_executable(${state_test}_state_tests tests/${state_test}_state_tests.cpp)
+        target_include_directories(${state_test}_state_tests PRIVATE include)
+        set_property(TARGET ${state_test}_state_tests PROPERTY
+            MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
+        add_test(NAME ${state_test}_state_tests COMMAND ${state_test}_state_tests)
+    endforeach()
+
     add_executable(auto_action_state_tests tests/auto_action_state_tests.cpp)
     target_include_directories(auto_action_state_tests PRIVATE include .)
     set_property(TARGET auto_action_state_tests PROPERTY

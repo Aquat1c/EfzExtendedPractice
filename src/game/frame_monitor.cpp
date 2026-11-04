@@ -932,8 +932,10 @@ void UpdateTriggerOverlay() {
 }
 
 namespace {
+enum class RGPhase { Idle, CounterWindow, Measuring, Published };
 struct RGAnalysis {
-    bool active = false;
+    RGPhase phase = RGPhase::Idle;
+    bool IsTracking() const { return phase == RGPhase::CounterWindow || phase == RGPhase::Measuring; }
     int defender = 0;
     short rgMove = 0;
     // Freeze and stun durations in visual frames, from the EFZ wiki.
@@ -944,14 +946,11 @@ struct RGAnalysis {
     double fa1F      = 0.0; // immediate FA from freeze timings (visual frames)
     double fa2ThF    = 0.0; // theoretical FA2 = FA1 + RG stun (visual frames)
     double fa2F      = 0.0; // measured FA until both actionable again (visual frames)
-    bool   fa2Ready  = false;
     int attacker = 0;
     short attackerMoveAtEvent = -1;
-    bool cRGOpen = false;
     int openedAtFrame = 0;
     int atkActionableAt = -1;
     int defActionableAt = -1;
-    bool fa2Announced = false;
 };
 struct MonitorWorldState {
     uintptr_t cachedMoveIDAddr1 = 0;
@@ -1863,11 +1862,11 @@ void FrameDataMonitor() {
 
             const PerFrameSample &rgSample = g_lastSample;
             auto closeCRGIfOver = [&](RGAnalysis &rg) {
-                if (!rg.active || !rg.cRGOpen) return;
+                if (rg.phase != RGPhase::CounterWindow) return;
                 short atkMoveNow = (rg.attacker == 1) ? rgSample.moveID1 : rgSample.moveID2;
                 bool atkActionable = (rg.attacker == 1) ? rgSample.actionable1 : rgSample.actionable2;
                 if (atkActionable || atkMoveNow != rg.attackerMoveAtEvent) {
-                    rg.cRGOpen = false;
+                    rg.phase = RGPhase::Measuring;
                     std::ostringstream os; os.setf(std::ios::fixed); os << std::setprecision(2);
                     os << "RG: cRG window closed for P" << rg.defender << " (attacker now actionable/cancelled)";
                     if (g_deepFrameAdvDebug.load()) {
@@ -1877,7 +1876,7 @@ void FrameDataMonitor() {
             };
 
             auto updateRGFA = [&](RGAnalysis &rg) {
-                if (!rg.active) return;
+                if (!rg.IsTracking()) return;
                 const double kIntToVis = 64.0 / 192.0; // 3 internal subframes per EFZ visual frame
 
                 // A fresh non-RG lockout supersedes the RG exchange; the normal FA tracker owns it.
@@ -1933,11 +1932,9 @@ void FrameDataMonitor() {
                     }
                 }
 
-                if (!rg.fa2Announced && rg.atkActionableAt >= 0 && rg.defActionableAt >= 0) {
+                if (rg.atkActionableAt >= 0 && rg.defActionableAt >= 0) {
                     int deltaInt = rg.defActionableAt - rg.atkActionableAt;
                     rg.fa2F = deltaInt * kIntToVis;
-                    rg.fa2Ready = true;
-                    rg.fa2Announced = true;
 
                     std::ostringstream os; os.setf(std::ios::fixed); os << std::setprecision(2);
                           os << "RG: P" << rg.defender
@@ -1997,7 +1994,7 @@ void FrameDataMonitor() {
                         if (g_FrameAdvantage2Id != -1) { DirectDrawHook::RemovePermanentMessage(g_FrameAdvantage2Id); g_FrameAdvantage2Id = -1; }
                     }
 
-                    rg.active = false;
+                    rg.phase = RGPhase::Published;
                 }
             };
 
@@ -2007,7 +2004,7 @@ void FrameDataMonitor() {
             auto onRGEdge = [&](int defender, short rgMove) {
                 RGAnalysis &slot = (defender == 1) ? s_rgP1 : s_rgP2;
                 slot = RGAnalysis{};
-                slot.active = true;
+                slot.phase = RGPhase::CounterWindow;
                 slot.defender = defender;
                 slot.rgMove = rgMove;
                 int defCharId = (defender == 1) ? displayData.p1CharID : displayData.p2CharID;
@@ -2016,7 +2013,6 @@ void FrameDataMonitor() {
                 slot.fa2ThF = slot.fa1F + slot.rgStunF;
                 slot.attacker = (defender == 1) ? 2 : 1;
                 slot.attackerMoveAtEvent = (slot.attacker == 1) ? moveID1 : moveID2;
-                slot.cRGOpen = true;
                 slot.openedAtFrame = GetCurrentInternalFrame();
                 emitRGMessage(slot);
 
@@ -2056,7 +2052,7 @@ void FrameDataMonitor() {
 
                 if (s_crgAssistActive) {
                 const RGAnalysis& humanRg = (s_crgAssistHumanP == 1) ? s_rgP1 : s_rgP2;
-                bool windowOpen = (humanRg.active && humanRg.cRGOpen);
+                bool windowOpen = (humanRg.phase == RGPhase::CounterWindow);
                 const int dP = 3 - s_crgAssistHumanP;
                 const short dm  = (dP == 1) ? moveID1 : moveID2;
                 const short pdm = (dP == 1) ? prevMoveID1 : prevMoveID2;

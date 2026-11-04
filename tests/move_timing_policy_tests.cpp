@@ -1,3 +1,4 @@
+#include "game/auto_jump_state.h"
 #include "../include/game/move_timing_policy.h"
 #include "../include/game/collision_box_policy.h"
 #include "../include/game/combo_baseline_policy.h"
@@ -361,6 +362,18 @@ void TestDefenderFreeEdge() {
 }
 
 int main() {
+    AutoJumpState::LandingInput jump;
+    jump.ObserveTick(10);
+    CHECK(jump.phase == AutoJumpState::Phase::HoldingJump);
+    jump.Landed(10);
+    jump.ObserveTick(12);
+    CHECK(jump.phase == AutoJumpState::Phase::Neutralizing);
+    jump.ObserveTick(13);
+    CHECK(jump.phase == AutoJumpState::Phase::HoldingJump);
+    jump.Landed(20);
+    jump.ObserveTick(1);
+    CHECK(jump.phase == AutoJumpState::Phase::HoldingJump);
+
     TestDefenderFreeEdge();
     TestSimpleMove();
     TestChainStartsNewRecord();

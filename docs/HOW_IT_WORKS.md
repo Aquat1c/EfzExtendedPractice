@@ -237,6 +237,41 @@ queue and refuses new work until the next Practice battle, because queued work
 belongs to that battle's fighters. The netplay branch of the hook returns
 before the drain, so the queue is never reached online.
 
+## Lifecycle ownership
+
+Each subsystem owns its phases and its cleanup. A queued action, an accepted
+input and an action consumed by EFZ are distinct events. Timers measure
+progress within a phase; generation and lease tokens identify the work that
+may complete or release it.
+
+`TriggerDelayState` (`include/game/auto_action.h`) separates waiting to
+dispatch from waiting for a motion, normal input or staged recipe. It keeps
+one consumer generation at a time. A failed consumer releases that generation
+before retrying the same selected option. Choosing an option and consuming
+game RNG remain in their original call paths.
+
+Macro playback has separate priming and finish phases. Priming waits for the
+first poll before draining the remaining input slices. Finishing waits for
+the final poll and clear tick, neutralizes input, then guards the handoff.
+Airtech attempts likewise distinguish neutral input, publication, held input
+and release; their counters advance on engine ticks rather than monitor calls.
+
+UI and render state are owned by `GuiLifecycle`
+(`include/gui/lifecycle_state.h`). Binding capture waits for the opening key
+to be released. Menu confirmation is a page of an open menu. The fallback
+worker claims startup before launching its thread, and a late readiness
+notification cannot undo a stop request. Missing game frames and an unavailable
+render backend are separate fallback reasons. The shared reset gate preserves
+pending reset work across backend unbinding.
+
+Practice worker faults remain terminal when a later stop request arrives.
+Frame-step completion, savestate side reconciliation and tutorial preview
+refresh each retain their own phases. Input leases, borrowed pointers, patch
+ownership and queued cleanup requests can overlap; they remain independent
+of these phases so partial cleanup cannot discard a remaining obligation.
+Native game-state values, exported layouts and saved configuration formats
+keep their existing representation.
+
 ## The input pipeline
 
 `src/input/input_hook.cpp` detours the game's character-input, poll, and

@@ -4,6 +4,23 @@
 #include <cstdint>
 
 namespace GuiLifecycle {
+
+enum class ConfirmationPage { Closed, Menu, Confirmation };
+class ConfirmationMenu {
+public:
+    bool IsOpen() const { return page_ != ConfirmationPage::Closed; }
+    bool IsConfirming() const { return page_ == ConfirmationPage::Confirmation; }
+    void Open() { page_ = ConfirmationPage::Menu; }
+    void Close() { page_ = ConfirmationPage::Closed; }
+    void Confirm() {
+        if (page_ == ConfirmationPage::Menu) page_ = ConfirmationPage::Confirmation;
+    }
+    void CancelConfirmation() {
+        if (page_ == ConfirmationPage::Confirmation) page_ = ConfirmationPage::Menu;
+    }
+private:
+    ConfirmationPage page_ = ConfirmationPage::Closed;
+};
 enum class CapturePhase { Closed, AwaitRelease, Capturing };
 
 class KeyCapture {

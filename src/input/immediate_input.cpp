@@ -1,3 +1,4 @@
+#include "input/immediate_input_state.h"
 #include "../include/input/immediate_input.h"
 #include "../include/input/input_core.h"
 #include "../include/input/input_hook.h"
@@ -42,8 +43,7 @@ private:
 
 static HANDLE s_thread = nullptr;
 static uint64_t s_launchGeneration = 0;
-static std::atomic<bool> s_running{false};
-static std::atomic<bool> s_stop{false};
+static WorkerLifecycle s_worker;
 static std::atomic<uint64_t> s_workerGeneration{0};
 static std::mutex s_lifecycleMutex;
 static HANDLE s_stopEvent = nullptr;
@@ -85,8 +85,8 @@ static bool OtherInputOwnerActive(int playerNum) {
 // Only a live worker can retire a timed or held mask; it never restarts here, so nothing re-arms
 // after the Practice boundary. Caller holds g_p2ControlMutex, which netplay publication also takes.
 static bool WorkerAcceptsInput() {
-    return s_running.load(std::memory_order_acquire) &&
-           !s_stop.load(std::memory_order_acquire) &&
+    return s_worker.IsRunning(std::memory_order_acquire) &&
+           !s_worker.ShouldStop() &&
            IsPracticeContext();
 }
 
@@ -127,7 +127,7 @@ static void Worker(uint64_t generation) {
     if (g_onlineModeActive.load(std::memory_order_acquire) ||
         !OwnsWorkerGeneration(generation)) {
         if (OwnsWorkerGeneration(generation)) {
-            s_running.store(false, std::memory_order_release);
+            s_worker.Exited();
         }
         return;
     }
@@ -139,7 +139,7 @@ static void Worker(uint64_t generation) {
                std::to_string(kVisualFrameDuration.count()) + " ns per visual frame)", true);
     }
 
-    while (!s_stop.load(std::memory_order_acquire) &&
+    while (!s_worker.ShouldStop() &&
            OwnsWorkerGeneration(generation)) {
         Practice::WorkLease work;
         const bool inPractice = IsPracticeContext();
@@ -162,7 +162,7 @@ static void Worker(uint64_t generation) {
         // Netplay may publish while this detached worker sleeps; the old
         // offline iteration must not write once the online owner is live.
         if (g_onlineModeActive.load(std::memory_order_acquire) ||
-            s_stop.load(std::memory_order_acquire) ||
+            s_worker.ShouldStop() ||
             !OwnsWorkerGeneration(generation) || (work && !work.IsCurrent())) {
             break;
         }
@@ -174,7 +174,7 @@ static void Worker(uint64_t generation) {
             ImmediateWriteLease writeLease(p);
             if (!writeLease) continue;
             if (g_onlineModeActive.load(std::memory_order_acquire) ||
-                s_stop.load(std::memory_order_acquire) ||
+                s_worker.ShouldStop() ||
                 !OwnsWorkerGeneration(generation) || (work && !work.IsCurrent())) {
                 break;
             }
@@ -184,7 +184,8 @@ static void Worker(uint64_t generation) {
             uint8_t last = s_slot[p].lastWritten.load(std::memory_order_relaxed);
             bool needNeutral = s_slot[p].needNeutralEdge.exchange(false);
 
-            if (t > 0) {
+            const auto outputMode = ReadOutputMode(curDesired, t);
+            if (outputMode == OutputMode::Timed) {
                 if (curDesired == 0) {
                     s_slot[p].ticks.store(0, std::memory_order_relaxed);
                     continue;
@@ -236,7 +237,7 @@ static void Worker(uint64_t generation) {
                 s_slot[p].lastWritten.store(0, std::memory_order_relaxed);
             }
 
-            if (curDesired != 0) {
+            if (outputMode == OutputMode::Held) {
                 // Reassert periodically; the game may clear the mask each frame.
                 if (last != 0 && last != curDesired) {
                     WriteWorkerInput(p, 0);
@@ -257,7 +258,7 @@ static void Worker(uint64_t generation) {
     if (!OwnsWorkerGeneration(generation)) return;
 
     if (s_boundWorld.id.battleWorld) {
-        s_running.store(false, std::memory_order_release);
+        s_worker.Exited();
         return;
     }
 
@@ -273,7 +274,7 @@ static void Worker(uint64_t generation) {
         s_slot[p].needNeutralEdge.store(false, std::memory_order_relaxed);
     }
     if (OwnsWorkerGeneration(generation)) {
-        s_running.store(false, std::memory_order_release);
+        s_worker.Exited();
     }
 }
 
@@ -284,7 +285,7 @@ void Start() {
     std::lock_guard<std::mutex> lifecycleLock(s_lifecycleMutex);
     if (s_practiceAdmissionClosed.load(std::memory_order_acquire) ||
         !IsPracticeContext() ||
-        s_running.load(std::memory_order_acquire)) return;
+        s_worker.IsRunning(std::memory_order_acquire)) return;
     if (s_boundWorld.id.battleWorld && (s_ownedRaw[1] || s_ownedRaw[2])) return;
 
     if (s_thread) {
@@ -297,14 +298,13 @@ void Start() {
     ResetEvent(s_stopEvent);
 
     const uint64_t generation = NextWorkerGeneration();
-    s_stop.store(false, std::memory_order_release);
     for (int p = 1; p <= 2; ++p) {
         s_slot[p].desired.store(0);
         s_slot[p].ticks.store(0);
         s_slot[p].lastWritten.store(0);
         s_slot[p].needNeutralEdge.store(false);
     }
-    s_running.store(true, std::memory_order_release);
+    s_worker.Started();
     s_launchGeneration = generation;
     s_thread = reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0,
         [](void* context) -> unsigned int {
@@ -312,8 +312,7 @@ void Start() {
             return 0;
         }, &s_launchGeneration, 0, nullptr));
     if (!s_thread) {
-        s_running.store(false, std::memory_order_release);
-        s_stop.store(true, std::memory_order_release);
+        s_worker.Exited();
         CloseHandle(s_stopEvent);
         s_stopEvent = nullptr;
     }
@@ -329,8 +328,7 @@ static bool StopWorker(bool releaseNeutral, const EfzTmEntryV1* heldWorld = null
         heldWorld->player1 != s_boundWorld.player1 || heldWorld->player2 != s_boundWorld.player2)) return false;
     if (heldWorld) s_practiceAdmissionClosed.store(true, std::memory_order_release);
     if (s_practiceAdmissionClosed.load(std::memory_order_acquire)) releaseNeutral = false;
-    const bool wasRunning = s_running.exchange(false, std::memory_order_acq_rel);
-    s_stop.store(true, std::memory_order_release);
+    const bool wasRunning = s_worker.BeginJoin();
     (void)NextWorkerGeneration();
     if (s_stopEvent) SetEvent(s_stopEvent);
     if (s_thread) {
@@ -342,6 +340,7 @@ static bool StopWorker(bool releaseNeutral, const EfzTmEntryV1* heldWorld = null
         CloseHandle(s_stopEvent);
         s_stopEvent = nullptr;
     }
+    s_worker.Exited();
 
     bool restored = true;
     for (int p = 1; p <= 2; ++p) {
@@ -370,7 +369,7 @@ void CancelWork() {
     std::lock_guard<std::mutex> lifecycleLock(s_lifecycleMutex);
     // Only BindPracticeWorld reopens admission; never close it without a bound world.
     if (s_boundWorld.id.battleWorld) s_practiceAdmissionClosed.store(true, std::memory_order_release);
-    s_stop.store(true, std::memory_order_release);
+    s_worker.RequestStop();
     if (s_stopEvent) SetEvent(s_stopEvent);
 }
 
@@ -382,7 +381,7 @@ bool BindPracticeWorld(const EfzTmEntryV1& world) {
     std::lock_guard<std::recursive_mutex> controlLock(g_p2ControlMutex);
     std::lock_guard<std::mutex> lifecycleLock(s_lifecycleMutex);
     if (!world.id.battleWorld || !world.id.timeline || !world.player1 || !world.player2 ||
-        s_running.load(std::memory_order_acquire)) return false;
+        s_worker.IsRunning(std::memory_order_acquire)) return false;
     if (s_thread) {
         WaitForSingleObject(s_thread, INFINITE);
         CloseHandle(s_thread);
@@ -398,7 +397,7 @@ bool BindPracticeWorld(const EfzTmEntryV1& world) {
     return true;
 }
 
-bool IsRunning() { return s_running.load(); }
+bool IsRunning() { return s_worker.IsRunning(); }
 
 static void SetImpl(int playerNum, uint8_t mask) {
     if (playerNum < 1 || playerNum > 2) return;

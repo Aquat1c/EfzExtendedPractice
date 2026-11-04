@@ -7,6 +7,19 @@ int main() {
     const auto expect = [&](bool ok, const char* message) {
         if (!ok) { std::cerr << message << '\n'; ++failures; }
     };
+    ConfirmationMenu menu;
+    menu.CancelConfirmation();
+    menu.Confirm();
+    expect(!menu.IsOpen(), "confirmation cannot open a closed menu");
+    menu.Open();
+    menu.Confirm();
+    expect(menu.IsOpen() && menu.IsConfirming(), "confirmation is an open menu page");
+    menu.CancelConfirmation();
+    expect(menu.IsOpen() && !menu.IsConfirming(), "back returns to the menu");
+    menu.Close();
+    menu.CancelConfirmation();
+    expect(!menu.IsOpen(), "late back cannot reopen the menu");
+
     KeyCapture capture;
     expect(!capture.IsOpen() && !capture.CanCapture(), "capture starts closed");
     capture.ObserveRelease(false);

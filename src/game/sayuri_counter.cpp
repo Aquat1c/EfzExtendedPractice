@@ -1,3 +1,4 @@
+#include "game/sayuri_counter_state.h"
 #include "../include/game/sayuri_counter.h"
 
 #include "../include/core/constants.h"
@@ -32,12 +33,9 @@ std::atomic<int> g_cutterMode[3];
 std::atomic<int> g_autoCutter[3];
 std::atomic<int> g_pickedMove[3];
 
-int      g_cutterPressAttempts[3];
-uint64_t g_cutterPressGeneration[3];
-constexpr int kAutoCutterMaxAttempts = 3;
+CutterSequence g_cutterSequence[3];
 
 std::atomic<int> g_autoCutterDelay[3];
-int g_cutterWindowOpenTick[3] = { -1, -1, -1 };
 constexpr int kInternalTicksPerVisualFrame = 3;
 
 // Biased +1 so 0 = nothing pinned; never write a pick unless the live opponent resolves to the same table.
@@ -375,26 +373,17 @@ void TickSide(int playerNum, uintptr_t base) {
     // The engine needs a rising A/B/C edge while armed, blockstop over and no opponent superflash;
     // a press consumed inside a freeze leaves no edge. The witnessed move is Magical Cutter (258).
     if (autoCutter == AUTO_CUTTER_ON) {
-        int& attempts = g_cutterPressAttempts[playerNum];
-        uint64_t& generation = g_cutterPressGeneration[playerNum];
+        CutterSequence& sequence = g_cutterSequence[playerNum];
         if (!inBlockstun) {
-            attempts = 0;
-            generation = 0;
-            g_cutterWindowOpenTick[playerNum] = -1;
+            sequence.Reset();
         } else {
             if (blockstunEntry) {
-                attempts = 0;
-                generation = 0;
-                g_cutterWindowOpenTick[playerNum] = -1;
+                sequence.Reset();
             }
-            bool pulsePending = false;
-            if (generation != 0) {
-                if (GetAutoActionNormalPulseOutcome(playerNum, generation)
-                        == AutoActionNormalPulseOutcome::Pending) {
-                    pulsePending = true;
-                } else {
-                    generation = 0;
-                }
+            if (sequence.phase == CutterPhase::AwaitingPulse &&
+                GetAutoActionNormalPulseOutcome(playerNum, sequence.generation)
+                    != AutoActionNormalPulseOutcome::Pending) {
+                sequence.PulseFinished();
             }
             const uintptr_t oppOffset = (playerNum == 1) ? EFZ_BASE_OFFSET_P2
                                                          : EFZ_BASE_OFFSET_P1;
@@ -405,13 +394,13 @@ void TickSide(int playerNum, uintptr_t base) {
                 ReadDword(base, baseOffset, SAYURI_CUTTER_ARMED_OFFSET, armed) && armed == 1u &&
                 ReadWord(base, baseOffset, BLOCKSTUN_OFFSET, blockstop) && blockstop == 0 &&
                 ReadWord(base, oppOffset, SUPERFLASH_FREEZE_OFFSET, oppSuperflash) && oppSuperflash == 0;
-            int& openTick = g_cutterWindowOpenTick[playerNum];
             const int nowTick = GetEngineTick();
-            if (windowOpen && openTick < 0) openTick = nowTick;
+            if (windowOpen) sequence.OpenWindow(nowTick);
+            const int openTick = sequence.openTick;
             const int delayVisual = g_autoCutterDelay[playerNum].load(std::memory_order_acquire);
             const bool delayElapsed = windowOpen && openTick >= 0 &&
                 (nowTick - openTick) >= delayVisual * kInternalTicksPerVisualFrame;
-            if (!pulsePending && attempts < kAutoCutterMaxAttempts) {
+            if (sequence.phase == CutterPhase::Waiting) {
                 if (delayElapsed) {
                     NormalInputPolicy::Intent intent{};
                     intent.direction = NormalInputPolicy::RelativeDirection::Neutral;
@@ -422,17 +411,16 @@ void TickSide(int playerNum, uintptr_t base) {
                     const auto submit = QueueAutoActionNormalPulse(
                         playerNum, intent, NormalInputPolicy::Timing::Immediate, &submitted);
                     if (submit == NormalInputPolicy::SubmitResult::Accepted) {
-                        generation = submitted;
-                        ++attempts;
+                        sequence.Submitted(submitted);
                         if (detailedLogging.load()) {
                             LogOut(std::string("[SAYURI] P") + std::to_string(playerNum) +
-                                   " auto cutter press queued attempt=" + std::to_string(attempts) +
+                                   " auto cutter press queued attempt=" + std::to_string(sequence.attempts) +
                                    " move=" + std::to_string(moveID) +
                                    " delayFrames=" + std::to_string(delayVisual) +
                                    " waitedTicks=" + std::to_string(nowTick - openTick), true);
                         }
                     } else if (submit == NormalInputPolicy::SubmitResult::Invalid) {
-                        attempts = kAutoCutterMaxAttempts;
+                        sequence.Invalid();
                     }
                 }
             }
@@ -564,9 +552,7 @@ void ResetState() {
         g_pickedTableBias[p].store(0, std::memory_order_release);
         g_selectionStale[p].store(0, std::memory_order_release);
         g_prevMoveId[p].store(0, std::memory_order_release);
-        g_cutterPressAttempts[p] = 0;
-        g_cutterPressGeneration[p] = 0;
-        g_cutterWindowOpenTick[p] = -1;
+        g_cutterSequence[p].Reset();
     }
 }
 

@@ -6,6 +6,59 @@
 #include <string>  
 #include "../include/core/constants.h"
 
+enum class WakeMacroTargetPhase { None, WaitingFrame, RetryActionable };
+enum class WakeMacroQueuePhase { NotQueued, Queued };
+class WakeMacroSchedule {
+public:
+    bool Queued() const { return queue_ == WakeMacroQueuePhase::Queued; }
+    bool HasTarget() const { return target_ == WakeMacroTargetPhase::WaitingFrame; }
+    bool ShouldRetryActionable() const { return target_ == WakeMacroTargetPhase::RetryActionable; }
+    int TargetFrame() const { return frame_; }
+    int TraceTargetFrame() const { return HasTarget() ? frame_ : ShouldRetryActionable() ? -2 : -1; }
+    void ArmTarget(int frame) { frame_ = frame; target_ = WakeMacroTargetPhase::WaitingFrame; }
+    void ClearTarget() { target_ = WakeMacroTargetPhase::None; frame_ = 0; }
+    void RetryActionable() { target_ = WakeMacroTargetPhase::RetryActionable; frame_ = 0; }
+    void MarkQueued() { queue_ = WakeMacroQueuePhase::Queued; }
+    void ResetQueue() { queue_ = WakeMacroQueuePhase::NotQueued; }
+private:
+    WakeMacroTargetPhase target_ = WakeMacroTargetPhase::None;
+    WakeMacroQueuePhase queue_ = WakeMacroQueuePhase::NotQueued;
+    int frame_ = 0;
+};
+
+enum class WakePrearmPhase { Idle, Ordinary, Special, Macro };
+class WakePrearmState {
+public:
+    bool Armed() const { return phase_ != WakePrearmPhase::Idle; }
+    bool IsSpecial() const { return phase_ == WakePrearmPhase::Special; }
+    bool IsMacro() const { return phase_ == WakePrearmPhase::Macro; }
+    void Arm(WakePrearmPhase phase) { phase_ = phase; }
+    void Disarm() { phase_ = WakePrearmPhase::Idle; }
+private:
+    WakePrearmPhase phase_ = WakePrearmPhase::Idle;
+};
+
+enum class WakeBufferedInputPhase { Empty, BufferedWithoutGeneration, AwaitingConsumer, RetainedGeneration };
+class WakeBufferedInputState {
+public:
+    WakeBufferedInputPhase Phase() const { return phase_; }
+    bool Buffered() const { return phase_ == WakeBufferedInputPhase::BufferedWithoutGeneration || phase_ == WakeBufferedInputPhase::AwaitingConsumer; }
+    uint64_t Generation() const { return generation_; }
+    void SetBuffered(bool buffered) {
+        phase_ = buffered
+            ? (generation_ != 0 ? WakeBufferedInputPhase::AwaitingConsumer : WakeBufferedInputPhase::BufferedWithoutGeneration)
+            : (generation_ != 0 ? WakeBufferedInputPhase::RetainedGeneration : WakeBufferedInputPhase::Empty);
+    }
+    void TrackMotion(uint64_t generation) {
+        const bool buffered = Buffered();
+        generation_ = generation;
+        SetBuffered(buffered);
+    }
+private:
+    WakeBufferedInputPhase phase_ = WakeBufferedInputPhase::Empty;
+    uint64_t generation_ = 0;
+};
+
 enum class WakeHoldPhase { Disabled, Primed, Issued };
 constexpr WakeHoldPhase WakeHoldAfterFailure(WakeHoldPhase phase) {
     return phase == WakeHoldPhase::Issued ? WakeHoldPhase::Primed : phase;
