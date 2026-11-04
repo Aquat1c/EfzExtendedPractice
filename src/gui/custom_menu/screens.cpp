@@ -3095,7 +3095,7 @@ bool MenuKeyCaptureAllowed(int vk) {
     if (kb.attacksDetected &&
         (vk == kb.aButton || vk == kb.bButton || vk == kb.cButton || vk == kb.dButton)) return false;
     const Config::Settings& s = Config::GetSettings();
-    // Effective keys as MonitorKeys resolves them, plus its hardwired '5'/'6'/F9.
+    // Effective keys as MonitorKeys resolves them, plus its hardwired '5'/'6'.
     const auto eff = [](int vk, int fallback) { return Config::ResolveHotkey(vk, fallback); };
     const int others[] = {
         eff(s.teleportKey, '1'), eff(s.recordKey, '2'), s.toggleTitleKey, s.resetFrameCounterKey,
@@ -3103,7 +3103,7 @@ bool MenuKeyCaptureAllowed(int vk) {
         eff(s.macroRecordKey, 'I'), eff(s.macroPlayKey, 'O'), eff(s.macroSlotKey, 'K'), eff(s.macroRandomKey, 0),
         s.uiAcceptKey, s.uiRefreshKey, s.uiExitKey,
         eff(s.framestepPauseKey, VK_SPACE), eff(s.framestepStepKey, 'P'), s.swapCustomKey,
-        '5', '6', VK_F9,
+        '5', '6',
     };
     for (int other : others) if (vk == other) return false;
     return true;

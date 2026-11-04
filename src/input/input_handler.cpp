@@ -428,7 +428,7 @@ void MonitorKeys() {
     const int trackedKeys[] = {
         configMenuKey, teleportKey, recordKey, toggleTitleKey, resetFrameCounterKey,
         savestateSaveKey, savestateLoadKey, switchPlayersKey, macroRecordKey, macroPlayKey,
-        macroSlotKey, macroRandomKey, framestepPauseKey, framestepStepKey, swapKey, '5', '6', VK_F9,
+        macroSlotKey, macroRandomKey, framestepPauseKey, framestepStepKey, swapKey, '5', '6',
     };
     const bool hotkeysLive = windowActive && !guiActive && !s_demoEscWasDown &&
         !Mission::Engine::Demo::IsActive() && !contextualPauseOwnsInput &&
@@ -783,9 +783,6 @@ void MonitorKeys() {
                     (void)GameThread::Post(&FramestepStepCommand);
                     keyHandled = true;
                 }
-            } else if (edges.Pressed(VK_F9)) {
-                ToggleAutoJump();
-                keyHandled = true;
             } else if (edges.Pressed(macroRecordKey)) {
                 if (GetCurrentGamePhase() == GamePhase::Match && AreCharactersInitialized()) {
                     if (Mission::Engine::Recorder::IsSessionActive()) {
@@ -1017,7 +1014,7 @@ bool ReadKeyMappingsFromIni() {
         {"Framestep Pause", Config::ResolveHotkey(cfg.framestepPauseKey, VK_SPACE)},
         {"Framestep Step", Config::ResolveHotkey(cfg.framestepStepKey, 'P')},
         {"Swap Positions", cfg.swapCustomEnabled ? Config::ResolveHotkey(cfg.swapCustomKey, 0) : 0},
-        {"Stats Page Previous", '5'}, {"Stats Page Next", '6'}, {"Auto-Jump Toggle", VK_F9},
+        {"Stats Page Previous", '5'}, {"Stats Page Next", '6'},
     };
     const NamedValue padFunctions[] = {
         {"Pad Teleport", cfg.gpTeleportButton},
