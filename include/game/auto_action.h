@@ -6,6 +6,63 @@
 #include <string>  
 #include "../include/core/constants.h"
 
+enum class RgPrearmPhase { Idle, AwaitingConsumer };
+class RgPrearmState {
+public:
+    bool Armed() const { return phase_ == RgPrearmPhase::AwaitingConsumer; }
+    uint64_t Generation() const { return generation_; }
+    void Arm(uint64_t generation) { generation_ = generation; phase_ = RgPrearmPhase::AwaitingConsumer; }
+    void Clear() { phase_ = RgPrearmPhase::Idle; generation_ = 0; }
+private:
+    RgPrearmPhase phase_ = RgPrearmPhase::Idle;
+    uint64_t generation_ = 0;
+};
+
+enum class WakeCleanupPhase { Idle, Watching };
+class WakeCleanupMonitor {
+public:
+    bool Watching() const { return phase_ == WakeCleanupPhase::Watching; }
+    int TicksRemaining() const { return ticks_; }
+    short LastMove() const { return lastMove_; }
+    void Start(int ticks, short move) { ticks_ = ticks; lastMove_ = move; phase_ = WakeCleanupPhase::Watching; }
+    void Stop() { phase_ = WakeCleanupPhase::Idle; ticks_ = 0; }
+    void Reset() { Stop(); lastMove_ = -1; }
+    void ObserveMove(short move) { lastMove_ = move; }
+    bool Tick() {
+        if (!Watching()) return false;
+        if (--ticks_ > 0) return false;
+        Stop();
+        return true;
+    }
+private:
+    WakeCleanupPhase phase_ = WakeCleanupPhase::Idle;
+    int ticks_ = 0;
+    short lastMove_ = -1;
+};
+
+enum class WakeMacroPlayer { None, Player1, Player2 };
+class WakeMacroHandoff {
+public:
+    bool Preserving() const { return preservation_.load() != WakeMacroPlayer::None; }
+    void Preserve(int player, std::memory_order order = std::memory_order_seq_cst) { preservation_.store(Owner(player), order); }
+    void ClearPreservation(std::memory_order order = std::memory_order_seq_cst) { preservation_.store(WakeMacroPlayer::None, order); }
+    int CompletedPlayer(std::memory_order order = std::memory_order_seq_cst) const { return static_cast<int>(completion_.load(order)); }
+    void Complete(int player, std::memory_order order = std::memory_order_seq_cst) { completion_.store(Owner(player), order); }
+    void ClearCompletion(std::memory_order order = std::memory_order_seq_cst) { completion_.store(WakeMacroPlayer::None, order); }
+    bool FinishPlayback(int player) {
+        const WakeMacroPlayer owner = Owner(player);
+        if (owner == WakeMacroPlayer::None || preservation_.load() != owner) return false;
+        ClearPreservation();
+        Complete(player);
+        return true;
+    }
+private:
+    static WakeMacroPlayer Owner(int player) { return player == 1 ? WakeMacroPlayer::Player1 : player == 2 ? WakeMacroPlayer::Player2 : WakeMacroPlayer::None; }
+    std::atomic<WakeMacroPlayer> preservation_{WakeMacroPlayer::None};
+    std::atomic<WakeMacroPlayer> completion_{WakeMacroPlayer::None};
+};
+extern WakeMacroHandoff g_wakeMacroHandoff;
+
 enum class WakeMacroTargetPhase { None, WaitingFrame, RetryActionable };
 enum class WakeMacroQueuePhase { NotQueued, Queued };
 class WakeMacroSchedule {

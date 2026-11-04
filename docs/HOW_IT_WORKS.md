@@ -256,6 +256,13 @@ the final poll and clear tick, neutralizes input, then guards the handoff.
 Airtech attempts likewise distinguish neutral input, publication, held input
 and release; their counters advance on engine ticks rather than monitor calls.
 
+Mission recording separates command acknowledgement, neutral polls, input
+leases and stopping at a macro boundary. Demonstrations distinguish input
+playback, settling final contacts and holding the terminal frame before
+restoring the baseline. A tutorial restore result remains pending until the
+tutorial acknowledges it; closing or resetting the session retires the
+handoff. These phases live in `include/game/mission/mission_engine_state.h`.
+
 UI and render state are owned by `GuiLifecycle`
 (`include/gui/lifecycle_state.h`). Binding capture waits for the opening key
 to be released. Menu confirmation is a page of an open menu. The fallback

@@ -807,9 +807,6 @@ static void ProcessDeferredDashFollowups(short curP1, short prevP1, short curP2,
 
 std::atomic<bool> g_pendingControlRestore(false);
 std::atomic<short> g_lastP2MoveID(-1);
-std::atomic<bool> g_crgFastRestore(false);
-static std::atomic<bool> g_recentDashQueued(false);
-static std::atomic<int> g_recentDashQueuedFrame(0);
 
 static void ResetDeferredDashFollowupState() {
     g_dashDeferred.phase.store(DashFollowPhase::Idle, std::memory_order_release);
@@ -820,18 +817,12 @@ static void ResetDeferredDashFollowupState() {
     g_dashDeferred.normalGeneration.store(0, std::memory_order_release);
     g_dashDeferred.normalDispatchAttempts.store(0, std::memory_order_release);
     g_dashDeferred.expiryFrame.store(0, std::memory_order_release);
-    g_recentDashQueued.store(false, std::memory_order_release);
-    g_recentDashQueuedFrame.store(0, std::memory_order_release);
 }
 static std::atomic<DWORD> g_pendingRestoreTimestamp(0);
 
-std::atomic<bool> g_macroWakePreserveBuffer(false);
-std::atomic<int> g_macroWakePreservePlayer(0);
+WakeMacroHandoff g_wakeMacroHandoff;
 
-std::atomic<int> g_wakeMacroPlaybackCompleted(0);
-static int s_wakeMacroTokenNeutralizeCountdown[3] = {0, 0, 0};
-static short s_lastWakeMoveID[3] = {-1, -1, -1};
-static bool s_wakeMoveIDChanged[3] = {false, false, false};
+static WakeCleanupMonitor s_wakeCleanup[3];
 
 static WakePrearmState s_p1WakePrearm;
 static WakePrearmState s_p2WakePrearm;
@@ -867,7 +858,6 @@ static WakeMacroSchedule s_p2WakeMacroSchedule;
 static TriggerOption s_p1WakePrePickedOption = {};
 static TriggerOption s_p2WakePrePickedOption = {};
 static int  s_p2WakeMacroSlot         = -1;
-static int  s_p2WakeMacroStartFrame   = -1;
 static int  s_p2WakeMacroStartTick    = 0;
 static bool s_p1WakeOptionPicked = false;
 static bool s_p2WakeOptionPicked = false;
@@ -896,16 +886,13 @@ static void ResetWakeRuntimeState() {
     s_p1WakeMacroSchedule.ClearTarget(); s_p1WakeMacroSlot = -1; s_p1WakeMacroStartTick = 0;
     s_p2WakeMacro96FrameCount = 0; s_p2WakeMacroSchedule.ResetQueue();
     s_p2WakeMacroSchedule.ClearTarget(); s_p2WakeMacroSlot = -1;
-    s_p2WakeMacroStartFrame = -1; s_p2WakeMacroStartTick = 0;
+    s_p2WakeMacroStartTick = 0;
     s_p1WakeOptionPicked = false; s_p1WakePrePickedOption = {};
     s_p2WakeOptionPicked = false; s_p2WakePrePickedOption = {};
-    g_macroWakePreserveBuffer.store(false, std::memory_order_release);
-    g_macroWakePreservePlayer.store(0, std::memory_order_release);
-    g_wakeMacroPlaybackCompleted.store(0, std::memory_order_release);
+    g_wakeMacroHandoff.ClearPreservation(std::memory_order_release);
+    g_wakeMacroHandoff.ClearCompletion(std::memory_order_release);
     for (int p = 1; p <= 2; ++p) {
-        s_wakeMacroTokenNeutralizeCountdown[p] = 0;
-        s_lastWakeMoveID[p] = -1;
-        s_wakeMoveIDChanged[p] = false;
+        s_wakeCleanup[p].Reset();
     }
     s_p1WakeJumpTrackFrame = -1;
     s_p2WakeJumpTrackFrame = -1;
@@ -968,11 +955,11 @@ static bool TraceWakeRelevantForPlayer(int playerNum, short prevMoveID, short mo
     if (playerNum == 1) {
         return s_p1WakePrearm.Armed() || s_p1WakeMacroSchedule.Queued() || p1DelayState.triggerType == TRIGGER_ON_WAKEUP ||
                s_p1WakeMoveID96FrameCount > 0 || s_p1WakeMacro96FrameCount > 0 ||
-               s_wakeMacroTokenNeutralizeCountdown[1] > 0;
+               s_wakeCleanup[1].Watching();
     }
     return s_p2WakePrearm.Armed() || s_p2WakeMacroSchedule.Queued() || p2DelayState.triggerType == TRIGGER_ON_WAKEUP ||
            s_p2WakeMoveID96FrameCount > 0 || s_p2WakeMacro96FrameCount > 0 ||
-           s_wakeMacroTokenNeutralizeCountdown[2] > 0;
+           s_wakeCleanup[2].Watching();
 }
 
 static bool TraceWakeWindowActive(short moveID1, short moveID2, short prevMoveID1, short prevMoveID2) {
@@ -1056,7 +1043,7 @@ static void TraceAppendPlayerWakeState(std::ostringstream& oss, int playerNum, s
             << " opt=" << TraceBool(s_p2WakeOptionPicked)
             << " frozen=" << TraceBool(s_p2WakeBufferedInput.Buffered())
             << " hold=" << TraceBool((s_p2WakeHoldPhase != WakeHoldPhase::Disabled)) << "/" << TraceBool((s_p2WakeHoldPhase == WakeHoldPhase::Issued))
-            << " tokenCd=" << s_wakeMacroTokenNeutralizeCountdown[2]
+            << " tokenCd=" << s_wakeCleanup[2].TicksRemaining()
             << " dly=" << TraceBool(p2DelayState.IsDelaying()) << ":" << p2DelayState.delayFramesRemaining
             << " dTrig=" << TriggerTypeLabel(p2DelayState.triggerType)
             << " trig=" << TraceBool(p2TriggerActive) << ":" << p2TriggerCooldown
@@ -1122,10 +1109,6 @@ static StunTimers s_p2Timers;
 static inline bool AutoActionWorkPending();
 static void ConsumeTutorialP2WakeCancel();
 
-static bool s_p1RGPending = false;
-static int  s_p1RGExpiry = 0;
-static bool s_p2RGPending = false;
-static int  s_p2RGExpiry = 0;
 
 std::atomic<bool> g_tickIntegratedAutoActions{ true };
 
@@ -1191,16 +1174,10 @@ void AutoActionsTick_Inline(short moveID1, short moveID2) {
     prevMoveID2 = moveID2;
 }
 
-static bool s_p1RGPrearmed = false;
-static bool s_p2RGPrearmed = false;
-static bool s_p1RGPrearmIsSpecial = false;
-static bool s_p2RGPrearmIsSpecial = false;
-static int  s_p1RGPrearmActionType = -1;
-static int  s_p2RGPrearmActionType = -1;
+static RgPrearmState s_p1RGPrearm;
+static RgPrearmState s_p2RGPrearm;
 static int  s_p1RGPrearmExpiry = 0;        // safety expiry (internal frames)
 static int  s_p2RGPrearmExpiry = 0;
-static uint64_t s_p1RGPrearmGeneration = 0;
-static uint64_t s_p2RGPrearmGeneration = 0;
 
 static inline void UpdateStunTimersForPlayer(StunTimers& t, short prevMoveID, short currMoveID) {
     int now = frameCounter.load();
@@ -1251,9 +1228,9 @@ static inline bool WakeCleanupWorkPending() {
            s_wakeForcedNeutralToken[2] != 0 ||
            s_wakeMacroCleanupToken[1] != 0 ||
            s_wakeMacroCleanupToken[2] != 0 ||
-           g_wakeMacroPlaybackCompleted.load(std::memory_order_acquire) != 0 ||
-           s_wakeMacroTokenNeutralizeCountdown[1] > 0 ||
-           s_wakeMacroTokenNeutralizeCountdown[2] > 0;
+           g_wakeMacroHandoff.CompletedPlayer(std::memory_order_acquire) != 0 ||
+           s_wakeCleanup[1].Watching() ||
+           s_wakeCleanup[2].Watching();
 }
 
 static inline bool AutoActionWorkPending() {
@@ -1996,10 +1973,10 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
 
             if (dispatchThisTick &&
                 p1DelayState.triggerType == TRIGGER_ON_RG &&
-                s_p1RGPrearmed && s_p1RGPrearmIsSpecial &&
-                s_p1RGPrearmGeneration != 0 &&
+                s_p1RGPrearm.Armed() &&
+                s_p1RGPrearm.Generation() != 0 &&
                 GetAutoActionMotionTransactionOutcome(
-                    1, s_p1RGPrearmGeneration) ==
+                    1, s_p1RGPrearm.Generation()) ==
                     AutoActionMotionOutcome::Pending) {
                 p1DelayState.delayFramesRemaining = 1;
                 dispatchThisTick = false;
@@ -2267,10 +2244,10 @@ void ProcessTriggerDelays(short moveID1, short moveID2, short prevMoveID1, short
             }
 
             if (p2DelayState.triggerType == TRIGGER_ON_RG &&
-                s_p2RGPrearmed && s_p2RGPrearmIsSpecial &&
-                s_p2RGPrearmGeneration != 0 &&
+                s_p2RGPrearm.Armed() &&
+                s_p2RGPrearm.Generation() != 0 &&
                 GetP2AutoActionMotionTransactionOutcome(
-                    s_p2RGPrearmGeneration) ==
+                    s_p2RGPrearm.Generation()) ==
                     P2AutoActionMotionOutcome::Pending) {
                 p2DelayState.delayFramesRemaining = 1;
                 return;
@@ -2692,7 +2669,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
     bool p2InGroundtech = IsGroundtech(moveID2);
     if (!p1DelayState.IsDelaying() && !p2DelayState.IsDelaying() &&
         !g_pendingControlRestore.load() && g_dashDeferred.phase.load() == DashFollowPhase::Idle &&
-        !s_p1WakePrearm.Armed() && !s_p2WakePrearm.Armed() && !s_p1RGPrearmed && !s_p2RGPrearmed &&
+        !s_p1WakePrearm.Armed() && !s_p2WakePrearm.Armed() && !s_p1RGPrearm.Armed() && !s_p2RGPrearm.Armed() &&
         p1TriggerCooldown <= 0 && p2TriggerCooldown <= 0 &&
         !WakeCleanupWorkPending() &&
         !p2InGroundtech &&
@@ -2793,7 +2770,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                     ? p1DelayState.chosenDelay
                     : userDelayF;
 
-                if (selectedUserDelayF == 0 && !s_p1RGPrearmed &&
+                if (selectedUserDelayF == 0 && !s_p1RGPrearm.Armed() &&
                     p1DelayState.chosenChargeFollowup == 0) {
                     int at = (p1DelayState.chosenAction >= 0) ? p1DelayState.chosenAction : triggerOnRGAction.load();
                     int selectedStrength = (p1DelayState.chosenStrength >= 0)
@@ -2835,23 +2812,18 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                                     AutoActionMotionSubmitResult::Accepted;
                         }
                         if (preOk) {
-                            s_p1RGPrearmIsSpecial = true;
-                            s_p1RGPrearmGeneration = prearmGeneration;
+                            s_p1RGPrearm.Arm(prearmGeneration);
                         } else {
-                            s_p1RGPrearmIsSpecial = false;
-                            s_p1RGPrearmGeneration = 0;
+                            s_p1RGPrearm.Clear();
                         }
                     }
                     if (preOk) {
-                        s_p1RGPrearmed = true;
-                        s_p1RGPrearmActionType = at;
                         s_p1RGPrearmExpiry = GetEngineTick() + (baseDelayF * 3) + 90;
                         LogOut("[AUTO-ACTION][RG] P1 pre-armed at RG entry: action=" + std::to_string(at) +
                                " motion=" + std::to_string(motion) + " btnMask=" + std::to_string(buttonMask) +
                                " (scoped transaction)", true);
                     } else if (isSpec) {
-                        s_p1RGPrearmIsSpecial = false;
-                        s_p1RGPrearmGeneration = 0;
+                        s_p1RGPrearm.Clear();
                         LogOut("[AUTO-ACTION][RG] P1 pre-arm failed; will attempt on delay expiry", true);
                     }
                 }
@@ -3088,16 +3060,14 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                                         1, s_p1WakeMacroStartTick, false);
                                     if (started &&
                                         MacroController::GetState() == MacroController::State::Replaying) {
-                                        g_macroWakePreservePlayer.store(1, std::memory_order_release);
-                                        g_macroWakePreserveBuffer.store(true, std::memory_order_release);
+                                        g_wakeMacroHandoff.Preserve(1, std::memory_order_release);
                                         s_p1WakeMacroSchedule.MarkQueued();
                                         s_p1WakeMacroSchedule.ClearTarget();
                                         s_p1WakeMacroSlot = -1;
                                         s_p1WakeBufferedInput.SetBuffered(true);
                                         s_p1WakeBufferedInput.TrackMotion(0);
                                     } else {
-                                        g_macroWakePreserveBuffer.store(false, std::memory_order_release);
-                                        g_macroWakePreservePlayer.store(0, std::memory_order_release);
+                                        g_wakeMacroHandoff.ClearPreservation(std::memory_order_release);
                                         LogOut("[AUTO-ACTION][MACRO] P1 wake playback owner busy; retaining slot for retry",
                                                true);
                                     }
@@ -3473,7 +3443,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 ? p2DelayState.chosenDelay
                 : userDelayF;
 
-            if (selectedUserDelayF == 0 && !s_p2RGPrearmed &&
+            if (selectedUserDelayF == 0 && !s_p2RGPrearm.Armed() &&
                 p2DelayState.chosenChargeFollowup == 0) {
                 int at = (p2DelayState.chosenAction >= 0) ? p2DelayState.chosenAction : triggerOnRGAction.load();
                 int selectedStrength = (p2DelayState.chosenStrength >= 0)
@@ -3507,23 +3477,18 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                             motion, buttonMask, 120, &prearmGeneration);
                     }
                     if (preOk) {
-                        s_p2RGPrearmIsSpecial = true;
-                        s_p2RGPrearmGeneration = prearmGeneration;
+                        s_p2RGPrearm.Arm(prearmGeneration);
                     } else {
-                        s_p2RGPrearmIsSpecial = false;
-                        s_p2RGPrearmGeneration = 0;
+                        s_p2RGPrearm.Clear();
                     }
                 }
                 if (preOk) {
-                    s_p2RGPrearmed = true;
-                    s_p2RGPrearmActionType = at;
                     s_p2RGPrearmExpiry = GetEngineTick() + (baseDelayF * 3) + 90;
                     LogOut("[AUTO-ACTION][RG] P2 pre-armed at RG entry: action=" + std::to_string(at) +
                            " motion=" + std::to_string(motion) + " btnMask=" + std::to_string(buttonMask) +
                            " (scoped transaction)", true);
                 } else if (isSpec) {
-                    s_p2RGPrearmIsSpecial = false;
-                    s_p2RGPrearmGeneration = 0;
+                    s_p2RGPrearm.Clear();
                     LogOut("[AUTO-ACTION][RG] P2 pre-arm failed; will attempt on delay expiry", true);
                 }
             }
@@ -3606,7 +3571,6 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
             s_p2WakeMacroSchedule.ResetQueue();
             s_p2WakeMacroSchedule.ClearTarget();
             s_p2WakeMacroSlot = -1;
-            s_p2WakeMacroStartFrame = -1;
             s_p2WakeMacroStartTick = 0;
             TraceAutoActionWakeEvent("p2-wake-macro-groundtech-enter", 2, prevMoveID2, moveID2);
         } else {
@@ -3697,15 +3661,13 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                         2, s_p2WakeMacroStartTick, false);
                     if (started &&
                         MacroController::GetState() == MacroController::State::Replaying) {
-                        g_macroWakePreservePlayer.store(2, std::memory_order_release);
-                        g_macroWakePreserveBuffer.store(true, std::memory_order_release);
+                        g_wakeMacroHandoff.Preserve(2, std::memory_order_release);
                         s_p2WakeMacroSchedule.MarkQueued();
                         s_p2WakeMacroSchedule.ClearTarget();
                         s_p2WakeBufferedInput.SetBuffered(true);
                         s_p2WakeBufferedInput.TrackMotion(0);
                     } else {
-                        g_macroWakePreserveBuffer.store(false, std::memory_order_release);
-                        g_macroWakePreservePlayer.store(0, std::memory_order_release);
+                        g_wakeMacroHandoff.ClearPreservation(std::memory_order_release);
                         LogOut("[AUTO-ACTION][MACRO] P2 wake playback owner busy; retaining exact slot/target for retry",
                                true);
                     }
@@ -3834,14 +3796,12 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 const bool started = MacroController::PlayForPlayer(2, 0, false);
                 if (started &&
                     MacroController::GetState() == MacroController::State::Replaying) {
-                    g_macroWakePreservePlayer.store(2, std::memory_order_release);
-                    g_macroWakePreserveBuffer.store(true, std::memory_order_release);
+                    g_wakeMacroHandoff.Preserve(2, std::memory_order_release);
                     s_p2WakeMacroSchedule.MarkQueued();
                     s_p2WakeMacroSchedule.ClearTarget();
                     s_p2WakeMacroSlot = -1;
                 } else {
-                    g_macroWakePreserveBuffer.store(false, std::memory_order_release);
-                    g_macroWakePreservePlayer.store(0, std::memory_order_release);
+                    g_wakeMacroHandoff.ClearPreservation(std::memory_order_release);
                     s_p2WakeMacroSchedule.RetryActionable();
                     LogOut("[AUTO-ACTION][MACRO] P2 wake fallback owner busy; retrying the same slot next tick",
                            true);
@@ -4203,19 +4163,15 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
 
     {
         const int completedPlayer =
-            g_wakeMacroPlaybackCompleted.load(std::memory_order_acquire);
+            g_wakeMacroHandoff.CompletedPlayer(std::memory_order_acquire);
         if (completedPlayer == 1 || completedPlayer == 2) {
             const short completedMoveID =
                 (completedPlayer == 1) ? moveID1 : moveID2;
             if (!IsGroundtech(completedMoveID)) {
                 if (TryBeginWakeMacroCleanup(completedPlayer)) {
                     const int kWakeMacroTokenNeutralizeDelay = 20;
-                    s_wakeMacroTokenNeutralizeCountdown[completedPlayer] =
-                        kWakeMacroTokenNeutralizeDelay;
-                    g_wakeMacroPlaybackCompleted.store(
-                        0, std::memory_order_release);
-                    s_lastWakeMoveID[completedPlayer] = completedMoveID;
-                    s_wakeMoveIDChanged[completedPlayer] = false;
+                    s_wakeCleanup[completedPlayer].Start(kWakeMacroTokenNeutralizeDelay, completedMoveID);
+                    g_wakeMacroHandoff.ClearCompletion(std::memory_order_release);
                     if (detailedLogging.load()) {
                         LogOut("[AUTO-ACTION][MACRO-CLEANUP] Wake macro playback finished; reserved P" +
                                std::to_string(completedPlayer) +
@@ -4228,7 +4184,7 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
     }
 
     for (int cleanupPlayer = 1; cleanupPlayer <= 2; ++cleanupPlayer) {
-        if (s_wakeMacroTokenNeutralizeCountdown[cleanupPlayer] <= 0) continue;
+        if (!s_wakeCleanup[cleanupPlayer].Watching()) continue;
         const short cleanupMoveID = (cleanupPlayer == 1) ? moveID1 : moveID2;
         std::lock_guard<std::recursive_mutex> cleanupLock(g_p2ControlMutex);
         if (!ScopedInputReservationMatches(
@@ -4236,17 +4192,15 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 s_wakeMacroCleanupToken[cleanupPlayer])) {
             // Fail closed.  Never perform an unattributed whole-buffer clear;
             // re-arm the completion signal so admission can be retried.
-            s_wakeMacroTokenNeutralizeCountdown[cleanupPlayer] = 0;
-            s_wakeMoveIDChanged[cleanupPlayer] = false;
+            s_wakeCleanup[cleanupPlayer].Stop();
             s_wakeMacroCleanupToken[cleanupPlayer] = 0;
-            g_wakeMacroPlaybackCompleted.store(
-                cleanupPlayer, std::memory_order_release);
+            g_wakeMacroHandoff.Complete(cleanupPlayer, std::memory_order_release);
             LogOut("[AUTO-ACTION][MACRO-CLEANUP] Lost cleanup reservation; deferred without touching P" +
                        std::to_string(cleanupPlayer) + " input",
                    detailedLogging.load());
             continue;
         }
-        bool moveIDWas96 = (s_lastWakeMoveID[cleanupPlayer] == GROUNDTECH_RECOVERY);
+        bool moveIDWas96 = (s_wakeCleanup[cleanupPlayer].LastMove() == GROUNDTECH_RECOVERY);
         bool moveIDNowBufferable = IsBufferableAction(cleanupMoveID);
 
         if (moveIDWas96 && moveIDNowBufferable) {
@@ -4257,16 +4211,14 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                     LogOut("[AUTO-ACTION][MACRO-CLEANUP] Buffered move executed (96->" + std::to_string(cleanupMoveID) +
                            "), macro still playing - released cleanup reservation", true);
                 }
-                s_wakeMacroTokenNeutralizeCountdown[cleanupPlayer] = 0;
-                s_lastWakeMoveID[cleanupPlayer] = cleanupMoveID;
-                g_wakeMacroPlaybackCompleted.store(
-                    cleanupPlayer, std::memory_order_release);
+                s_wakeCleanup[cleanupPlayer].Stop();
+                s_wakeCleanup[cleanupPlayer].ObserveMove(cleanupMoveID);
+                g_wakeMacroHandoff.Complete(cleanupPlayer, std::memory_order_release);
                 EndWakeMacroCleanup(cleanupPlayer);
             } else {
                 (void)NeutralizeMotionToken(cleanupPlayer);
                 (void)ClearPlayerInputBuffer(cleanupPlayer);
-                s_wakeMacroTokenNeutralizeCountdown[cleanupPlayer] = 0;
-                s_wakeMoveIDChanged[cleanupPlayer] = false;
+                s_wakeCleanup[cleanupPlayer].Stop();
                 EndWakeMacroCleanup(cleanupPlayer);
                 if (detailedLogging.load()) {
                     LogOut("[AUTO-ACTION][MACRO-CLEANUP] Buffered move executed (96->" + std::to_string(cleanupMoveID) +
@@ -4274,14 +4226,11 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
                 }
             }
         } else {
-            if (cleanupMoveID != s_lastWakeMoveID[cleanupPlayer]) {
-                s_wakeMoveIDChanged[cleanupPlayer] = true;
-                s_lastWakeMoveID[cleanupPlayer] = cleanupMoveID;
+            if (cleanupMoveID != s_wakeCleanup[cleanupPlayer].LastMove()) {
+                s_wakeCleanup[cleanupPlayer].ObserveMove(cleanupMoveID);
             }
 
-            s_wakeMacroTokenNeutralizeCountdown[cleanupPlayer]--;
-
-            if (s_wakeMacroTokenNeutralizeCountdown[cleanupPlayer] == 0) {
+            if (s_wakeCleanup[cleanupPlayer].Tick()) {
                 (void)NeutralizeMotionToken(cleanupPlayer);
                 if (cleanupMoveID >= 200) {
                     (void)ClearPlayerInputBuffer(cleanupPlayer);
@@ -4423,30 +4372,28 @@ static void MonitorAutoActionsImpl(short moveID1, short moveID2, short prevMoveI
         s_p2WakeOptionPicked = false;
         s_p2WakePrePickedOption = {};
     }
-    if (s_p1RGPrearmed && now > s_p1RGPrearmExpiry) {
+    if (s_p1RGPrearm.Armed() && now > s_p1RGPrearmExpiry) {
         LogOut("[AUTO-ACTION][RG] P1 RG pre-arm expired (no execution)", detailedLogging.load());
-        if (s_p1RGPrearmGeneration != 0 &&
+        if (s_p1RGPrearm.Generation() != 0 &&
             GetAutoActionMotionTransactionOutcome(
-                1, s_p1RGPrearmGeneration) ==
+                1, s_p1RGPrearm.Generation()) ==
                 AutoActionMotionOutcome::Pending) {
             (void)CancelAutoActionMotionTransactionIfGeneration(
-                1, s_p1RGPrearmGeneration,
+                1, s_p1RGPrearm.Generation(),
                 "RG pre-arm expired before native acceptance");
         }
-        s_p1RGPrearmed = false; s_p1RGPrearmIsSpecial = false; s_p1RGPrearmActionType = -1;
-        s_p1RGPrearmGeneration = 0;
+        s_p1RGPrearm.Clear();
     }
-    if (s_p2RGPrearmed && now > s_p2RGPrearmExpiry) {
+    if (s_p2RGPrearm.Armed() && now > s_p2RGPrearmExpiry) {
         LogOut("[AUTO-ACTION][RG] P2 RG pre-arm expired (no execution)", detailedLogging.load());
-        if (s_p2RGPrearmGeneration != 0 &&
+        if (s_p2RGPrearm.Generation() != 0 &&
             GetP2AutoActionMotionTransactionOutcome(
-                s_p2RGPrearmGeneration) ==
+                s_p2RGPrearm.Generation()) ==
                 P2AutoActionMotionOutcome::Pending) {
             CancelP2AutoActionMotionTransaction(
                 "RG pre-arm expired before native acceptance");
         }
-        s_p2RGPrearmed = false; s_p2RGPrearmIsSpecial = false; s_p2RGPrearmActionType = -1;
-        s_p2RGPrearmGeneration = 0;
+        s_p2RGPrearm.Clear();
     }
 }
 
@@ -4498,10 +4445,10 @@ bool DropPrearmWorkAtPracticeBoundary() {
     s_p2WakePrearm.Disarm(); s_p2WakePrearmExpiry = 0; s_p2WakePrearmActionType = -1;
     s_p2WakePrearmStrength = -1;
     s_p2WakePrearmCharge = 0; s_p2WakeHoldPhase = WakeHoldPhase::Disabled;
-    s_p1RGPrearmed = false; s_p1RGPrearmIsSpecial = false; s_p1RGPrearmActionType = -1;
-    s_p1RGPrearmExpiry = 0; s_p1RGPrearmGeneration = 0;
-    s_p2RGPrearmed = false; s_p2RGPrearmIsSpecial = false; s_p2RGPrearmActionType = -1;
-    s_p2RGPrearmExpiry = 0; s_p2RGPrearmGeneration = 0;
+    s_p1RGPrearm.Clear();
+    s_p1RGPrearmExpiry = 0;
+    s_p2RGPrearm.Clear();
+    s_p2RGPrearmExpiry = 0;
     return true;
 }
 
@@ -4632,10 +4579,10 @@ AutoActionApplyResult ApplyAutoAction(int playerNum, uintptr_t moveIDAddr,
     // Decide from the scoped generation, not queue admission: Failed or Cancelled gets one normal
     // dispatch at delay expiry; Pending or Accepted must not be injected twice.
     if (triggerType == TRIGGER_ON_RG) {
-        if (playerNum == 1 && s_p1RGPrearmed && s_p1RGPrearmIsSpecial) {
+        if (playerNum == 1 && s_p1RGPrearm.Armed()) {
             const AutoActionMotionOutcome outcome =
                 GetAutoActionMotionTransactionOutcome(
-                    1, s_p1RGPrearmGeneration);
+                    1, s_p1RGPrearm.Generation());
             if (outcome == AutoActionMotionOutcome::Pending) {
                 LogOut("[AUTO-ACTION][RG] P1 pre-arm still pending; deferring duplicate ApplyAutoAction",
                        detailedLogging.load());
@@ -4643,28 +4590,22 @@ AutoActionApplyResult ApplyAutoAction(int playerNum, uintptr_t moveIDAddr,
             }
             if (outcome == AutoActionMotionOutcome::Accepted) {
                 LogOut("[AUTO-ACTION][RG] P1 pre-arm generation=" +
-                           std::to_string(s_p1RGPrearmGeneration) +
+                           std::to_string(s_p1RGPrearm.Generation()) +
                            " outcome=" +
                            "accepted" +
                            "; skipping duplicate ApplyAutoAction",
                        true);
                 p1TriggerActive = false; p1TriggerCooldown = 0;
-                s_p1RGPrearmed = false;
-                s_p1RGPrearmIsSpecial = false;
-                s_p1RGPrearmActionType = -1;
-                s_p1RGPrearmGeneration = 0;
+                s_p1RGPrearm.Clear();
                 return AutoActionApplyResult::Accepted;
             }
             LogOut("[AUTO-ACTION][RG] P1 pre-arm did not execute; retrying at delay expiry", true);
-            s_p1RGPrearmed = false;
-            s_p1RGPrearmIsSpecial = false;
-            s_p1RGPrearmActionType = -1;
-            s_p1RGPrearmGeneration = 0;
+            s_p1RGPrearm.Clear();
         }
-        if (playerNum == 2 && s_p2RGPrearmed && s_p2RGPrearmIsSpecial) {
+        if (playerNum == 2 && s_p2RGPrearm.Armed()) {
             const P2AutoActionMotionOutcome outcome =
                 GetP2AutoActionMotionTransactionOutcome(
-                    s_p2RGPrearmGeneration);
+                    s_p2RGPrearm.Generation());
             if (outcome == P2AutoActionMotionOutcome::Pending) {
                 LogOut("[AUTO-ACTION][RG] P2 pre-arm still pending; deferring duplicate ApplyAutoAction",
                        detailedLogging.load());
@@ -4672,23 +4613,17 @@ AutoActionApplyResult ApplyAutoAction(int playerNum, uintptr_t moveIDAddr,
             }
             if (outcome == P2AutoActionMotionOutcome::Accepted) {
                 LogOut("[AUTO-ACTION][RG] P2 pre-arm generation=" +
-                           std::to_string(s_p2RGPrearmGeneration) +
+                           std::to_string(s_p2RGPrearm.Generation()) +
                            " outcome=" +
                            "accepted" +
                            "; skipping duplicate ApplyAutoAction",
                        true);
                 p2TriggerActive = false; p2TriggerCooldown = 0;
-                s_p2RGPrearmed = false;
-                s_p2RGPrearmIsSpecial = false;
-                s_p2RGPrearmActionType = -1;
-                s_p2RGPrearmGeneration = 0;
+                s_p2RGPrearm.Clear();
                 return AutoActionApplyResult::Accepted;
             }
             LogOut("[AUTO-ACTION][RG] P2 pre-arm did not execute; retrying at delay expiry", true);
-            s_p2RGPrearmed = false;
-            s_p2RGPrearmIsSpecial = false;
-            s_p2RGPrearmActionType = -1;
-            s_p2RGPrearmGeneration = 0;
+            s_p2RGPrearm.Clear();
         }
     }
 
@@ -5514,21 +5449,14 @@ void ProcessAutoControlRestore() {
         if (!base) return;
         const PerFrameSample &dashSample = GetCurrentPerFrameSample();
         short moveID2 = dashSample.moveID2;
-        short oppMoveID = dashSample.moveID1;
 
         EnsureCachedCharacterIDs(base);
         bool isKaori = (g_cachedP2CharID == CHAR_ID_KAORI);
 
-        if (!g_crgFastRestore.load()) {
-            bool waitingDash = g_recentDashQueued.load();
-            if (!waitingDash) {
-                if (!isKaori) {
-                    if ((s_throttle++ & 1) != 0) return;
-                } else if ((s_throttle % 192) == 0 && detailedLogging.load()) {
-                    LogOut("[AUTO-ACTION][DASH][KAORI] Full-rate sampling active (disabling throttle to catch ID 250)", true);
-                }
-            }
-            if (ValidationMetricsEnabled() && g_recentDashQueued.load()) { GetValidationMetrics().dashQueued++; }
+        if (!isKaori) {
+            if ((s_throttle++ & 1) != 0) return;
+        } else if ((s_throttle % 192) == 0 && detailedLogging.load()) {
+            LogOut("[AUTO-ACTION][DASH][KAORI] Full-rate sampling active (disabling throttle to catch ID 250)", true);
         }
 
     const bool dashStartNow =
@@ -5543,30 +5471,7 @@ void ProcessAutoControlRestore() {
                moveID2 == FORWARD_DASH_RECOVERY_SENTINEL_ID;
     if (dashNormalStarted && moveIsDash) dashNormalStarted = false;
     bool dashCancelled = (!moveIsDash) && (IsBlockstun(moveID2) || IsHitstun(moveID2) || IsAirtech(moveID2));
-    bool waitingDashStart = g_recentDashQueued.load() && !dashStartNow;
-    if (waitingDashStart && detailedLogging.load()) {
-        LogOut("[AUTO-ACTION][DASH] Holding restore (pre-start): queuedDash & dashStart not yet observed", true);
-    }
-    
-        if (g_recentDashQueued.load() && !dashStartNow && dashCancelled) {
-            LogOut("[AUTO-ACTION][DASH] Pre-start interrupted (hit/block/airtech) - cancelling dash and restoring control", true);
-            if (ValidationMetricsEnabled()) { GetValidationMetrics().dashPreStartInterrupts++; }
-            if (g_dashDeferred.phase.load() != DashFollowPhase::Idle) {
-                g_dashDeferred.phase.store(DashFollowPhase::Idle);
-            }
-            g_recentDashQueued.store(false);
-            RestoreP2ControlState();
-            if (ValidationMetricsEnabled()) { GetValidationMetrics().dashRestoreEvents++; }
-            p2TriggerActive = false;
-            p2TriggerCooldown = 0;
-            g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
-            g_crgFastRestore.store(false);
-            g_lastP2MoveID.store(-1);
-            g_pendingControlRestore.store(false);
-            s_prevMoveID2 = moveID2;
-            return;
-        }
-        if (g_dashDeferred.phase.load() != DashFollowPhase::Idle && dashCancelled && !g_recentDashQueued.load()) {
+        if (g_dashDeferred.phase.load() != DashFollowPhase::Idle && dashCancelled) {
             LogOut("[AUTO-ACTION][DASH] Dash follow-up cancelled by interrupt before dash started", true);
             if (ValidationMetricsEnabled()) { GetValidationMetrics().dashFollowupCancelled++; }
             g_dashDeferred.phase.store(DashFollowPhase::Idle);
@@ -5589,7 +5494,7 @@ void ProcessAutoControlRestore() {
         
         bool doDashRestore = false;
         
-        if (leftDashState && !waitingDashStart) {
+        if (leftDashState) {
             LogOut("[AUTO-ACTION][DASH] Restore: left dash state (163/165/250 → " + std::to_string(moveID2) + ")", true);
             doDashRestore = true;
         }
@@ -5610,105 +5515,19 @@ void ProcessAutoControlRestore() {
             if (s_lastDashRestoreFrame != curF) {
                 RestoreP2ControlState();
                 s_lastDashRestoreFrame = curF;
-                g_recentDashQueued.store(false);
             }
             g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
             g_pendingControlRestore.store(false);
-            g_crgFastRestore.store(false);
             g_lastP2MoveID.store(-1);
             s_prevMoveID2 = moveID2;
             return;
         }
 
         static bool sawNonZeroMoveID = false;
-        static int s_lastDashQueueFrame = -1;
-        int dashQueueFrame = g_recentDashQueuedFrame.load();
-        if (g_recentDashQueued.load() && dashQueueFrame != s_lastDashQueueFrame) {
-            sawNonZeroMoveID = false;
-            s_lastDashQueueFrame = dashQueueFrame;
-            s_dashStartSeenThisAttempt = false;
-            if (detailedLogging.load()) {
-                LogOut("[AUTO-ACTION][DASH] New dash attempt detected; resetting sawNonZeroMoveID", true);
-            }
-        }
-    if (g_recentDashQueued.load() && moveID2 == 0 && !sawNonZeroMoveID) {
-            int age = frameCounter.load() - g_recentDashQueuedFrame.load();
-            const MotionQueueSnapshot queue = GetMotionQueueSnapshot(2);
-            int qSize = static_cast<int>(queue.size);
-            if (detailedLogging.load()) {
-                static int s_nextDashTraceLogFrame = 0;
-                int nowF = frameCounter.load();
-                if (nowF >= s_nextDashTraceLogFrame) {
-                    s_nextDashTraceLogFrame = nowF + 24;
-                    LogOut(std::string("[AUTO-ACTION][DASH][TRACE] waiting age=") + std::to_string(age) +
-                           " queueActive=" + (queue.active?"1":"0") +
-                           " qIdx=" + std::to_string(queue.index) + "/" + std::to_string(qSize) +
-                           " frameInStep=" + std::to_string(queue.frameCounter) +
-                           " motionType=" + std::to_string(queue.motionType), true);
-                    if (queue.hasCurrentMask) {
-                        uint8_t mask = queue.currentMask;
-                        LogOut(std::string("[AUTO-ACTION][DASH][TRACE] current mask=") + std::to_string((int)mask), true);
-                    }
-                }
-            }
-            if (age < 120) {
-                s_prevMoveID2 = moveID2; return;
-            } else if (age == 120) {
-                bool wasBack = (queue.motionType == MOTION_BACK_DASH);
-                LogOut(std::string("[AUTO-ACTION][DASH] Requeue ") + (wasBack?"backdash":"forward dash") + " after 120f no-start", true);
-                QueueMotionInput(2, wasBack ? MOTION_BACK_DASH : MOTION_FORWARD_DASH, 0);
-                g_recentDashQueuedFrame.store(frameCounter.load());
-                s_prevMoveID2 = moveID2; return;
-            } else if (age < 160) {
-                s_prevMoveID2 = moveID2; return;
-            } else {
-                LogOut("[AUTO-ACTION][DASH] Abandon wait; dash never produced non-zero moveID", true);
-                g_recentDashQueued.store(false);
-            }
-        }
-
         if (moveID2 > 0) {
             sawNonZeroMoveID = true;
-            if (dashStartNow) {
-                g_recentDashQueued.store(false);
-            }
         }
 
-        if (g_crgFastRestore.load() && g_counterRGEnabled.load()) {
-            bool opponentAttacking = (oppMoveID >= 200);
-            bool moveStarted = (moveID2 > 0 && moveID2 != RG_STAND_ID && moveID2 != RG_CROUCH_ID && moveID2 != RG_AIR_ID);
-            bool p2ActionableNow = IsActionable(moveID2);
-            bool isRGPrearmedSpecial = s_p2RGPrearmIsSpecial;
-            if (opponentAttacking && p2ActionableNow) {
-                if (!isRGPrearmedSpecial) {
-                    LogOut("[AUTO-ACTION][CRG] Early restore: opponent entered attack frames", true);
-                    RestoreP2ControlFlagOnly();
-                    g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
-                    g_pendingControlRestore.store(false);
-                    g_crgFastRestore.store(false);
-                    g_lastP2MoveID.store(-1);
-                    sawNonZeroMoveID = false;
-                    return;
-                } else {
-                    if (detailedLogging.load()) {
-                        LogOut("[AUTO-ACTION][CRG] Opponent attacking, but special pre-armed: deferring restore until move starts", true);
-                    }
-                }
-            }
-            if (moveStarted) {
-                LogOut("[AUTO-ACTION][CRG] Early restore: special started after RG", true);
-                RestoreP2ControlState();
-                g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
-                g_pendingControlRestore.store(false);
-                g_crgFastRestore.store(false);
-                g_lastP2MoveID.store(-1);
-                sawNonZeroMoveID = false;
-                p2TriggerCooldown = 0; p2TriggerActive = false;
-                return;
-            }
-        }
-
-    bool queuedDashNoStart = waitingDashStart;
     bool dashQueueActiveNow = GetMotionQueueSnapshot(2).active;
     bool moveChangedCandidate = (moveID2 != g_lastP2MoveID.load() && moveID2 == 0 && sawNonZeroMoveID);
     bool dashFollowPending = (g_dashDeferred.phase.load() != DashFollowPhase::Idle);
@@ -5719,32 +5538,11 @@ void ProcessAutoControlRestore() {
         bool moveChanged = moveChangedCandidate && !suppressGenericRestore;
         
         if (g_pendingControlRestore.load() && !g_p2ControlOverridden && g_restoreGraceCounter == 0 &&
-            !dashFollowPending && !g_recentDashQueued.load()) {
+            !dashFollowPending) {
             LogOut("[AUTO-ACTION] Clearing stale g_pendingControlRestore (no override active)", detailedLogging.load());
             g_pendingControlRestore.store(false);
             s_prevMoveID2 = moveID2;
             return;
-        }
-
-        if (waitingDashStart && !dashQueueActiveNow && moveID2 != 0 && !moveIsDash) {
-            int ageSinceQueue = frameCounter.load() - g_recentDashQueuedFrame.load();
-            if (ageSinceQueue >= 12) { // ~1/16 s at 192 Hz; enough to rule out 1F start IDs
-                LogOut("[AUTO-ACTION][DASH] Pre-start cancelled (no start observed, non-dash state persisted) - restoring", true);
-                if (g_dashDeferred.phase.load() != DashFollowPhase::Idle) {
-                    g_dashDeferred.phase.store(DashFollowPhase::Idle);
-                }
-                g_recentDashQueued.store(false);
-                RestoreP2ControlState();
-                g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
-                g_crgFastRestore.store(false);
-                g_lastP2MoveID.store(-1);
-                g_pendingControlRestore.store(false);
-                s_prevMoveID2 = moveID2;
-                return;
-            } else {
-                s_prevMoveID2 = moveID2;
-                return;
-            }
         }
 
         bool restorePendingNow = g_pendingControlRestore.load();
@@ -5756,11 +5554,10 @@ void ProcessAutoControlRestore() {
         bool activeNow = (specialActiveNow || superActiveNow) && nonRGState && !moveIsDash;
         bool stateEnteredNow = (s_prevMoveID2 != moveID2);
         if (restorePendingNow && allowEarlyRestore && stateEnteredNow && activeNow &&
-            !dashFollowPending && !queuedDashNoStart && !g_recentDashQueued.load() && !dashQueueActiveNow) {
+            !dashFollowPending && !dashQueueActiveNow) {
             LogOut("[AUTO-ACTION] Early restore on active frame (special>=250|super>=300) moveID=" + std::to_string(moveID2), true);
             RestoreP2ControlState();
             g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
-            g_crgFastRestore.store(false);
             g_lastP2MoveID.store(-1);
             sawNonZeroMoveID = false;
             s_prevMoveID2 = moveID2;
@@ -5778,7 +5575,6 @@ void ProcessAutoControlRestore() {
             LogOut("[AUTO-ACTION] Fallback restore: freeze ended, pending restore active", true);
             RestoreP2ControlState();
             g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
-            g_crgFastRestore.store(false);
             g_lastP2MoveID.store(-1);
             g_pendingControlRestore.store(false);
             g_pendingRestoreTimestamp.store(0);
@@ -5794,8 +5590,6 @@ void ProcessAutoControlRestore() {
     bool allowAnyRestore = (g_p2ControlOverridden || (g_bufferFreezingActive.load() && g_activeFreezePlayer.load() == 2));
     bool baseRestoreCond = moveChanged && (moveID2 != 0) &&
                 !dashFollowPending &&
-                !queuedDashNoStart &&
-                !g_recentDashQueued.load() &&
                 !dashQueueActiveNow &&
                 restorePendingNow &&
                 allowAnyRestore;
@@ -5809,7 +5603,6 @@ void ProcessAutoControlRestore() {
             g_restoreGraceCounter = RESTORE_GRACE_PERIOD;
             g_pendingControlRestore.store(false);
             g_pendingRestoreTimestamp.store(0);
-            g_crgFastRestore.store(false);
             g_lastP2MoveID.store(-1);
             sawNonZeroMoveID = false;
             s_lastGenericRestoreFrame = frameCounter.load();
@@ -5823,8 +5616,8 @@ void ProcessAutoControlRestore() {
                        " override=" + (g_p2ControlOverridden?"1":"0") +
                        " lastMoveValid=" + (haveTrackableMove?"1":"0") +
                        " dashFollow=" + (dashFollowPending?"1":"0") +
-                       " queuedDashNoStart=" + (queuedDashNoStart?"1":"0") +
-                       " recentDashQueued=" + (g_recentDashQueued.load()?"1":"0") +
+                       " queuedDashNoStart=0" +
+                       " recentDashQueued=0" +
                        " dashQueueActive=" + (dashQueueActiveNow?"1":"0"), true);
             }
             if (moveID2 != 0) {
@@ -5834,9 +5627,6 @@ void ProcessAutoControlRestore() {
                 if (detailedLogging.load()) {
                     LogOut("[AUTO-ACTION][DASH] Suppressed restore while follow-up pending (moveID2=0)", true);
                 }
-            }
-            if (queuedDashNoStart && detailedLogging.load()) {
-                LogOut("[AUTO-ACTION][DASH] Holding restore: dash queue completed but no dash start MoveID observed yet", true);
             }
         }
         s_prevMoveID2 = moveID2;
@@ -5907,7 +5697,7 @@ bool AutoGuard(int playerNum, int opponentPtr) {
 static void ConsumeTutorialP2WakeCancel() {
     const bool hadWakeState =
         s_p2WakePrearm.Armed() || s_p2WakeMacroSchedule.Queued() ||
-        s_wakeMacroTokenNeutralizeCountdown[2] > 0 ||
+        s_wakeCleanup[2].Watching() ||
         (p2DelayState.IsDelaying() &&
          p2DelayState.triggerType == TRIGGER_ON_WAKEUP) ||
         (g_bufferFreezingActive.load(std::memory_order_acquire) &&
@@ -5931,7 +5721,6 @@ static void ConsumeTutorialP2WakeCancel() {
     g_pendingControlRestore.store(false, std::memory_order_release);
     g_pendingRestoreTimestamp.store(0, std::memory_order_release);
     g_lastP2MoveID.store(-1, std::memory_order_release);
-    g_crgFastRestore.store(false, std::memory_order_release);
 
     s_p2WakePrearm.Disarm();
     s_p2WakePrearmExpiry = 0;
@@ -5948,11 +5737,10 @@ static void ConsumeTutorialP2WakeCancel() {
     s_p2WakeMacroSchedule.ResetQueue();
     s_p2WakeMacroSchedule.ClearTarget();
     s_p2WakeMacroSlot = -1;
-    s_p2WakeMacroStartFrame = -1;
     s_p2WakeMacroStartTick = 0;
     ReleaseWakeForcedNeutral(2);
     EndWakeMacroCleanup(2);
-    s_wakeMacroTokenNeutralizeCountdown[2] = 0;
+    s_wakeCleanup[2].Stop();
     s_p2WakeOptionPicked = false;
     s_p2WakePrePickedOption = {};
 
@@ -6197,7 +5985,6 @@ void CancelAutoActionsAndMacros() {
         g_pendingRestoreTimestamp.store(0, std::memory_order_release);
     }
     g_lastP2MoveID.store(-1);
-    g_crgFastRestore.store(false);
 
     extern std::atomic<bool> g_bufferFreezingActive;
     extern std::atomic<int> g_activeFreezePlayer;
@@ -6212,18 +5999,14 @@ void CancelAutoActionsAndMacros() {
     StopBufferFreezing();
 
     logStream.str(""); logStream.clear();
-    logStream << "[CANCEL][RG] P1: pending=" << (s_p1RGPending ? "true" : "false")
-              << " prearm=" << (s_p1RGPrearmed ? "true" : "false")
-              << " P2: pending=" << (s_p2RGPending ? "true" : "false")
-              << " prearm=" << (s_p2RGPrearmed ? "true" : "false");
+    logStream << "[CANCEL][RG] P1: pending=false"
+              << " prearm=" << (s_p1RGPrearm.Armed() ? "true" : "false")
+              << " P2: pending=false"
+              << " prearm=" << (s_p2RGPrearm.Armed() ? "true" : "false");
     LogOut(logStream.str(), true);
     
-    s_p1RGPending = false; s_p1RGExpiry = 0;
-    s_p2RGPending = false; s_p2RGExpiry = 0;
-    s_p1RGPrearmed = false; s_p1RGPrearmIsSpecial = false; s_p1RGPrearmActionType = -1; s_p1RGPrearmExpiry = 0;
-    s_p2RGPrearmed = false; s_p2RGPrearmIsSpecial = false; s_p2RGPrearmActionType = -1; s_p2RGPrearmExpiry = 0;
-    s_p1RGPrearmGeneration = 0;
-    s_p2RGPrearmGeneration = 0;
+    s_p1RGPrearm.Clear(); s_p1RGPrearmExpiry = 0;
+    s_p2RGPrearm.Clear(); s_p2RGPrearmExpiry = 0;
 
     logStream.str(""); logStream.clear();
     logStream << "[CANCEL][WAKE] P1: prearm=" << (s_p1WakePrearm.Armed() ? "true" : "false")
@@ -6263,28 +6046,27 @@ void CancelAutoActionsAndMacros() {
     s_p1WakeMacro96FrameCount = 0; s_p1WakeMacroSchedule.ResetQueue();
     s_p1WakeMacroSchedule.ClearTarget(); s_p1WakeMacroSlot = -1; s_p1WakeMacroStartTick = 0;
     s_p2WakeMacro96FrameCount = 0; s_p2WakeMacroSchedule.ResetQueue();
-    s_p2WakeMacroSchedule.ClearTarget(); s_p2WakeMacroSlot = -1; s_p2WakeMacroStartFrame = -1; s_p2WakeMacroStartTick = 0;
+    s_p2WakeMacroSchedule.ClearTarget(); s_p2WakeMacroSlot = -1; s_p2WakeMacroStartTick = 0;
     s_p1WakeOptionPicked = false;
     s_p1WakePrePickedOption = {};
     s_p2WakeOptionPicked = false;
     s_p2WakePrePickedOption = {};
 
-    bool wakePreserve = g_macroWakePreserveBuffer.load();
-    const int wakeCompleted = g_wakeMacroPlaybackCompleted.load();
+    bool wakePreserve = g_wakeMacroHandoff.Preserving();
+    const int wakeCompleted = g_wakeMacroHandoff.CompletedPlayer();
 
     logStream.str(""); logStream.clear();
     logStream << "[CANCEL][WAKE_COMPLETE] preserveBuffer=" << (wakePreserve ? "true" : "false")
               << " playbackCompleted=" << (wakeCompleted != 0 ? "true" : "false")
               << " player=" << wakeCompleted
-              << " tokenCountdown(P1/P2)=" << s_wakeMacroTokenNeutralizeCountdown[1]
-              << "/" << s_wakeMacroTokenNeutralizeCountdown[2];
+              << " tokenCountdown(P1/P2)=" << s_wakeCleanup[1].TicksRemaining()
+              << "/" << s_wakeCleanup[2].TicksRemaining();
     LogOut(logStream.str(), true);
 
-    g_macroWakePreserveBuffer.store(false);
-    g_macroWakePreservePlayer.store(0);
-    g_wakeMacroPlaybackCompleted.store(0);
-    s_wakeMacroTokenNeutralizeCountdown[1] = 0;
-    s_wakeMacroTokenNeutralizeCountdown[2] = 0;
+    g_wakeMacroHandoff.ClearPreservation();
+    g_wakeMacroHandoff.ClearCompletion();
+    s_wakeCleanup[1].Stop();
+    s_wakeCleanup[2].Stop();
     ResetWakeRuntimeState();
 
     extern std::atomic<bool> g_forceBypass[3];
@@ -6366,17 +6148,11 @@ void ClearAllAutoActionTriggers() {
         g_pendingRestoreTimestamp.store(0, std::memory_order_release);
     }
     g_lastP2MoveID.store(-1);
-    g_crgFastRestore.store(false);
 
     StopBufferFreezing();
 
-    s_p1RGPending = false; s_p1RGExpiry = 0;
-    s_p2RGPending = false; s_p2RGExpiry = 0;
-
-    s_p1RGPrearmed = false; s_p1RGPrearmIsSpecial = false; s_p1RGPrearmActionType = -1; s_p1RGPrearmExpiry = 0;
-    s_p2RGPrearmed = false; s_p2RGPrearmIsSpecial = false; s_p2RGPrearmActionType = -1; s_p2RGPrearmExpiry = 0;
-    s_p1RGPrearmGeneration = 0;
-    s_p2RGPrearmGeneration = 0;
+    s_p1RGPrearm.Clear(); s_p1RGPrearmExpiry = 0;
+    s_p2RGPrearm.Clear(); s_p2RGPrearmExpiry = 0;
 
     ResetWakeRuntimeState();
 

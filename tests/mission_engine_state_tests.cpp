@@ -1,4 +1,5 @@
 #include "game/mission/mission_engine_state.h"
+#include "game/mission/mission_sequence_policy.h"
 #include <cstdlib>
 #include <iostream>
 
@@ -10,6 +11,63 @@ void Check(bool condition, const char* message) {
 
 int main() {
     using namespace Mission::Engine::State;
+    DemoPlayback playback;
+    Check(playback.BeginOrAdvanceContactSettle(3) && playback.ContactTicksRemaining() == 3,
+          "first final-contact wait starts the full timeout without consuming a tick");
+    Check(!playback.BeginOrAdvanceContactSettle(3) && playback.ContactTicksRemaining() == 2,
+          "later final-contact wait consumes one tick");
+    playback.BeginOrAdvanceContactSettle(3);
+    Check(playback.ContactTicksRemaining() == 1, "last settle tick remains available to the failure policy");
+    playback.BeginTerminalHold(2);
+    Check(playback.HoldingTerminalFrame() && playback.ContactTicksRemaining() == 0,
+          "terminal hold retires contact settling");
+    Check(!playback.AdvanceTerminalHold() && playback.AdvanceTerminalHold(),
+          "terminal frame remains visible for the exact hold duration");
+    playback.Reset();
+    Check(!playback.HoldingTerminalFrame() && playback.ContactTicksRemaining() == 0,
+          "cancel or baseline restore retires playback subphases");
+
+    using namespace Mission::SequencePolicy;
+    playback.Reset();
+    for (int tick = 0; tick < kDemoRecipeSettleTimeoutTicks; ++tick) {
+        Check(DecideDemoRecipeEnd(true, false, playback.ContactTicksRemaining()) == DemoRecipeEndAction::SettleFinalContacts,
+              "final contacts retain every timeout tick before failure");
+        playback.BeginOrAdvanceContactSettle(kDemoRecipeSettleTimeoutTicks);
+    }
+    Check(DecideDemoRecipeEnd(true, false, playback.ContactTicksRemaining()) == DemoRecipeEndAction::FailThenHold,
+          "final-contact timeout still fails on the original boundary");
+    playback.BeginTerminalHold(kDemoTerminalRecipeHoldTicks);
+    for (int tick = 1; tick < kDemoTerminalRecipeHoldTicks; ++tick)
+        Check(!playback.AdvanceTerminalHold(), "terminal frame remains held before its final tick");
+    Check(playback.AdvanceTerminalHold(), "terminal frame restore occurs on its final tick");
+
+    DemoTutorialReturn tutorialReturn;
+    tutorialReturn.Begin(true);
+    Check(tutorialReturn.Requested() && !tutorialReturn.HasResult(), "tutorial handoff waits for restore outcome");
+    tutorialReturn.Publish(true);
+    Check(tutorialReturn.Requested() && tutorialReturn.Restored(), "successful restore retains acknowledgement ownership");
+    tutorialReturn.Reset();
+    tutorialReturn.Publish(false);
+    Check(!tutorialReturn.Requested() && !tutorialReturn.HasResult(), "late restore cannot reopen acknowledged handoff");
+    tutorialReturn.Begin(true);
+    tutorialReturn.Publish(false);
+    Check(tutorialReturn.HasResult() && !tutorialReturn.Restored(), "failed restore remains available for acknowledgement");
+    tutorialReturn.Begin(false);
+    Check(!tutorialReturn.Requested(), "ordinary preview has no tutorial handoff");
+
+    RecorderComboEnd comboEnd;
+    comboEnd.SelectStep(4);
+    Check(comboEnd.Pending() && comboEnd.IsDirect() && comboEnd.AfterAction() == 4,
+          "direct combo boundary defaults to its recorded action");
+    comboEnd.SetAfterAction(6);
+    Check(comboEnd.AfterAction() == 6, "later setup action owns the boundary position");
+    comboEnd.SelectEntity(17);
+    comboEnd.SetAfterAction(8);
+    Check(comboEnd.IsEntity() && !comboEnd.IsDirect() && comboEnd.EntitySequence() == 17 && comboEnd.AfterAction() == 8,
+          "entity contact replaces direct boundary ownership");
+    comboEnd.Reset();
+    Check(!comboEnd.Pending() && !comboEnd.IsDirect() && !comboEnd.IsEntity(), "commit or capture reset clears the anchor");
+
     PendingEntry entry;
     entry.ObserveCharacterSelect();
     Check(!entry.Pending(), "late selector observation cannot reopen canceled entry");

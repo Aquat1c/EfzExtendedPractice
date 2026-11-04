@@ -235,9 +235,7 @@ int   g_recPrevCombo = 0;
 bool  g_recAnyLanded = false;
 bool  g_recComboWasAlive = false;
 bool  g_recSetupSegmentOpen = false;
-int   g_recPendingComboEndStep = -1;
-uint32_t g_recPendingComboEndEntitySequence = 0;
-int   g_recPendingComboEndAfterAction = -1;
+State::RecorderComboEnd g_recComboEnd;
 int   g_recComboEndFrame = 0;
 uint32_t g_recLastLandedContactSequence = 0;
 int   g_recLastLandedDirectStep = -1;
@@ -501,17 +499,14 @@ std::atomic<bool> g_runStartupInputHeld{false};
 using DemoPhase = ::Mission::Engine::Demo::Phase;
 std::atomic<DemoPhase> g_demoPhase{DemoPhase::Idle};
 std::atomic<bool> g_demoCancelRequested{false};
-bool g_demoBaselineIssued = false;
 bool g_demoFinishedThisTick = false;
 bool g_worldRestoredThisTick = false;
 bool g_demoTransitionFreezeOwned = false;
 int g_demoRoundRestoreSettleTicks = 0;
-int g_demoTerminalRecipeHoldTicks = 0;
-int g_demoRecipeSettleTicksRemaining = 0;
+State::DemoPlayback g_demoPlayback;
 std::string g_demoText;
 bool g_demoFromRecorder = false;
-bool g_demoTutorialHandoff = false;
-Demo::RestoreResult g_demoRestoreResult = Demo::RestoreResult::None;
+State::DemoTutorialReturn g_demoTutorialReturn;
 std::string g_demoRestoreMessage;
 
 enum class RunObservationMode : uint8_t {
@@ -835,15 +830,11 @@ int LastRecordedLandedStep() {
 }
 
 bool HasPendingRecordedComboEnd() {
-    return g_recPendingComboEndStep >= 0 ||
-           g_recPendingComboEndEntitySequence != 0;
+    return g_recComboEnd.Pending();
 }
 
 int PendingRecordedComboEndAfterAction() {
-    if (g_recPendingComboEndAfterAction >= 0) {
-        return g_recPendingComboEndAfterAction;
-    }
-    return g_recPendingComboEndStep;
+    return g_recComboEnd.AfterAction();
 }
 
 RecEntityTraceEvent* FindRecordedEntityContact(uint32_t sequence) {
@@ -862,13 +853,13 @@ RecEntityTraceEvent* FindRecordedEntityContact(uint32_t sequence) {
 bool CommitPendingRecordedComboEnd(const char* reason) {
     bool committed = false;
     std::string anchor;
-    if (g_recPendingComboEndEntitySequence != 0) {
+    if (g_recComboEnd.IsEntity()) {
         RecEntityTraceEvent* event =
-            FindRecordedEntityContact(g_recPendingComboEndEntitySequence);
+            FindRecordedEntityContact(g_recComboEnd.EntitySequence());
         if (!event) {
             g_recUnclassifiedContactRequired = true;
             LogOut("[MISSION][REC] could not resolve pending entity combo.end sequence=" +
-                   std::to_string(g_recPendingComboEndEntitySequence), true);
+                   std::to_string(g_recComboEnd.EntitySequence()), true);
         } else {
             if (!event->comboEndAfter) {
                 event->comboEndAfter = true;
@@ -876,24 +867,22 @@ bool CommitPendingRecordedComboEnd(const char* reason) {
             }
             committed = true;
             anchor = "entitySequence=" +
-                std::to_string(g_recPendingComboEndEntitySequence);
+                std::to_string(g_recComboEnd.EntitySequence());
         }
-    } else if (g_recPendingComboEndStep >= 0 &&
-               g_recPendingComboEndStep < static_cast<int>(g_recSteps.size())) {
-        if (!g_recSteps[g_recPendingComboEndStep].comboEndAfter) {
-            g_recSteps[g_recPendingComboEndStep].comboEndAfter = true;
+    } else if (g_recComboEnd.IsDirect() &&
+               g_recComboEnd.Step() < static_cast<int>(g_recSteps.size())) {
+        if (!g_recSteps[g_recComboEnd.Step()].comboEndAfter) {
+            g_recSteps[g_recComboEnd.Step()].comboEndAfter = true;
             g_recComboEndCountView.fetch_add(1, std::memory_order_release);
         }
         committed = true;
-        anchor = "step=" + std::to_string(g_recPendingComboEndStep);
+        anchor = "step=" + std::to_string(g_recComboEnd.Step());
     }
     if (committed) {
         LogOut("[MISSION][REC] committed combo.end after " + anchor +
                " reason=" + (reason ? reason : "unknown"), true);
     }
-    g_recPendingComboEndStep = -1;
-    g_recPendingComboEndEntitySequence = 0;
-    g_recPendingComboEndAfterAction = -1;
+    g_recComboEnd.Reset();
     return committed;
 }
 
@@ -919,9 +908,7 @@ bool ArmRecordedComboEndFromLatestContact(int currentAction,
     if (g_recLastLandedEntitySequence != 0) {
         if (RecEntityTraceEvent* event =
                 FindRecordedEntityContact(g_recLastLandedEntitySequence)) {
-            g_recPendingComboEndEntitySequence =
-                g_recLastLandedEntitySequence;
-            g_recPendingComboEndStep = -1;
+            g_recComboEnd.SelectEntity(g_recLastLandedEntitySequence);
             landedAction = event->afterStep;
             anchor = "entitySequence=" +
                 std::to_string(g_recLastLandedEntitySequence);
@@ -929,15 +916,13 @@ bool ArmRecordedComboEndFromLatestContact(int currentAction,
     }
     if (anchor.empty() && g_recLastLandedDirectStep >= 0 &&
         g_recLastLandedDirectStep < static_cast<int>(g_recSteps.size())) {
-        g_recPendingComboEndStep = g_recLastLandedDirectStep;
-        g_recPendingComboEndEntitySequence = 0;
+        g_recComboEnd.SelectStep(g_recLastLandedDirectStep);
         landedAction = g_recLastLandedDirectStep;
         anchor = "step=" + std::to_string(g_recLastLandedDirectStep);
     }
     if (anchor.empty()) return false;
 
-    g_recPendingComboEndAfterAction =
-        (std::max)(landedAction, currentAction);
+    g_recComboEnd.SetAfterAction((std::max)(landedAction, currentAction));
     g_recComboEndFrame = g_recFrame;
     g_recSetupSegmentOpen = true;
     LogOut("[MISSION][REC] exact combo.end candidate after " + anchor +
@@ -1722,27 +1707,24 @@ void RecorderCapture(const Snapshot& s, bool advanceLogicalTick) {
         if (boundaryEntitySequence != 0) {
             if (RecEntityTraceEvent* event =
                     FindRecordedEntityContact(boundaryEntitySequence)) {
-                g_recPendingComboEndEntitySequence =
-                    boundaryEntitySequence;
-                g_recPendingComboEndStep = -1;
+                g_recComboEnd.SelectEntity(boundaryEntitySequence);
                 landedAction = event->afterStep;
                 landedAnchor = "entitySequence=" +
-                    std::to_string(g_recPendingComboEndEntitySequence);
+                    std::to_string(g_recComboEnd.EntitySequence());
             }
         }
         if (landedAnchor.empty()) {
             const int lastLanded = boundaryDirectStep >= 0
                 ? boundaryDirectStep : LastRecordedLandedStep();
             if (lastLanded >= 0) {
-                g_recPendingComboEndStep = lastLanded;
-                g_recPendingComboEndEntitySequence = 0;
+                g_recComboEnd.SelectStep(lastLanded);
                 landedAction = lastLanded;
                 landedAnchor = "landedStep=" + std::to_string(lastLanded);
             }
         }
         if (!landedAnchor.empty()) {
             const int activeStep = static_cast<int>(g_recSteps.size()) - 1;
-            g_recPendingComboEndAfterAction = activeStep;
+            g_recComboEnd.SetAfterAction(activeStep);
             g_recSetupSegmentOpen = true;
             g_recComboEndFrame = g_recFrame;
             if (cur == g_recLastAttackId && activeStep > landedAction) {
@@ -4154,9 +4136,7 @@ void ResetRecorderCaptureState() {
     g_recAnyLanded = false;
     g_recComboWasAlive = false;
     g_recSetupSegmentOpen = false;
-    g_recPendingComboEndStep = -1;
-    g_recPendingComboEndEntitySequence = 0;
-    g_recPendingComboEndAfterAction = -1;
+    g_recComboEnd.Reset();
     g_recComboEndFrame = 0;
     g_recLastLandedContactSequence = 0;
     g_recLastLandedDirectStep = -1;
@@ -4853,19 +4833,18 @@ void ReassertDemoTransitionFreeze() {
 
 void ClearDemoTutorialHandoff(bool releaseNeutral) {
     if (releaseNeutral) {
-        if (g_demoRestoreResult != Demo::RestoreResult::None) {
+        if (g_demoTutorialReturn.HasResult()) {
             HoldDemoP1Neutral(false);
         }
         SetDemoTransitionFreeze(false);
     }
-    g_demoRestoreResult = Demo::RestoreResult::None;
+    g_demoTutorialReturn.Reset();
     g_demoRestoreMessage.clear();
-    g_demoTutorialHandoff = false;
 }
 
 void PublishDemoTutorialRestore(Demo::RestoreResult result,
                                 const std::string& message) {
-    g_demoRestoreResult = result;
+    g_demoTutorialReturn.Publish(result == Demo::RestoreResult::Restored);
     g_demoRestoreMessage = message;
     HoldDemoP1Neutral(true);
 }
@@ -5006,10 +4985,8 @@ bool RestoreDemoBaseline(std::string& errorOut) {
 void BeginDemoRestoring() {
     SetDemoTransitionFreeze(true);
     if (MacroController::GetState() != MacroController::State::Idle) MacroController::Stop();
-    g_demoBaselineIssued = false;
     g_demoRoundRestoreSettleTicks = 0;
-    g_demoTerminalRecipeHoldTicks = 0;
-    g_demoRecipeSettleTicksRemaining = 0;
+    g_demoPlayback.Reset();
     g_demoPhase.store(DemoPhase::Restoring, std::memory_order_release);
     HoldDemoP1Neutral(true);
 }
@@ -5017,9 +4994,8 @@ void BeginDemoRestoring() {
 void BeginDemoTerminalRecipeHold() {
     HoldDemoP1Neutral(true);
     SetDemoTransitionFreeze(true);
-    g_demoRecipeSettleTicksRemaining = 0;
-    g_demoTerminalRecipeHoldTicks =
-        ::Mission::SequencePolicy::kDemoTerminalRecipeHoldTicks;
+    g_demoPlayback.BeginTerminalHold(
+        ::Mission::SequencePolicy::kDemoTerminalRecipeHoldTicks);
 }
 
 void TickDemo(const Snapshot& s) {
@@ -5039,7 +5015,7 @@ void TickDemo(const Snapshot& s) {
         MacroController::ReleaseExclusivePlaybackHold();
         const std::string error =
             "the demonstration left the active match before the lesson baseline was restored";
-        if (g_demoTutorialHandoff) {
+        if (g_demoTutorialReturn.Requested()) {
             PublishDemoTutorialRestore(Demo::RestoreResult::RestoreFailed, error);
         } else {
             HoldDemoP1Neutral(false);
@@ -5048,10 +5024,8 @@ void TickDemo(const Snapshot& s) {
         SetDemoTransitionFreeze(false);
         g_demoText.clear();
         g_demoFromRecorder = false;
-        g_demoBaselineIssued = false;
         g_demoRoundRestoreSettleTicks = 0;
-        g_demoTerminalRecipeHoldTicks = 0;
-        g_demoRecipeSettleTicksRemaining = 0;
+        g_demoPlayback.Reset();
         g_demoPhase.store(DemoPhase::Idle, std::memory_order_release);
         g_demoFinishedThisTick = true;
         LogOut("[MISSION][DEMO] restore handoff failed: " + error, true);
@@ -5064,8 +5038,8 @@ void TickDemo(const Snapshot& s) {
                 true, g_demoFromRecorder,
                 g_runActive.load(std::memory_order_acquire),
                 !g_runMission.steps.empty());
-        if (g_demoTerminalRecipeHoldTicks > 0) {
-            if (--g_demoTerminalRecipeHoldTicks == 0) {
+        if (g_demoPlayback.HoldingTerminalFrame()) {
+            if (g_demoPlayback.AdvanceTerminalHold()) {
                 BeginDemoRestoring();
                 LogOut("[MISSION][DEMO] final recipe frame shown; restoring player-ready baseline",
                        true);
@@ -5122,7 +5096,7 @@ void TickDemo(const Snapshot& s) {
         using ::Mission::SequencePolicy::DemoRecipeEndAction;
         switch (::Mission::SequencePolicy::DecideDemoRecipeEnd(
                     macroIdle, runnerTerminal,
-                    g_demoRecipeSettleTicksRemaining)) {
+                    g_demoPlayback.ContactTicksRemaining())) {
             case DemoRecipeEndAction::ContinuePlayback:
                 break;
             case DemoRecipeEndAction::HoldTerminalFrame:
@@ -5132,14 +5106,10 @@ void TickDemo(const Snapshot& s) {
                 break;
             case DemoRecipeEndAction::SettleFinalContacts:
                 HoldDemoP1Neutral(true);
-                if (g_demoRecipeSettleTicksRemaining <= 0) {
-                    g_demoRecipeSettleTicksRemaining =
-                        ::Mission::SequencePolicy::
-                            kDemoRecipeSettleTimeoutTicks;
+                if (g_demoPlayback.BeginOrAdvanceContactSettle(
+                        ::Mission::SequencePolicy::kDemoRecipeSettleTimeoutTicks)) {
                     LogOut("[MISSION][DEMO] input clip ended; waiting for final trial contacts",
                            true);
-                } else {
-                    --g_demoRecipeSettleTicksRemaining;
                 }
                 break;
             case DemoRecipeEndAction::FailThenHold:
@@ -5163,7 +5133,7 @@ void TickDemo(const Snapshot& s) {
         return;
     }
 
-    if (!g_demoBaselineIssued) {
+    {
         SetDemoTransitionFreeze(true);
         if (phase == DemoPhase::Preparing) {
             CancelAutoActionsAndMacros();
@@ -5179,7 +5149,7 @@ void TickDemo(const Snapshot& s) {
             MacroController::ReleaseExclusivePlaybackHold();
             const std::string error = err.empty()
                 ? std::string("the lesson baseline restore failed") : err;
-            if (g_demoTutorialHandoff) {
+            if (g_demoTutorialReturn.Requested()) {
                 PublishDemoTutorialRestore(
                     Demo::RestoreResult::RestoreFailed, error);
             } else {
@@ -5189,13 +5159,11 @@ void TickDemo(const Snapshot& s) {
             SetDemoTransitionFreeze(false);
             g_demoText.clear();
             g_demoFromRecorder = false;
-            g_demoBaselineIssued = false;
             g_demoRoundRestoreSettleTicks = 0;
-            g_demoTerminalRecipeHoldTicks = 0;
-            g_demoRecipeSettleTicksRemaining = 0;
+            g_demoPlayback.Reset();
             g_demoPhase.store(DemoPhase::Idle, std::memory_order_release);
             g_demoFinishedThisTick = true;
-            if (!g_demoTutorialHandoff) {
+            if (!g_demoTutorialReturn.Requested()) {
                 DirectDrawHook::AddMessage(
                     ("Demo restore failed: " + error).c_str(), "MISSION",
                     RGB(255, 120, 120), 2200, 0, 120);
@@ -5204,7 +5172,6 @@ void TickDemo(const Snapshot& s) {
             return;
         }
         if (!g_demoFromRecorder) ResetRunForDemo();
-        g_demoBaselineIssued = true;
     }
 
     if (phase == DemoPhase::Preparing) {
@@ -5227,7 +5194,7 @@ void TickDemo(const Snapshot& s) {
         if (!g_demoFromRecorder) ResetRunForDemo();
         const bool recorderPreview = g_demoFromRecorder;
         MacroController::ReleaseExclusivePlaybackHold();
-        if (g_demoTutorialHandoff) {
+        if (g_demoTutorialReturn.Requested()) {
             PublishDemoTutorialRestore(
                 Demo::RestoreResult::Restored, "lesson baseline restored");
         } else {
@@ -5236,10 +5203,8 @@ void TickDemo(const Snapshot& s) {
             SetDemoTransitionFreeze(false);
         }
         g_demoText.clear();
-        g_demoBaselineIssued = false;
         g_demoRoundRestoreSettleTicks = 0;
-        g_demoTerminalRecipeHoldTicks = 0;
-        g_demoRecipeSettleTicksRemaining = 0;
+        g_demoPlayback.Reset();
         g_demoPhase.store(DemoPhase::Idle, std::memory_order_release);
         g_demoFinishedThisTick = true;
         DirectDrawHook::AddMessage(recorderPreview
@@ -5250,7 +5215,7 @@ void TickDemo(const Snapshot& s) {
             DirectDrawHook::RemoveMessagesByCategory("mission_run");
         }
         g_demoFromRecorder = false;
-        LogOut(g_demoTutorialHandoff
+        LogOut(g_demoTutorialReturn.Requested()
                    ? "[MISSION][DEMO] baseline restored; awaiting tutorial acknowledgement"
                    : "[MISSION][DEMO] baseline restored; player control released", true);
     }
@@ -7017,13 +6982,11 @@ bool PlayLoaded(std::string& outMsg, bool tutorialHandoff) {
     g_demoText = g_runMission.demo;
     DirectDrawHook::RemoveMessagesByCategory("mission_run");
     g_demoFromRecorder = false;
-    g_demoTutorialHandoff = RequiresTutorialRestoreAcknowledgement(
-        tutorialHandoff, false, tutorialActive);
+    g_demoTutorialReturn.Begin(RequiresTutorialRestoreAcknowledgement(
+        tutorialHandoff, false, tutorialActive));
     g_demoCancelRequested.store(false, std::memory_order_release);
-    g_demoBaselineIssued = false;
     g_demoRoundRestoreSettleTicks = 0;
-    g_demoTerminalRecipeHoldTicks = 0;
-    g_demoRecipeSettleTicksRemaining = 0;
+    g_demoPlayback.Reset();
     HoldDemoP1Neutral(true);
     SetDemoTransitionFreeze(true);
     g_demoPhase.store(Phase::Preparing, std::memory_order_release);
@@ -7062,13 +7025,11 @@ bool PlayRecording(std::string& outMsg) {
     g_demoText = clip;
     DirectDrawHook::RemoveMessagesByCategory("mission_run");
     g_demoFromRecorder = true;
-    g_demoTutorialHandoff = RequiresTutorialRestoreAcknowledgement(
-        false, true, ::Mission::TutorialSession::IsActive());
+    g_demoTutorialReturn.Begin(RequiresTutorialRestoreAcknowledgement(
+        false, true, ::Mission::TutorialSession::IsActive()));
     g_demoCancelRequested.store(false, std::memory_order_release);
-    g_demoBaselineIssued = false;
     g_demoRoundRestoreSettleTicks = 0;
-    g_demoTerminalRecipeHoldTicks = 0;
-    g_demoRecipeSettleTicksRemaining = 0;
+    g_demoPlayback.Reset();
     HoldDemoP1Neutral(true);
     SetDemoTransitionFreeze(true);
     g_demoPhase.store(Phase::Preparing, std::memory_order_release);
@@ -7086,15 +7047,16 @@ Phase GetPhase() { return g_demoPhase.load(std::memory_order_acquire); }
 RestoreResult PeekTutorialRestore(std::string& outMessage) {
     std::lock_guard<std::recursive_mutex> lock(g_runStateMx);
     outMessage = g_demoRestoreMessage;
-    return g_demoRestoreResult;
+    if (!g_demoTutorialReturn.HasResult()) return RestoreResult::None;
+    return g_demoTutorialReturn.Restored() ? RestoreResult::Restored : RestoreResult::RestoreFailed;
 }
 
 void AcknowledgeTutorialRestore() {
     std::lock_guard<std::recursive_mutex> lock(g_runStateMx);
-    if (g_demoRestoreResult == RestoreResult::None) return;
-    const RestoreResult acknowledged = g_demoRestoreResult;
+    if (!g_demoTutorialReturn.HasResult()) return;
+    const bool restored = g_demoTutorialReturn.Restored();
     ClearDemoTutorialHandoff(true);
-    LogOut(acknowledged == RestoreResult::Restored
+    LogOut(restored
                ? "[MISSION][DEMO] tutorial acknowledged restored baseline; direct neutral released"
                : "[MISSION][DEMO] tutorial acknowledged restore failure; frozen error owns the return",
            true);
@@ -7154,10 +7116,8 @@ void NotifyPracticeSessionReset(const char* reason) {
     ClearDemoTutorialHandoff(true);
     g_demoCancelRequested.store(false, std::memory_order_release);
     g_demoPhase.store(DemoPhase::Idle, std::memory_order_release);
-    g_demoBaselineIssued = false;
     g_demoRoundRestoreSettleTicks = 0;
-    g_demoTerminalRecipeHoldTicks = 0;
-    g_demoRecipeSettleTicksRemaining = 0;
+    g_demoPlayback.Reset();
     g_demoFinishedThisTick = false;
     g_demoText.clear();
     g_demoFromRecorder = false;
@@ -8687,10 +8647,8 @@ void Unload() {
         HoldDemoP1Neutral(false);
         g_demoText.clear();
         g_demoFromRecorder = false;
-        g_demoBaselineIssued = false;
         g_demoRoundRestoreSettleTicks = 0;
-        g_demoTerminalRecipeHoldTicks = 0;
-        g_demoRecipeSettleTicksRemaining = 0;
+        g_demoPlayback.Reset();
         g_demoCancelRequested.store(false, std::memory_order_release);
         g_demoPhase.store(DemoPhase::Idle, std::memory_order_release);
     }

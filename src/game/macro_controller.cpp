@@ -34,9 +34,6 @@ extern uintptr_t GetEFZBase();
 bool AreCharactersInitialized();
 
 extern void RestoreP2ControlFlagsPreserveBufferAndTokenForMacro();
-extern std::atomic<bool> g_macroWakePreserveBuffer;
-extern std::atomic<int> g_macroWakePreservePlayer;
-extern std::atomic<int> g_wakeMacroPlaybackCompleted;
 
 namespace {
     using Mask = uint8_t;
@@ -583,7 +580,7 @@ namespace {
         }
 
         bool suppressImmediate = false;
-        if (g_macroWakePreserveBuffer.load()) {
+        if (g_wakeMacroHandoff.Preserving()) {
             const bool hasButtons = (frameMask & kButtonMask) != 0;
             if (!s_firstAttackSeen) {
                 if (hasButtons) s_firstAttackSeen = true;
@@ -1001,11 +998,7 @@ void Tick() {
                 if (s_macroBannerId != -1) { DirectDrawHook::RemovePermanentMessage(s_macroBannerId); s_macroBannerId = -1; }
                 // Wake-prebuffered macro (armed player only): keep the buffer and motion token; completion schedules
                 // a delayed token neutralization. Any other macro takes the full restore, which clears the buffer.
-                if (g_macroWakePreserveBuffer.load() &&
-                    g_macroWakePreservePlayer.load() == playPlayer) {
-                    g_macroWakePreserveBuffer.store(false);
-                    g_macroWakePreservePlayer.store(0);
-                    g_wakeMacroPlaybackCompleted.store(playPlayer);
+                if (g_wakeMacroHandoff.FinishPlayback(playPlayer)) {
                     if (playPlayer == 2 && g_p2ControlOverridden) {
                         RestoreP2ControlFlagsPreserveBufferAndTokenForMacro();
                     }

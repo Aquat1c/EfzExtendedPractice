@@ -1,7 +1,70 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 
 namespace Mission::Engine::State {
+
+enum class DemoPlaybackPhase { Inputs, SettlingContacts, HoldingTerminalFrame, RestoreDue };
+class DemoPlayback {
+public:
+    bool HoldingTerminalFrame() const { return phase_ == DemoPlaybackPhase::HoldingTerminalFrame; }
+    int ContactTicksRemaining() const { return phase_ == DemoPlaybackPhase::SettlingContacts ? ticks_ : 0; }
+    bool BeginOrAdvanceContactSettle(int timeoutTicks) {
+        if (phase_ == DemoPlaybackPhase::Inputs) {
+            phase_ = DemoPlaybackPhase::SettlingContacts;
+            ticks_ = timeoutTicks;
+            return true;
+        }
+        if (phase_ == DemoPlaybackPhase::SettlingContacts && ticks_ > 0) --ticks_;
+        return false;
+    }
+    void BeginTerminalHold(int ticks) { phase_ = DemoPlaybackPhase::HoldingTerminalFrame; ticks_ = ticks; }
+    bool AdvanceTerminalHold() {
+        if (phase_ == DemoPlaybackPhase::HoldingTerminalFrame && --ticks_ == 0)
+            phase_ = DemoPlaybackPhase::RestoreDue;
+        return phase_ == DemoPlaybackPhase::RestoreDue;
+    }
+    void Reset() { phase_ = DemoPlaybackPhase::Inputs; ticks_ = 0; }
+private:
+    DemoPlaybackPhase phase_ = DemoPlaybackPhase::Inputs;
+    int ticks_ = 0;
+};
+
+enum class DemoTutorialReturnPhase { Inactive, AwaitingRestore, RestoredAwaitingAck, FailedAwaitingAck };
+class DemoTutorialReturn {
+public:
+    bool Requested() const { return phase_ != DemoTutorialReturnPhase::Inactive; }
+    bool Restored() const { return phase_ == DemoTutorialReturnPhase::RestoredAwaitingAck; }
+    bool HasResult() const { return Restored() || phase_ == DemoTutorialReturnPhase::FailedAwaitingAck; }
+    void Begin(bool requested) { phase_ = requested ? DemoTutorialReturnPhase::AwaitingRestore : DemoTutorialReturnPhase::Inactive; }
+    void Publish(bool restored) {
+        if (phase_ == DemoTutorialReturnPhase::AwaitingRestore)
+            phase_ = restored ? DemoTutorialReturnPhase::RestoredAwaitingAck : DemoTutorialReturnPhase::FailedAwaitingAck;
+    }
+    void Reset() { phase_ = DemoTutorialReturnPhase::Inactive; }
+private:
+    DemoTutorialReturnPhase phase_ = DemoTutorialReturnPhase::Inactive;
+};
+
+enum class RecorderComboEndAnchor { None, DirectStep, EntityContact };
+class RecorderComboEnd {
+public:
+    bool Pending() const { return anchor_ != RecorderComboEndAnchor::None; }
+    bool IsDirect() const { return anchor_ == RecorderComboEndAnchor::DirectStep; }
+    bool IsEntity() const { return anchor_ == RecorderComboEndAnchor::EntityContact; }
+    int Step() const { return step_; }
+    uint32_t EntitySequence() const { return sequence_; }
+    int AfterAction() const { return afterAction_ >= 0 ? afterAction_ : step_; }
+    void SetAfterAction(int action) { afterAction_ = action; }
+    void SelectStep(int step) { Reset(); anchor_ = RecorderComboEndAnchor::DirectStep; step_ = step; }
+    void SelectEntity(uint32_t sequence) { Reset(); anchor_ = RecorderComboEndAnchor::EntityContact; sequence_ = sequence; }
+    void Reset() { anchor_ = RecorderComboEndAnchor::None; step_ = -1; sequence_ = 0; afterAction_ = -1; }
+private:
+    RecorderComboEndAnchor anchor_ = RecorderComboEndAnchor::None;
+    int step_ = -1;
+    uint32_t sequence_ = 0;
+    int afterAction_ = -1;
+};
 
 enum class PendingEntryPhase { Idle, WaitingForMatch, CharacterSelectObserved };
 class PendingEntry {

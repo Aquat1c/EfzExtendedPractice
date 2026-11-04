@@ -50,6 +50,40 @@ int main() {
     buffered.TrackMotion(43);
     buffered.TrackMotion(0);
     Check(buffered.Buffered(), "retiring a generation preserves separately retained buffering");
+    RgPrearmState rg;
+    rg.Arm(71);
+    Check(rg.Armed() && rg.Generation() == 71, "RG retains the admitted generation while native consumption is pending");
+    rg.Clear();
+    Check(!rg.Armed() && rg.Generation() == 0, "RG acceptance or failure retires the old generation before retry");
+    rg.Arm(0);
+    Check(rg.Armed(), "admission preserves the original zero-generation edge case");
+    WakeCleanupMonitor cleanup;
+    cleanup.Start(2, 96);
+    Check(cleanup.Watching() && cleanup.LastMove() == 96, "cleanup starts only after reserving the input owner");
+    Check(!cleanup.Tick() && cleanup.TicksRemaining() == 1, "cleanup retains the original tick deadline");
+    cleanup.ObserveMove(200);
+    Check(cleanup.Tick() && !cleanup.Watching(), "deadline expiry releases the cleanup watcher once");
+    Check(!cleanup.Tick(), "idle cleanup cannot expire twice");
+    cleanup.Start(20, 96);
+    cleanup.Stop();
+    Check(!cleanup.Watching() && cleanup.LastMove() == 96, "lost reservation stops watching without discarding the sample");
+    cleanup.Reset();
+    Check(cleanup.LastMove() == -1, "runtime reset clears the retained cleanup sample");
+    WakeMacroHandoff handoff;
+    handoff.Preserve(1);
+    Check(handoff.Preserving() && !handoff.FinishPlayback(2), "another player's playback cannot consume wake preservation");
+    Check(handoff.FinishPlayback(1) && handoff.CompletedPlayer() == 1 && !handoff.Preserving(),
+          "matching playback publishes its cleanup obligation");
+    handoff.Preserve(2);
+    Check(handoff.CompletedPlayer() == 1 && handoff.Preserving(),
+          "a fresh playback does not consume an earlier cleanup obligation");
+    handoff.ClearCompletion();
+    Check(handoff.CompletedPlayer() == 0 && handoff.Preserving(),
+          "cleanup admission retires only the completion mailbox");
+    handoff.Complete(2);
+    handoff.ClearPreservation();
+    Check(handoff.CompletedPlayer() == 2 && !handoff.Preserving(),
+          "clearing playback preservation retains a pending cleanup retry");
     TriggerDelayState state{};
     Check(!state.IsDelaying(), "no trigger is pending initially");
     state.RetryDispatch();
