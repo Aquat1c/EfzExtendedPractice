@@ -1,5 +1,6 @@
 #include "gui/custom_menu/palette_editor.h"
 #include "game/palette_editor.h"
+#include "core/constants.h"
 #include "game/mission/move_notation_tables.h"
 #include "game/mission/entity_notation_tables.h"
 #include "game/mission/mission_movedata.h"
@@ -26,6 +27,8 @@ namespace {
 namespace Model = ::PaletteEditor;
 ContextProvider g_contextProvider = nullptr;
 UseSlot g_useSlot = nullptr;
+ApplyColors g_applyColors = nullptr;
+RestorePreview g_restorePreview = nullptr;
 std::atomic<bool> g_suspendRequested{false};
 std::atomic<bool> g_open{false};
 IDirect3DDevice9* g_device = nullptr;
@@ -38,9 +41,11 @@ struct Texture {
 Texture g_originalTexture, g_workingTexture;
 struct State {
     bool open = false, loaded = false;
-    int player = 1, page = 0, focus[2]{}, editorFocus = 0, color = 0, ramp = 0, target = 0, space = 0;
+    enum class View { Editor, Files } view = View::Editor;
+    int player = 1, focus[2]{}, editorFocus = 0, color = 0, ramp = 0, target = 1, space = 0;
+    int viewOpenedFrame = -1;
     int category = 1, moveChoice = 0;
-    bool panMode = false, classesKnown = false, keyboardGesture = false;
+    bool closeRequested = false, focusAbove = false, panMode = false, classesKnown = false, keyboardGesture = false;
     int keyboardChannel = -1;
     int components[3]{}, stock = 0, slot = 0, libraryIndex = 0;
     int animation = 0, frame = 0, zoom = 100, panX = 0, panY = 0, compare = 0;
@@ -64,8 +69,8 @@ struct State {
     std::string status, assetWarning, liveStatus, nativeName;
     std::function<void()> confirm;
     std::string confirmTitle, confirmText, confirmVerb;
-    int confirmFocus = 0;
-    enum class TextKind { None, Name, Hex } textKind = TextKind::None;
+    int confirmFocus = 0, modalOpenedFrame = -1;
+    enum class TextKind { None, Name, SaveAs, Hex } textKind = TextKind::None;
     std::string text;
     int textFocus = 0;
     bool lowerCase = false;
@@ -101,6 +106,7 @@ void Confirm(const char* title, const std::string& text, const char* verb, std::
     g.confirmVerb = verb;
     g.confirmFocus = 0;
     g.confirm = std::move(action);
+    g.modalOpenedFrame=ImGui::GetCurrentContext()?ImGui::GetFrameCount():-1;
     Neutral();
 }
 void GuardDraft(std::function<void()> action) {
@@ -119,6 +125,19 @@ void SyncColor() {
     g.components[1] = g.space ? int(std::lround(hsv.s)) : c.g;
     g.components[2] = g.space ? int(std::lround(hsv.v)) : c.b;
     g.pin = g.document.Pinned(g.color);
+}
+void ApplyToMatch() {
+    std::string error;
+    if(!g_applyColors || !g_applyColors(g.player,g.context.resourceName,g.document.Colors(),error)) {
+        Status(error.empty()?"Practice palette application is unavailable.":error);return;
+    }
+    g.compare=0;
+    Status("Apply requested for this match. No file is written.");
+}
+void RestoreMatch() {
+    g.live=false;
+    if(g_restorePreview) g_restorePreview(true);
+    Status("Preview off; draft edits kept.");
 }
 void SelectColor() { g.document.EndGesture();g.keyboardGesture=false;g.sliderRow=-1;g.dragging=false; g.target = 0; SyncColor(); }
 void SelectRamp() { g.document.EndGesture();g.keyboardGesture=false;g.sliderRow=-1;g.dragging=false; g.target = g.document.Ramps().empty() ? 0 : 1; SyncColor(); }
@@ -168,6 +187,56 @@ void FilterMoves() {
     if(!g.moveIndices.empty()) g.animation=g.moveIndices[g.moveChoice];
     g.frame=0;g.elapsed=0;
 }
+const char* CommonStateLabel(int id) {
+    switch(id) {
+    case IDLE_MOVE_ID:return "Idle";
+    case WALK_FWD_ID:return "Walk forward";
+    case WALK_BACK_ID:return "Walk backward";
+    case CROUCH_ID:return "Crouch";
+    case CROUCH_TO_STAND_ID:return "Stand up";
+    case PREJUMP_ID:return "Jump startup";
+    case STRAIGHT_JUMP_ID:return "Jump";
+    case FORWARD_JUMP_ID:return "Jump forward";
+    case BACKWARD_JUMP_ID:return "Jump backward";
+    case FALLING_ID:return "Falling";
+    case DOUBLE_JUMP_NEUTRAL_ID:return "Double jump";
+    case DOUBLE_JUMP_FWD_ID:return "Double jump forward";
+    case DOUBLE_JUMP_BACK_ID:return "Double jump backward";
+    case LANDING_1_ID:case LANDING_2_ID:case LANDING_3_ID:case LANDING_ID:return "Landing";
+    case STANDING_BLOCK_LVL1:case STAND_GUARD_ID:case STANDING_BLOCK_LVL3:return "Standing guard";
+    case CROUCH_GUARD_ID:case CROUCH_GUARD_STUN1:case CROUCH_GUARD_STUN2:return "Crouching guard";
+    case AIR_GUARD_ID:return "Air guard";
+    case RG_STAND_ID:return "Standing recoil guard";
+    case RG_CROUCH_ID:return "Crouching recoil guard";
+    case RG_AIR_ID:return "Air recoil guard";
+    case SWEEP_HITSTUN:return "Sweep hitstun";
+    case FORWARD_AIRTECH:return "Air recovery forward";
+    case BACKWARD_AIRTECH:return "Air recovery backward";
+    case GROUNDTECH_PRE:return "Ground recovery startup";
+    case GROUNDTECH_RECOVERY:return "Ground recovery finish";
+    case GROUND_FORWARD_DASH_ID:return "Dash forward";
+    case GROUND_BACKWARD_DASH_ID:return "Dash backward";
+    case AIR_FORWARD_DASH_ID:return "Air dash forward";
+    case AIR_BACKWARD_DASH_ID:return "Air dash backward";
+    case FORWARD_DASH_RECOVERY_SENTINEL_ID:return "Dash recovery";
+    case GROUND_IC_ID:return "Ground instant charge";
+    case AIR_IC_ID:return "Air instant charge";
+    case FIRE_STATE:return "Burning hitstun";
+    case ELECTRIC_STATE:return "Electric hitstun";
+    default:break;
+    }
+    if(id>=STAND_HITSTUN_START && id<=STAND_HITSTUN_END) return "Standing hitstun";
+    if(id>=CROUCH_HITSTUN_START && id<=CROUCH_HITSTUN_END) return "Crouching hitstun";
+    if(id>=LAUNCHED_HITSTUN_START && id<=LAUNCHED_HITSTUN_END) return "Air hitstun";
+    if(id>=GROUNDTECH_START && id<=GROUNDTECH_END) return "Ground recovery";
+    if(id>=FROZEN_STATE_START && id<=FROZEN_STATE_END) return "Frozen hitstun";
+    if((id>=THROWN_STATE_START && id<=THROWN_STATE_END) ||
+       (id>=THROWN2_STATE_START && id<=THROWN2_STATE_END) ||
+       (id>=THROWN3_STATE_START && id<=THROWN3_STATE_END) ||
+       (id>=THROWN4_STATE_START && id<=THROWN4_STATE_END) ||
+       (id>=THROWN5_STATE_START && id<=THROWN5_STATE_END)) return "Thrown";
+    return nullptr;
+}
 void BuildMoveChoices() {
     g.moveLabels.clear();g.moveCategories.clear();
     bool known=false;
@@ -176,6 +245,7 @@ void BuildMoveChoices() {
         g.moveCategories.push_back(Category(type));known=known || type!=Mission::MoveData::Cls::Unknown;
         const char* label=Mission::MoveNames::Lookup(g.context.resourceName.c_str(),short(animation.id));
         if(!label || !*label) label=Mission::EntityNames::Lookup(g.context.resourceName.c_str(),animation.id);
+        if(!label || !*label) label=CommonStateLabel(animation.id);
         if(!label || !*label) label=Mission::MoveData::ClassName(type);
         g.moveLabels.push_back(std::to_string(animation.id)+" - "+(label && *label?label:"Unclassified"));
     }
@@ -228,7 +298,7 @@ void LoadPlayer(int player) {
     for (size_t i=0;i<g.assets.animations.size();++i)
         if (g.assets.animations[i].id==g.context.moveId) g.animation=int(i);
     BuildMoveChoices();
-    g.target=0;
+    g.target=1;
     SyncColor();
     Status(!nativeError.empty()?"Custom PAL could not load; live preview disabled: "+nativeError:
         (!g.nativeName.empty()?"Loaded "+g.nativeName+".":"Stock "+std::to_string(g.stock+1)+" loaded.")+" Preview does not advance the match.");
@@ -239,7 +309,7 @@ void LoadStock() {
     const int slot=g.stock;
     GuardDraft([slot]{
         g.document.LoadStock(g.context.resourceName,unsigned(slot),g.assets.stockPalettes[slot]);
-        g.source.reset();g.nativeName.clear(); g.target=0; SyncColor();
+        g.source.reset();g.nativeName.clear(); g.target=1; SyncColor();
         Status("Stock " + std::to_string(slot+1) + " loaded."); Neutral();
     });
 }
@@ -258,24 +328,32 @@ void LoadCustom() {
             !g.document.LoadSaved(saved,g.assets.stockPalettes[saved.stockSlot],error)) {
             Status(error.empty()?"Invalid stock slot.":error); return;
         }
-        g.source=entry;g.nativeName.clear(); g.stock=int(saved.stockSlot); g.target=0; SyncColor();
-        Status("Loaded " + saved.name + (entry.deleted ? " from trash; restore or save a new copy." : ".")); Neutral();
+        g.source=entry;g.nativeName.clear(); g.stock=int(saved.stockSlot); g.target=1; SyncColor();
+        if(entry.deleted) {g.trash=false;g.view=State::View::Editor;ScanLibrary();g.editorFocus=-3;g.focus[1]=0;g.scroll[1]={};}
+        Status("Loaded " + saved.name + (entry.deleted ? " from trash. Use Save As to keep a new copy." : ".")); Neutral();
     });
 }
 void StartText(State::TextKind kind) {
     g.textKind=kind;
+    g.modalOpenedFrame=ImGui::GetCurrentContext()?ImGui::GetFrameCount():-1;
     g.text=kind==State::TextKind::Hex?Model::FormatHex(g.target ? g.document.RampColor(unsigned(g.ramp)) : g.document.Colors()[g.color]):g.document.State().name;
+    if(kind==State::TextKind::SaveAs) g.text.clear();
     g.textFocus=0;
     if(ImGui::GetCurrentContext()) ImGui::GetIO().InputQueueCharacters.resize(0);
     Neutral();
 }
 void EditName() { StartText(State::TextKind::Name); }
 void EditHex() { StartText(State::TextKind::Hex); }
-void SaveNew() {
+bool SaveNew(const std::string& name) {
     Model::LibraryEntry saved;
     std::string error;
-    if (!g.library->SaveNew(g.document.State(),saved,error)) { Status(error); return; }
-    g.source=saved; g.document.MarkSaved(); ScanLibrary(); Status("Saved " + saved.name + ".");
+    auto palette=g.document.State();palette.name=name;
+    if (!g.library || !g.library->SaveNew(palette,saved,error)) {
+        Status(error.empty()?"Palette library is unavailable.":error);return false;
+    }
+    g.document.SetName(name);g.source=saved;g.document.MarkSaved();
+    g.trash=false;ScanLibrary();Status("Saved " + saved.name + ".");
+    return true;
 }
 void Replace() {
     if (NoSource()) return;
@@ -285,6 +363,17 @@ void Replace() {
         if (!g.library->Replace(entry,g.document.State(),saved,error)) { Status(error); return; }
         g.source=saved; g.document.MarkSaved(); ScanLibrary(); Status("Replaced " + saved.name + ".");
     });
+}
+void SaveAs() {StartText(State::TextKind::SaveAs);}
+void Save() {if(NoSource()) SaveAs();else Replace();}
+void ShowView(State::View view) {
+    if(g.view==view) return;
+    g.view=view;g.viewOpenedFrame=ImGui::GetFrameCount();g.editorFocus=0;
+    if(g.trash) {g.trash=false;ScanLibrary();}
+    g.focus[1]=0;g.scroll[1]={};Neutral();
+}
+void ToggleTrash() {
+    g.trash=!g.trash;ScanLibrary();g.focus[1]=0;g.scroll[1]={};Neutral();
 }
 void DeleteOrRestore() {
     if (NoEntries()) return;
@@ -304,7 +393,7 @@ void ImportNative() {
         Model::Palette colors; std::string error;
         if (!Model::ReadNativePalette(path,colors,error)) { Status(error); return; }
         g.document.LoadStock(g.context.resourceName,unsigned(g.stock),g.assets.stockPalettes[g.stock]);
-        g.document.Import(colors); g.source.reset();g.nativeName=path.filename().u8string(); g.target=0; SyncColor();
+        g.document.Import(colors); g.source.reset();g.nativeName=path.filename().u8string(); g.target=1; SyncColor();
         Status("Imported " + path.filename().u8string() + ". Save to keep pins and ramp edits.");
     });
 }
@@ -329,7 +418,7 @@ void ImportFile() {
         Model::Palette colors;std::string error;
         if(!Model::ReadNativePalette(path,colors,error)) {Status(error);return;}
         g.document.LoadStock(g.context.resourceName,unsigned(g.stock),g.assets.stockPalettes[g.stock]);
-        g.document.Import(colors);g.source.reset();g.nativeName=path.filename().u8string();g.target=0;SyncColor();
+        g.document.Import(colors);g.source.reset();g.nativeName=path.filename().u8string();g.target=1;SyncColor();
         Status("Imported " + path.filename().u8string() + ". Save the draft to keep it.");
     });
 }
@@ -408,37 +497,44 @@ void Step(int direction) {
 }
 void PrevFrame(){Step(-1);}
 void NextFrame(){Step(1);}
-std::vector<Screens::Row> LibraryRows() {
+std::vector<Screens::Row> FilesRows() {
     using namespace Screens;
     std::vector<Row> rows;
     static const char* slots[]={"1","2","3","4","5","6"};
+    if(g.trash) {
+        rows.push_back(Action("Back to files",ToggleTrash));
+        rows.push_back(DropdownRow("Deleted palette",&g.libraryIndex,g.entryOptions.data(),int(g.entryOptions.size()),nullptr,NoEntries));
+        rows.back().valueFormatter=EntryValue;
+        rows.push_back(Action("Restore selected",DeleteOrRestore,nullptr,NoEntries));
+        rows.back().helpText="Return the selected palette to the library. Your current draft is kept.";
+        rows.push_back(Action("Load selected",LoadCustom,nullptr,NoEntries));
+        rows.back().helpText="Load this deleted palette, then use Save As to recover it under a different name.";
+        rows.push_back(Action("Rescan trash",ScanLibrary));
+        return rows;
+    }
     rows.push_back(DropdownRow("Stock palette",&g.stock,slots,6));
     rows.push_back(Action("Load stock",LoadStock));
-    rows.push_back(Toggle("Show trash",&g.trash,ScanLibrary));
-    rows.push_back(DropdownRow("Library entry",&g.libraryIndex,g.entryOptions.data(),int(g.entryOptions.size()),nullptr,NoEntries));
-    rows.back().valueFormatter=EntryValue;
-    rows.push_back(Action("Load selected",LoadCustom,nullptr,NoEntries));
-    rows.push_back(Action("Name (32 chars)",EditName,NameValue));
-    rows.push_back(Action("Save new",SaveNew));
-    rows.push_back(Action("Replace loaded",Replace,SourceValue,NoSource));
-    rows.push_back(Action(g.trash?"Restore selected":"Trash selected",DeleteOrRestore,nullptr,NoEntries));
-    rows.push_back(Action("Rescan library",ScanLibrary));
+    rows.push_back(Header("FILE IMPORT / EXPORT"));
     rows.push_back(DropdownRow("Native PAL slot",&g.slot,slots,6));
     rows.push_back(Action("Import native PAL",ImportNative));
+    rows.back().helpText="Read the selected character's native slot file. PAL files contain exactly 40 RGB colors.";
     rows.push_back(Action("Export native PAL",ExportNative));
+    rows.back().helpText="Write a native slot; replacing an existing file requires confirmation. Does not reload the match.";
     rows.push_back(Action("Export + apply",ExportAndUse));
-    rows.push_back(Action("Copy saved file",CopyFile,nullptr,NoSource));
-    rows.push_back(Action("Revert draft",Revert));
+    rows.back().helpText="Write the native slot and apply its colors in the current match. No gameplay frames advance.";
     rows.push_back(Action("Import PAL file...",ImportFile));
+    rows.back().helpText="Choose a native PAL file. The Windows file chooser accepts keyboard or pointer input.";
+    rows.push_back(Action("Copy saved file",CopyFile,nullptr,NoSource));
+    rows.back().helpText="Copy the loaded library file to the Windows clipboard for sharing in Explorer.";
+    rows.push_back(Header("PALETTE FILES"));
+    rows.push_back(DropdownRow("Saved palette",&g.libraryIndex,g.entryOptions.data(),int(g.entryOptions.size()),nullptr,NoEntries));
+    rows.back().valueFormatter=EntryValue;
+    rows.push_back(Action("Revert draft",Revert));
     rows.push_back(Action("Reset all colors",ResetAll));
-    rows[5].helpText="Use the keyboard or the on-screen controller keyboard. Names contain up to 32 characters.";
-    rows[6].helpText="Library files preserve the original palette, pins, ramp targets and color edits.";
-    rows[8].helpText="Deleted palettes remain in recoverable trash. Show trash to restore them.";
-    rows[11].helpText="Read the selected character's native slot file. PAL files contain exactly 40 RGB colors.";
-    rows[12].helpText="Write a native slot; replacing an existing file requires confirmation. Does not reload the match.";
-    rows[13].helpText="Write the native slot and apply its colors in the current match. No gameplay frames advance.";
-    rows[14].helpText="Copy the loaded library file to the Windows clipboard for sharing in Explorer.";
-    rows[16].helpText="Choose a native PAL file. The Windows file chooser accepts keyboard or pointer input.";
+    rows.push_back(Action("Move selected to trash",DeleteOrRestore,nullptr,NoEntries));
+    rows.back().helpText="Remove the selected palette from the library. Recover deleted palettes can restore it.";
+    rows.push_back(Action("Recover deleted palettes",ToggleTrash));
+    rows.push_back(Action("Rescan library",ScanLibrary));
     return rows;
 }
 void AdvancePreview() {
@@ -466,11 +562,11 @@ bool UpdateTexture(Texture& texture,int spriteId,const Model::Palette256& colors
     while(height<sprite.height) height*=2;
     if (!texture.value || texture.width!=width || texture.height!=height) {
         texture.Release();
-        if (FAILED(g_device->CreateTexture(width,height,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&texture.value,nullptr))) return false;
+        if (FAILED(g_device->CreateTexture(width,height,1,D3DUSAGE_DYNAMIC,D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&texture.value,nullptr))) return false;
         texture.width=width;texture.height=height;
     }
     D3DLOCKED_RECT lock{};
-    if (FAILED(texture.value->LockRect(0,&lock,nullptr,0))) return false;
+    if (FAILED(texture.value->LockRect(0,&lock,nullptr,D3DLOCK_DISCARD))) return false;
     for(int y=0;y<height;++y) {
         auto* pixels=reinterpret_cast<DWORD*>(static_cast<char*>(lock.pBits)+y*lock.Pitch);
         for(int x=0;x<width;++x) {
@@ -480,7 +576,7 @@ bool UpdateTexture(Texture& texture,int spriteId,const Model::Palette256& colors
             pixels[x]=index==g.assets.transparentKey?0:(index==marked?0xFFFFFFFFu:D3DCOLOR_ARGB(255,c.r,c.g,c.b));
         }
     }
-    texture.value->UnlockRect(0);
+    if (FAILED(texture.value->UnlockRect(0))) return false;
     texture.sprite=spriteId;texture.colors=colors;texture.marked=marked;
     return true;
 }
@@ -546,15 +642,17 @@ void DrawPreview(ImDrawList* dl,float x,float y,float width,float height,bool in
         g.panMouseX=mouse.x;g.panMouseY=mouse.y;
     } else g.panning=false;
 }
-void DrawSwatches(ImDrawList* dl,float x,float y,float width,bool input) {
-    const float cell=width/8.0f,height=(std::max)(20.0f,Scale::Get().bodyPx+8);
+void DrawSwatches(ImDrawList* dl,float x,float y,float width,bool input,float availableHeight=0) {
+    const float cell=width/8.0f;
+    float height=(std::max)(20.0f,Scale::Get().bodyPx+8);
+    if(availableHeight>0) height=(std::min)(height,availableHeight/5);
     for(int i=0;i<40;++i) {
         const float sx=x+(i%8)*cell,sy=y+(i/8)*height;
         const auto c=g.document.Colors()[i];
         dl->AddRectFilled(ImVec2(sx+2,sy+2),ImVec2(sx+cell-2,sy+height-2),IM_COL32(c.r,c.g,c.b,255));
         if(i==g.color) dl->AddRect(ImVec2(sx,sy),ImVec2(sx+cell,sy+height),Theme::kSelectedLine,0,0,2);
         const auto color=(int(c.r)*299+int(c.g)*587+int(c.b)*114)>140000?IM_COL32(0,0,0,255):IM_COL32(255,255,255,255);
-        Text(dl,sx+5,sy+4,std::to_string(i),color);
+        Text(dl,sx+5,sy+(height-Scale::Get().bodyPx)/2,std::to_string(i),color);
         if (g.document.Pinned(i)) dl->AddCircleFilled(ImVec2(sx+cell-6,sy+6),2,Theme::kInfoAccent);
         if (input && Input::MouseClickedIn(sx,sy,cell,height)) {g.color=i;SelectColor();g.editorFocus=0;}
         if (input && Input::MouseRightClickedIn(sx,sy,cell,height)) {
@@ -586,6 +684,7 @@ bool EditorButton(ImDrawList* dl,int focus,float x,float y,float width,float hei
     if(clicked || (input && g.editorFocus==focus && Input::Activate())) {g.document.EndGesture();g.keyboardGesture=false;g.sliderRow=-1;g.dragging=false;}
     dl->PushClipRect(ImVec2(x,y),ImVec2(x+width,y+height),true);
     const std::string fitted=ButtonLabel(label,width-16);
+    dl->AddRectFilled(ImVec2(x,y),ImVec2(x+width,y+height),Theme::kStrip | IM_COL32_A_MASK);
     Layout::DrawButton(dl,x,y,width,height,fitted.c_str(),g.editorFocus==focus,disabled);
     dl->PopClipRect();
     return !disabled && (clicked || (input && g.editorFocus==focus && Input::Activate()));
@@ -619,6 +718,7 @@ void CompactSlider(ImDrawList* dl,int component,float x,float y,float width,bool
         const int value=int(std::lround(fraction*maximum));
         if(g.components[component]!=value) {g.components[component]=value;ApplyComponents();}
     }
+    dl->AddRectFilled(ImVec2(x,y),ImVec2(x+width,y+height),Theme::kStrip | IM_COL32_A_MASK);
     Layout::DrawButton(dl,x,y,width,height,"",g.editorFocus==focus);
     const float textY=y+(height-Scale::Get().bodyPx)/2;
     const char* rgb[]={"R","G","B"};const char* hsv[]={"H","S","V"};
@@ -672,8 +772,10 @@ void DrawRampGrid(ImDrawList* dl,float x,float y,float width,float height,bool i
 }
 void DrawEditor(ImDrawList* dl,float top,bool input) {
     constexpr float left=28,right=328,width=284;
+    const float compact=(std::max)(0.0f,top+305-416);
+    const float previewCompact=(std::max)(0.0f,top+335-416);
     const bool alternate=Model::HasAlternateAnimations(g.context.resourceName);
-    g.editorFocus=(std::clamp)(g.editorFocus,0,alternate?20:19);
+    g.editorFocus=(std::clamp)(g.editorFocus,-5,alternate?22:21);
     if(g.keyboardGesture && (!input || (!Input::NavLeftHeld() && !Input::NavRightHeld()) || g.editorFocus!=g.keyboardChannel)) {
         g.document.EndGesture();g.keyboardGesture=false;
     }
@@ -683,8 +785,11 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
         if(Input::NavUp()) g.panY=(std::max)(-2048,g.panY-4);if(Input::NavDown()) g.panY=(std::min)(2048,g.panY+4);
         if(Input::Activate() || Input::Back()) {g.panMode=false;Neutral();}
     } else if(input && g.sliderRow<0) {
-        const int count=alternate?21:20;
-        if(Input::NavUp()) g.editorFocus=(g.editorFocus+count-1)%count;
+        const int count=alternate?23:22;
+        if(Input::NavUp()) {
+            if(g.editorFocus==0) {g.editorFocus=-5;Neutral();input=false;}
+            else --g.editorFocus;
+        }
         if(Input::NavDown()) g.editorFocus=(g.editorFocus+1)%count;
         if(g.keyboardGesture && g.editorFocus!=g.keyboardChannel) {g.document.EndGesture();g.keyboardGesture=false;}
         const int direction=Input::NavRight()?1:Input::NavLeft()?-1:0;
@@ -706,22 +811,22 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
         case 17:g.compare=(g.compare+direction+3)%3;break;
         case 18:g.marking=direction>0;break;
         case 19:g.live=direction>0;break;
-        case 20:g.alternate=!g.alternate;VariantChanged();break;
+        case 22:g.alternate=!g.alternate;VariantChanged();break;
         default:break;
         }
-        if(Input::Back()) {Close();input=false;}
+        if(Input::Back()) {g.closeRequested=true;Neutral();input=false;}
     }
     const bool controls=input && !g.panMode;
     const std::string selection=g.target?"RAMP "+std::to_string(g.ramp)+"  /  SHADE":"SHADE "+std::to_string(g.color)+"  /  RAMP";
     if(EditorButton(dl,0,left,top,width,24,selection,controls)) {g.target=g.target?0:1;SyncColor();}
-    if(g.target) DrawRampGrid(dl,left,top+28,width,124,controls);
-    else DrawSwatches(dl,left,top+28,width,controls);
-    if(EditorButton(dl,1,left,top+156,132,24,g.space?"HSV > RGB":"RGB > HSV",controls)) {g.space=1-g.space;SyncColor();}
-    if(EditorButton(dl,2,left+140,top+156,144,24,HexValue(),controls)) EditHex();
-    for(int component=0;component<3;++component) CompactSlider(dl,component,left,top+187+component*29,width,controls);
-    if(EditorButton(dl,6,left,top+280,80,25,g.pin?"UNPIN":"PIN",controls)) {g.pin=!g.pin;Pin();}
-    if(EditorButton(dl,7,left+87,top+280,90,25,"RESET",controls)) ResetSelected();
-    if(EditorButton(dl,8,left+184,top+280,100,25,"UNDO "+std::to_string(g.document.UndoCount()),controls,NoUndo())) Undo();
+    if(g.target) DrawRampGrid(dl,left,top+28,width,124-compact,controls);
+    else DrawSwatches(dl,left,top+28,width,controls,124-compact);
+    if(EditorButton(dl,1,left,top+156-compact,132,24,g.space?"HSV > RGB":"RGB > HSV",controls)) {g.space=1-g.space;SyncColor();}
+    if(EditorButton(dl,2,left+140,top+156-compact,144,24,HexValue(),controls)) EditHex();
+    for(int component=0;component<3;++component) CompactSlider(dl,component,left,top+187-compact+component*29,width,controls);
+    if(EditorButton(dl,6,left,top+280-compact,80,25,g.pin?"UNPIN":"PIN",controls)) {g.pin=!g.pin;Pin();}
+    if(EditorButton(dl,7,left+87,top+280-compact,90,25,"RESET",controls)) ResetSelected();
+    if(EditorButton(dl,8,left+184,top+280-compact,100,25,"UNDO "+std::to_string(g.document.UndoCount()),controls,NoUndo())) Undo();
     const std::string category=g.classesKnown?kMoveCategories[g.category]:"ALL / NO CLASS DATA";
     if(EditorButton(dl,9,right,top,width,24,category,controls)) {
         auto row=Screens::DropdownRow("Category",&g.category,kMoveCategories,7,FilterMoves);
@@ -730,37 +835,42 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
     const std::string move=g.moveOptions.empty()?"No drawable animations":g.moveOptions[g.moveChoice];
     if(EditorButton(dl,10,right,top+28,width,24,move,controls,g.moveOptions.empty()))
         OpenEditorChoice(Screens::DropdownRow("Move",&g.moveChoice,g.moveOptions.data(),int(g.moveOptions.size()),MoveChoiceChanged));
-    DrawPreview(dl,right,top+56,width,158,controls);
+    DrawPreview(dl,right,top+56,width,158-previewCompact,controls);
     if(g.compare==2) {
-        FitText(dl,right+7,top+194,width/2-12,"ORIGINAL",Theme::kTextInactive);
-        FitText(dl,right+width/2+7,top+194,width/2-12,"WORKING",Theme::kTextInactive);
+        FitText(dl,right+7,top+194-previewCompact,width/2-12,"ORIGINAL",Theme::kTextInactive);
+        FitText(dl,right+width/2+7,top+194-previewCompact,width/2-12,"WORKING",Theme::kTextInactive);
     }
-    if(alternate && EditorButton(dl,20,right+width-82,top+61,76,21,g.alternate?"ALT":"STD",controls)) {g.alternate=!g.alternate;VariantChanged();}
+    if(alternate && EditorButton(dl,22,right+width-82,top+61,76,21,g.alternate?"ALT":"STD",controls)) {g.alternate=!g.alternate;VariantChanged();}
     const auto* animation=Animation();
     const int frames=animation?int(animation->frames.size()):0;
-    if(EditorButton(dl,11,right,top+220,42,25,"<",controls,frames==0)) PrevFrame();
-    if(EditorButton(dl,12,right+49,top+220,186,25,(frames?(g.playing?"PAUSE  ":"PLAY  ")+std::to_string(g.frame+1)+" / "+std::to_string(frames):"NO FRAMES"),controls,frames==0)) g.playing=!g.playing;
-    if(EditorButton(dl,13,right+242,top+220,42,25,">",controls,frames==0)) NextFrame();
-    if(EditorButton(dl,14,right,top+250,102,24,std::to_string(g.zoom)+"%",controls)) {g.zoom=g.zoom>=400?25:(std::min)(400,g.zoom+25);ZoomChanged();}
-    if(EditorButton(dl,15,right+109,top+250,78,24,g.panMode?"PAN*":"PAN",input)) {g.panMode=!g.panMode;Neutral();}
-    if(EditorButton(dl,16,right+194,top+250,90,24,"CENTER",controls)) Recenter();
+    if(EditorButton(dl,11,right,top+220-previewCompact,42,25,"<",controls,frames==0)) PrevFrame();
+    if(EditorButton(dl,12,right+49,top+220-previewCompact,186,25,(frames?(g.playing?"PAUSE  ":"PLAY  ")+std::to_string(g.frame+1)+" / "+std::to_string(frames):"NO FRAMES"),controls,frames==0)) g.playing=!g.playing;
+    if(EditorButton(dl,13,right+242,top+220-previewCompact,42,25,">",controls,frames==0)) NextFrame();
+    if(EditorButton(dl,14,right,top+250-previewCompact,102,24,std::to_string(g.zoom)+"%",controls)) {g.zoom=g.zoom>=400?25:(std::min)(400,g.zoom+25);ZoomChanged();}
+    if(EditorButton(dl,15,right+109,top+250-previewCompact,78,24,g.panMode?"PAN*":"PAN",input)) {g.panMode=!g.panMode;Neutral();}
+    if(EditorButton(dl,16,right+194,top+250-previewCompact,90,24,"CENTER",controls)) Recenter();
     static const char* compares[]={"WORKING","ORIGINAL","SPLIT"};
-    if(EditorButton(dl,17,right,top+280,116,25,compares[g.compare],controls)) g.compare=(g.compare+1)%3;
-    if(EditorButton(dl,18,right+123,top+280,75,25,"MARK",controls)) g.marking=!g.marking;
-    if(EditorButton(dl,19,right+205,top+280,79,25,"LIVE",controls)) g.live=!g.live;
-    dl->AddCircleFilled(ImVec2(right+192,top+285),2,g.marking?Theme::kInfoAccent:Theme::kTextDisabled);
-    dl->AddCircleFilled(ImVec2(right+278,top+285),2,g.live?Theme::kInfoAccent:Theme::kTextDisabled);
+    if(EditorButton(dl,17,right,top+280-previewCompact,104,25,compares[g.compare],controls)) g.compare=(g.compare+1)%3;
+    if(EditorButton(dl,18,right+111,top+280-previewCompact,67,25,"MARK",controls)) g.marking=!g.marking;
+    if(EditorButton(dl,19,right+185,top+280-previewCompact,99,25,"PREVIEW",controls)) g.live=!g.live;
+    dl->AddCircleFilled(ImVec2(right+172,top+285-previewCompact),2,g.marking?Theme::kInfoAccent:Theme::kTextDisabled);
+    dl->AddCircleFilled(ImVec2(right+278,top+285-previewCompact),2,g.live?Theme::kInfoAccent:Theme::kTextDisabled);
+    if(EditorButton(dl,20,right,top+310-previewCompact,137,25,"APPLY",controls,!g_applyColors)) ApplyToMatch();
+    if(EditorButton(dl,21,right+147,top+310-previewCompact,137,25,"RESTORE",controls)) RestoreMatch();
 }
 void DrawConfirmation(ImDrawList* dl) {
+    const bool active=Input::IsGameWindowActive() && ImGui::GetFrameCount()!=g.modalOpenedFrame;
     dl->AddRectFilled(ImVec2(0,0),ImVec2(640,480),IM_COL32(0,0,0,175));
+    dl->AddRectFilled(ImVec2(76,150),ImVec2(564,330),Theme::kStrip | IM_COL32_A_MASK);
     Layout::DrawInfoBox(dl,76,150,488,180);
     Text(dl,94,166,g.confirmTitle,Theme::kInfoAccent);
     FitText(dl,94,204,452,g.confirmText);
-    if(Input::NavLeft() || Input::NavRight()) g.confirmFocus=1-g.confirmFocus;
-    const bool keep=Input::MouseClickedIn(96,272,207,32);
-    const bool proceed=Input::MouseClickedIn(337,272,207,32);
+    if(active && (Input::NavLeft() || Input::NavRight())) g.confirmFocus=1-g.confirmFocus;
+    const bool keep=active && Input::MouseClickedIn(96,272,207,32);
+    const bool proceed=active && Input::MouseClickedIn(337,272,207,32);
     Layout::DrawButton(dl,96,272,207,32,"KEEP EDITING",g.confirmFocus==0);
     Layout::DrawButton(dl,337,272,207,32,g.confirmVerb.c_str(),g.confirmFocus==1);
+    if(!active) return;
     if(Input::Back() || keep || (Input::Activate() && g.confirmFocus==0)) {g.confirm={};Neutral();}
     else if(proceed || (Input::Activate() && g.confirmFocus==1)) {
         auto action=std::move(g.confirm);g.confirm={};Neutral();action();
@@ -772,6 +882,8 @@ void CommitText() {
         Model::Color parsed;
         if(!ok && !Model::ParseHex(g.text,parsed)) {Status("Use 3 or 6 hexadecimal digits.");return;}
         SyncColor();
+    } else if(g.textKind==State::TextKind::SaveAs) {
+        if(!SaveNew(g.text)) return;
     } else g.document.SetName(g.text);
     g.textKind=State::TextKind::None;Neutral();
 }
@@ -779,7 +891,7 @@ void DrawTextEditor(ImDrawList* dl) {
     const bool hex=g.textKind==State::TextKind::Hex;
     auto& io=ImGui::GetIO();
     const size_t maximum=hex?7:32;
-    const bool active=Input::IsGameWindowActive();
+    const bool active=Input::IsGameWindowActive() && ImGui::GetFrameCount()!=g.modalOpenedFrame;
     bool textKeys=io.InputQueueCharacters.Size>0 || ImGui::IsKeyDown(ImGuiKey_Space) || ImGui::IsKeyDown(ImGuiKey_Backspace);
     for(int key=ImGuiKey_0;key<=ImGuiKey_Z;++key) textKeys=textKeys || ImGui::IsKeyDown(ImGuiKey(key));
     for(int i=0;active && i<io.InputQueueCharacters.Size;++i) {
@@ -789,16 +901,17 @@ void DrawTextEditor(ImDrawList* dl) {
     io.InputQueueCharacters.resize(0);
     if(active && ImGui::IsKeyPressed(ImGuiKey_Backspace) && !g.text.empty()) g.text.pop_back();
     if(active && ImGui::IsKeyPressed(ImGuiKey_Enter,false)) {CommitText();return;}
-    if(!textKeys && Input::Back()) {g.textKind=State::TextKind::None;Neutral();return;}
+    if(active && !textKeys && Input::Back()) {g.textKind=State::TextKind::None;Neutral();return;}
     const std::string alphabet=hex?"0123456789ABCDEF":(g.lowerCase?"abcdefghijklmnopqrstuvwxyz0123456789 -_":"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_");
     const int chars=int(alphabet.size()),count=chars+4,columns=10;
-    if(!textKeys && Input::NavLeft()) g.textFocus=(g.textFocus+count-1)%count;
-    if(!textKeys && Input::NavRight()) g.textFocus=(g.textFocus+1)%count;
-    if(!textKeys && Input::NavUp()) g.textFocus=(g.textFocus+count-columns)%count;
-    if(!textKeys && Input::NavDown()) g.textFocus=(g.textFocus+columns)%count;
+    if(active && !textKeys && Input::NavLeft()) g.textFocus=(g.textFocus+count-1)%count;
+    if(active && !textKeys && Input::NavRight()) g.textFocus=(g.textFocus+1)%count;
+    if(active && !textKeys && Input::NavUp()) g.textFocus=(g.textFocus+count-columns)%count;
+    if(active && !textKeys && Input::NavDown()) g.textFocus=(g.textFocus+columns)%count;
     dl->AddRectFilled(ImVec2(0,0),ImVec2(640,480),IM_COL32(0,0,0,185));
+    dl->AddRectFilled(ImVec2(55,85),ImVec2(585,405),Theme::kStrip | IM_COL32_A_MASK);
     Layout::DrawInfoBox(dl,55,85,530,320);
-    Text(dl,73,100,hex?"HEX COLOR (RGB / RRGGBB)":"PALETTE NAME (32 CHARACTERS)",Theme::kInfoAccent);
+    Text(dl,73,100,hex?"HEX COLOR (RGB / RRGGBB)":g.textKind==State::TextKind::SaveAs?"SAVE AS - NEW NAME (32 CHARACTERS)":"PALETTE NAME (32 CHARACTERS)",Theme::kInfoAccent);
     std::string visible=g.text+"_";
     while(Layout::MeasureTextW(Layout::BodyFont(),Scale::Get().bodyPx,visible.c_str())>490 && visible.size()>1) {
         size_t next=1;while(next<visible.size() && (static_cast<unsigned char>(visible[next])&0xC0)==0x80) ++next;
@@ -812,9 +925,9 @@ void DrawTextEditor(ImDrawList* dl) {
         std::string label=i<chars?std::string(1,alphabet[i]):actions[i-chars];
         if(i<chars && alphabet[i]==' ') label="_";
         Layout::DrawButton(dl,x,y,45,28,label.c_str(),g.textFocus==i);
-        const bool clicked=Input::MouseClickedIn(x,y,45,28);
+        const bool clicked=active && Input::MouseClickedIn(x,y,45,28);
         if(clicked) g.textFocus=i;
-        if(!clicked && !(!textKeys && Input::Activate() && g.textFocus==i)) continue;
+        if(!clicked && !(active && !textKeys && Input::Activate() && g.textFocus==i)) continue;
         if(i<chars) {if(g.text.size()<maximum) g.text.push_back(alphabet[i]);}
         else if(i==chars) {if(!g.text.empty()) g.text.pop_back();}
         else if(i==chars+1) g.lowerCase=!g.lowerCase;
@@ -826,7 +939,9 @@ void DrawTextEditor(ImDrawList* dl) {
 }
 }
 
-void Configure(ContextProvider contextProvider,UseSlot useSlot) {g_contextProvider=contextProvider;g_useSlot=useSlot;}
+void Configure(ContextProvider contextProvider,UseSlot useSlot,ApplyColors applyColors,RestorePreview restorePreview) {
+    g_contextProvider=contextProvider;g_useSlot=useSlot;g_applyColors=applyColors;g_restorePreview=restorePreview;
+}
 void SetDevice(IDirect3DDevice9* device) {
     if(g_device==device) return;
     ReleaseTextures();g_device=device;
@@ -834,8 +949,9 @@ void SetDevice(IDirect3DDevice9* device) {
 void ReleaseTextures() {g_originalTexture.Release();g_workingTexture.Release();}
 void RequestSuspend() noexcept {g_suspendRequested.store(true,std::memory_order_release);}
 void Suspend() {
+    if(g.open && g_restorePreview) g_restorePreview(false);
     g.open=false;g_open.store(false,std::memory_order_release);
-    g.document.EndGesture();g.dragging=false;g.sliderRow=-1;g.panning=false;g.confirm={};g.textKind=State::TextKind::None;
+    g.document.EndGesture();g.dragging=false;g.sliderRow=-1;g.panning=false;g.panMode=false;g.closeRequested=false;g.focusAbove=false;g.confirm={};g.textKind=State::TextKind::None;
     Screens::ClosePopup();
     Neutral();
 }
@@ -852,7 +968,7 @@ void Open(int player) {
     if(g_suspendRequested.exchange(false,std::memory_order_acq_rel)) Suspend();
     g.open=true;g_open.store(true,std::memory_order_release);
     Screens::ClosePopup();Screens::ResetSubmenus();Screens::ResetTextEditor();
-    player=player==2?2:1;
+    player=player==0?g.player:player==2?2:1;
     Context current;std::string error;
     if(g.loaded && g_contextProvider && g_contextProvider(player,current,error) && player==g.player && current.resourceName==g.context.resourceName) {
         g.context=std::move(current);g.shared={};g.assetWarning.clear();
@@ -862,57 +978,87 @@ void Open(int player) {
     GuardDraft([player]{LoadPlayer(player);});
     Neutral();
 }
-void Close() {GuardDraft([]{g.document.Revert();Suspend();});}
-void Render() {
+void Close() {Suspend();}
+bool BlocksNavigation() {return IsOpen() && (Modal() || Screens::IsPopupActive());}
+bool ConsumeFocusAboveRequest() {const bool result=g.focusAbove;g.focusAbove=false;return result;}
+bool ConsumeCloseRequest() {const bool result=g.closeRequested;g.closeRequested=false;return result;}
+void Render(ImDrawList* dl,float toolbarY,bool inputEnabled) {
     if(g_suspendRequested.exchange(false,std::memory_order_acq_rel)) Suspend();
     if(!g.open || !ImGui::GetCurrentContext()) return;
-    auto* dl=ImGui::GetForegroundDrawList();
-    const std::string title="PALETTE EDITOR"+(g.loaded?" / "+g.context.displayName:"")+(g.loaded && g.document.Dirty()?" *":"");
-    Layout::DrawPanel(dl,title.c_str());
-    const float body=Scale::Get().bodyPx,tabY=Scale::Get().titleRowHeight+4;
-    const float contentY=tabY+Scale::Get().tabBarHeight+10;
-    static const char* tabs[]={"EDITOR","LIBRARY"};
-    Layout::DrawTabBar(dl,28,tabY,470,tabs,2,g.page,-1);
+    if(!dl) dl=ImGui::GetForegroundDrawList();
+    const auto& metrics=Scale::Get();
+    const float body=metrics.bodyPx,contentY=toolbarY+30;
     const bool popupWasOpen=Screens::IsPopupActive();
-    const bool input=Input::IsGameWindowActive() && !Modal() && !popupWasOpen;
+    const bool pointerInput=Input::IsGameWindowActive() && !Modal() && !popupWasOpen;
+    bool input=inputEnabled && pointerInput;
     g.previewWheel=false;
-    if(input) {
-        const int prior=g.page;
-        if(Input::TopTabPrev() || Input::SubTabPrev() || Input::TopTabNext() || Input::SubTabNext()) g.page=1-g.page;
-        const auto mouse=Input::GetMouse();
-        if(Input::MouseLeftEdge() && mouse.valid) {
-            const int tab=Layout::TabBarIndexAt(28,tabY,470,tabs,2,ImVec2(mouse.x,mouse.y));
-            if(tab>=0) g.page=tab;
+    dl->AddRectFilled(ImVec2(20,toolbarY-2),ImVec2(620,420),Theme::kStrip | IM_COL32_A_MASK);
+    dl->AddRectFilled(ImVec2(20,423),ImVec2(620,480),Theme::kStrip | IM_COL32_A_MASK);
+    if(input && g.editorFocus<0) {
+        if(Input::NavLeft()) g.editorFocus=g.editorFocus==-5?-1:g.editorFocus-1;
+        if(Input::NavRight()) g.editorFocus=g.editorFocus==-1?-5:g.editorFocus+1;
+        if(Input::NavUp()) {g.focusAbove=true;Neutral();input=false;}
+        else if(Input::NavDown()) {g.editorFocus=0;Neutral();input=false;}
+        else if(Input::Back()) {
+            if(g.view==State::View::Files) ShowView(State::View::Editor);
+            else {g.closeRequested=true;Neutral();}
+            input=false;
         }
-        if(prior!=g.page) {g.document.EndGesture();g.dragging=false;g.sliderRow=-1;g.panMode=false;Neutral();}
-        if(Input::SwitchPlayer() || Input::MouseClickedIn(516,tabY,96,Scale::Get().tabBarHeight)) SwitchPlayer();
     }
-    Layout::DrawButton(dl,516,tabY,96,Scale::Get().tabBarHeight,("P"+std::to_string(g.player)+"  <>").c_str(),false);
+    const auto button=[&](int index,const std::string& label,bool disabled=false) {
+        const float x=28+118.0f*index;
+        const bool mouse=pointerInput && Input::MouseClickedIn(x,toolbarY,112,24);
+        return EditorButton(dl,index-5,x,toolbarY,112,24,label,input || mouse,disabled);
+    };
+    if(button(0,"P"+std::to_string(g.player)+"  <>")) SwitchPlayer();
+    if(button(1,"SAVE",!g.loaded)) Save();
+    if(button(2,"SAVE AS",!g.loaded)) SaveAs();
+    if(button(3,"LOAD",!g.loaded)) {
+        ShowView(State::View::Editor);ScanLibrary();
+        if(NoEntries()) Status("No saved palettes. Use Save As to create one.");
+        else OpenEditorChoice(Screens::DropdownRow("Saved palette",&g.libraryIndex,g.entryOptions.data(),int(g.entryOptions.size()),LoadCustom));
+    }
+    if(button(4,g.view==State::View::Editor?"FILES":"EDITOR",!g.loaded))
+        ShowView(g.view==State::View::Editor?State::View::Files:State::View::Editor);
+    if(input && !Modal() && Input::SwitchPlayer()) SwitchPlayer();
+    input=input && !Modal() && !Screens::IsPopupActive() && g.viewOpenedFrame!=ImGui::GetFrameCount();
+    if(input && Input::MouseLeftEdge() && Input::GetMouse().y>=contentY && g.editorFocus<0) g.editorFocus=0;
+    const bool contentInput=input && g.editorFocus>=0;
     if(!g.loaded) {
         FitText(dl,28,contentY,584,g.status.empty()?"Choose a character in Practice to open its palettes.":g.status);
-        if(input && Input::Back()) Suspend();
+        if(contentInput && Input::Back()) {g.closeRequested=true;Neutral();}
+        else if(contentInput && Input::NavUp()) {g.editorFocus=-5;Neutral();}
     } else {
-        SyncColor();if(g.page==0) AdvancePreview();
-        Screens::ScreenLayout list{0,28,584,contentY,422,0,0,Input::IsGameWindowActive() && !Modal()};
-        if(g.page==0) {
-            DrawEditor(dl,contentY,input && !Modal());
-            if(popupWasOpen) Screens::HandleListInput(list,nullptr,0,g.focus[0],g.scroll[0]);
+        SyncColor();if(g.view==State::View::Editor) AdvancePreview();
+        const bool listInput=inputEnabled && Input::IsGameWindowActive() && !Modal() &&
+            (popupWasOpen || !Screens::IsPopupActive()) && g.viewOpenedFrame!=ImGui::GetFrameCount();
+        Screens::ScreenLayout list{0,metrics.panelPadX,Theme::kPanelW-2*metrics.panelPadX,contentY,420,0,0,listInput};
+        if(g.view==State::View::Editor) {
+            DrawEditor(dl,contentY,contentInput);
+            if(popupWasOpen && list.inputEnabled) Screens::HandleListInput(list,nullptr,0,g.focus[0],g.scroll[0]);
         } else {
             const std::string source=g.source?g.source->name:!g.nativeName.empty()?g.nativeName:"Stock "+std::to_string(g.document.State().stockSlot+1);
-            FitText(dl,28,contentY,584,"LOADED: "+source+(g.document.Dirty()?"  * UNSAVED":""),Theme::kTextHeader);
-            FitText(dl,28,contentY+body+7,584,"Native PAL: 40 RGB colors. Library files retain pins and ramp edits.",Theme::kTextInactive);
+            FitText(dl,28,contentY,584,g.trash?"RECOVER DELETED PALETTES":"FILES / "+source,Theme::kTextHeader);
+            FitText(dl,28,contentY+body+7,584,g.trash?"Load a deleted palette to save it under another name.":"Native PAL import, export and recoverable palette files.",Theme::kTextInactive);
             list.contentTopY=contentY+2*body+18;
-            auto rows=LibraryRows();
+            auto rows=FilesRows();
             Screens::ClampFocus(rows.data(),int(rows.size()),g.focus[1]);
-            if(list.inputEnabled && Screens::HandleListInput(list,rows.data(),int(rows.size()),g.focus[1],g.scroll[1])) Close();
+            if(list.inputEnabled && (g.editorFocus>=0 || popupWasOpen) &&
+                Screens::HandleListInput(list,rows.data(),int(rows.size()),g.focus[1],g.scroll[1])) ShowView(State::View::Editor);
             Screens::RenderList(dl,list,nullptr,rows.data(),int(rows.size()),g.focus[1],g.scroll[1]);
+            if(Screens::ConsumeFocusAboveRequest()) {g.editorFocus=-5;Neutral();}
         }
         if(Screens::IsPopupActive()) Screens::TickPopupIfOpen(dl,list);
-        FitText(dl,28,427,584,g.liveStatus,Theme::kTextInactive);
+        const std::string context="P"+std::to_string(g.player)+" / "+g.context.displayName+(g.document.Dirty()?" *  ":"  ")+g.liveStatus;
+        FitText(dl,28,425,584,context,Theme::kTextInactive);
         FitText(dl,28,443,584,g.status,Theme::kInfoAccent);
-        const char* help=g.page?Screens::CurrentHelpText():g.panMode?
+        const char* help=g.editorFocus<0?"LEFT / RIGHT: FILE CONTROLS   DOWN: EDITOR   UP: TABS":
+            g.view==State::View::Files?Screens::CurrentHelpText():g.panMode?
             "Pan: arrows / right-drag. Confirm or Back finishes panning.":
-            "ARROWS: SELECT / ADJUST   CONFIRM: CHANGE   BACK: CLOSE";
+            g.editorFocus==20?"APPLY keeps these colors in this Practice match. No file is written.":
+            g.editorFocus==21?"RESTORE returns to the last applied or original match colors.":
+            g.editorFocus==19?"PREVIEW is temporary; leaving this tab restores match colors.":
+            "ARROWS: SELECT / ADJUST   CONFIRM: CHANGE   BACK: GAME";
         FitText(dl,28,461,584,help?help:"",Theme::kTextInactive);
     }
     if(g.confirm) DrawConfirmation(dl);

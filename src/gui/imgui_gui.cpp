@@ -2431,8 +2431,6 @@ namespace ImGuiGui {
     }
 
     void RenderCharacterTab() {
-        if (ImGui::Button("Palette editor")) CustomMenu::OpenPaletteEditor();
-        ImGui::Spacing();
         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Character-Specific Settings");
         ImGui::Separator();
         
@@ -3845,6 +3843,7 @@ namespace ImGuiGui {
                     ImGuiTabItemFlags __autoFlags = (requestedTopTab == 1) ? ImGuiTabItemFlags_SetSelected : 0;
                     ImGuiTabItemFlags __settingsFlags = (requestedTopTab == 5) ? ImGuiTabItemFlags_SetSelected : 0;
                     ImGuiTabItemFlags __charFlags = (requestedTopTab == 2) ? ImGuiTabItemFlags_SetSelected : 0;
+                    ImGuiTabItemFlags __paletteFlags = (requestedTopTab == 3) ? ImGuiTabItemFlags_SetSelected : 0;
                     ImGuiTabItemFlags __helpFlags = ImGuiTabItemFlags_NoCloseWithMiddleMouseButton | ((requestedTopTab == 4) ? ImGuiTabItemFlags_SetSelected : 0);
 
                     if (ImGui::BeginTabItem("Main Menu", nullptr, __mainFlags)) {
@@ -3882,6 +3881,13 @@ namespace ImGuiGui {
                         ImGui::EndTabItem();
                     }
                     
+                    if (ImGui::BeginTabItem("Palette", nullptr, __paletteFlags)) {
+                        guiState.currentTab = 3;
+                        if (ImGui::IsItemActivated() || requestedTopTab == 3) CustomMenu::OpenPaletteEditor();
+                        if (ImGui::Button("Open palette editor")) CustomMenu::OpenPaletteEditor();
+                        ImGui::EndTabItem();
+                    }
+
                     if (ImGui::BeginTabItem("Settings", nullptr, __settingsFlags)) {
                         guiState.currentTab = 5;
                         if (s_requestInitialNavFocus) {
@@ -4450,9 +4456,8 @@ namespace ImGuiGui {
 }
     namespace ImGuiGui {
         static int TopTabLogicalToActual(int logicalIndex) {
-            // Logical order Main, Auto Actions, Characters, Settings, Help maps to actual tab IDs 0,1,2,5,4.
-            static const int map[5] = { 0, 1, 2, 5, 4 };
-            if (logicalIndex < 0) logicalIndex = 0; if (logicalIndex > 4) logicalIndex = 4;
+            static const int map[6] = { 0, 1, 2, 3, 5, 4 };
+            if (logicalIndex < 0) logicalIndex = 0; if (logicalIndex > 5) logicalIndex = 5;
             return map[logicalIndex];
         }
         static int TopTabActualToLogical(int actual) {
@@ -4460,21 +4465,22 @@ namespace ImGuiGui {
                 case 0: return 0; // Main
                 case 1: return 1; // Auto Actions
                 case 2: return 2; // Characters
-                case 5: return 3; // Settings
-                case 4: return 4; // Help
+                case 3: return 3; // Palette
+                case 5: return 4; // Settings
+                case 4: return 5; // Help
                 default: return 0;
             }
         }
 
         void RequestTopTabAbsolute(int logicalIndex) {
-            if (logicalIndex < 0) logicalIndex = 0; if (logicalIndex > 4) logicalIndex = 4;
+            if (logicalIndex < 0) logicalIndex = 0; if (logicalIndex > 5) logicalIndex = 5;
             guiState.requestedTab = TopTabLogicalToActual(logicalIndex);
         }
 
         void RequestTopTabCycle(int direction) {
             int curLogical = TopTabActualToLogical(guiState.currentTab);
             int next = (curLogical + (direction >= 0 ? 1 : -1));
-            if (next < 0) next = 4; else if (next > 4) next = 0;
+            if (next < 0) next = 5; else if (next > 5) next = 0;
             guiState.requestedTab = TopTabLogicalToActual(next);
         }
 

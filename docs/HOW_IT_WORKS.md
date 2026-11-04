@@ -839,9 +839,14 @@ seam, so they always pass through. All six hooks are refused as a unit if any en
 
 ## Palette editing
 
-Both menu styles open the same palette panel from Characters. Its Editor
-page keeps colour controls beside an animated preview; Library contains the
-file operations. Both use the custom menu's fonts, controls and input mapping.
+Both menu styles expose a top-level Palette tab. Colour controls sit beside
+an animated preview, with player selection, Save, Save As and Load inside
+the palette content. Files opens the secondary file operations using the
+custom menu's controls. The shared menu header is unchanged.
+Shade groups are selected initially, and opaque control backgrounds keep
+the underlying match from obscuring the editor.
+Back closes the editor without discarding the draft. It first returns from
+Files, cancels an open dialog or finishes panning when any of those is active.
 Individual colours accept RGB, HSV or three/six-digit hex;
 numbered shade groups preserve the stock palette's lightness relationships.
 Pins protect individual edits from group changes. Undo keeps sixteen edits,
@@ -855,8 +860,9 @@ palette rather than the editable fighter bank. Animation choices use PAT
 IDs, the embedded move classifications, and the move/entity notation catalogues,
 including sparse IDs and the native last-definition rule for duplicates.
 Nanase and Ikumi also expose their alternate PATs. Preview playback uses visual frame durations at 64 Hz and
-never executes a move or advances the match. Managed D3D9 textures belong
-to the overlay's device and are released through its reset/shutdown gate.
+never executes a move or advances the match. Dynamic default-pool D3D9 textures
+support both classic and Ex devices. They belong to the overlay's device and
+are released through its reset/shutdown gate.
 
 Move classifications are embedded as Windows resources from `assets/movedata`.
 The shared move-data cache reads them directly from the loaded DLL, including
@@ -867,10 +873,13 @@ display names.
 `palette_editor.cpp` owns the document and file library. The immutable stock
 baseline, edited colours, pins and group targets are stored together in
 JSON under `palettes` beside the configuration file. Invalid imports leave
-the current document intact. Save-new refuses collisions; replacing a
-library entry verifies that the scanned file has not changed. Writes use a
+the current document intact. **Save** updates the loaded library entry after
+confirmation, or asks for a name for a new draft. **Save As** creates a new
+named entry and refuses collisions; replacing an entry verifies that the
+scanned file has not changed. Writes use a
 flushed temporary file and atomic rename. Deleted entries move to a
-recoverable per-character trash folder. Native PAL export contains only the
+recoverable per-character trash folder, accessible from the Files menu's
+recovery view. Native PAL export contains only the
 forty BGR colour triples and their count; library metadata stays in JSON.
 
 `palette_live.cpp` owns temporary fighter recolouring. The panel requests a
@@ -884,9 +893,11 @@ additional game hook is involved.
 
 The live snapshot records the fighter, scene generation, character and slot.
 Restoration requires that identity and the last-written bytes to still match.
-Closing the editor restores its captured colours; **Export + apply** retains
-the approved colours for the current match and writes the chosen native slot
-for later use through the existing custom-palette selection. Savestate writes
+Leaving the editor restores uncommitted preview colours. **Apply** retains
+the edited colours for the current match without writing a file; later preview
+edits restore to those applied colours. **Restore** cancels temporary preview.
+**Export + apply** also writes the chosen native slot for later use through
+the existing custom-palette selection. Savestate writes
 suspend the panel, invalidate its old ownership, and refresh the complete
 restored palette after simulation state has been restored. An unavailable
 graphics device defers presentation refresh without failing the savestate.

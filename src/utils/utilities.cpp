@@ -2104,7 +2104,7 @@ void ShowHotkeyInfo() {
         if (!ImGuiImpl::IsVisible() && !OpenPracticeMenuDirect()) {
             return;
         }
-        ImGuiGui::RequestTopTabAbsolute(4);
+        ImGuiGui::RequestTopTabAbsolute(5);
         LogOut("[GUI] Opening ImGui to Help tab", true);
     } else {
         LogOut("[GUI] Help shortcut ignored because ImGui is disabled", true);

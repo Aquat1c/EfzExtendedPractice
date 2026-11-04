@@ -55,6 +55,7 @@ enum Pane {
     PANE_HELP_GUIDE,
     PANE_HELP_RESOURCES,
     PANE_HELP_ABOUT,
+    PANE_PALETTE_EDITOR,
     PANE_COUNT
 };
 
@@ -62,6 +63,7 @@ enum TopTab {
     TT_MAIN = 0,
     TT_AUTO,
     TT_CHARS,
+    TT_PALETTE,
     TT_SETTINGS,
     TT_HELP,
     TT_COUNT
@@ -85,6 +87,7 @@ static const SubTab kSubs_Main[]     = { {"MENU",     PANE_MENU},
 static const SubTab kSubs_Auto[]     = { {"TRIGGERS", PANE_TRIGGERS},
                                          {"MACROS",   PANE_MACROS} };
 static const SubTab kSubs_Chars[]    = { {"CHARS",    PANE_CHARS} };
+static const SubTab kSubs_Palette[]  = { {"PALETTE", PANE_PALETTE_EDITOR} };
 static const SubTab kSubs_Settings[] = { {"GENERAL",  PANE_SETTINGS_GENERAL},
                                          {"HOTKEYS",  PANE_SETTINGS_HOTKEYS},
                                          {"DEBUG",    PANE_SETTINGS_DEBUG} };
@@ -97,6 +100,7 @@ static const TopTabInfo kTopTabs[TT_COUNT] = {
     {"MAIN",     kSubs_Main,     4},
     {"AUTO",     kSubs_Auto,     2},
     {"CHARS",    kSubs_Chars,    1},
+    {"PALETTE",  kSubs_Palette,  1},
     {"SETTINGS", kSubs_Settings, 3},
     {"HELP",     kSubs_Help,     4},
 };
@@ -224,7 +228,7 @@ enum class FocusRegion {
 
 struct ShellState {
     int  activeTopTab = TT_MAIN;
-    int  subIdxPerTop[TT_COUNT] = { 0, 0, 0, 0, 0 };
+    int  subIdxPerTop[TT_COUNT] = {};
     int  focusPerPane[PANE_COUNT] = {};
     Screens::ScrollState scrollPerPane[PANE_COUNT];
     FocusRegion focusRegion = FocusRegion::Content;
@@ -709,7 +713,14 @@ void SetActiveTopTab(int newTop, const char* reason) {
         kTopTabs[newTop].label,
         reason ? reason : "n/a");
     Screens::ResetSubmenus();
+    if (oldTop == TT_PALETTE) {
+        PaletteEditorPanel::Suspend();
+        SyncPalettePreview();
+        if (!Config::GetSettings().useCustomMenu && !ImGuiImpl::IsExternalFallbackHost())
+            ImGuiGui::RequestTopTabAbsolute(newTop);
+    }
     g_shell.activeTopTab = newTop;
+    if (newTop == TT_PALETTE && !PaletteEditorPanel::IsOpen()) OpenPaletteEditor();
     if (g_shell.focusRegion == FocusRegion::SubTabs && !ActiveTopHasSubTabs()) {
         g_shell.focusRegion = FocusRegion::TopTabs;
     }
@@ -995,7 +1006,8 @@ void ApplyPendingMenuNavigation() {
 }
 
 bool HandleTabBarClick(const MainLayout& L) {
-    if (Screens::IsPopupActive() || Screens::IsKeybindActive() || Screens::IsTextEditorActive()) return false;
+    if (Screens::IsPopupActive() || Screens::IsKeybindActive() || Screens::IsTextEditorActive() ||
+        PaletteEditorPanel::BlocksNavigation()) return false;
     if (!Input::MouseLeftEdge()) return false;
     const auto mouse = Input::GetMouse();
     if (!mouse.valid) return false;
@@ -1055,7 +1067,7 @@ void MaybeMouseReturnFocusToContent(const MainLayout& L, bool tabClickConsumed) 
 
 bool HandleFocusedTabInput() {
     if (Screens::IsPopupActive() || Screens::IsKeybindActive() ||
-        Screens::IsTextEditorActive()) {
+        Screens::IsTextEditorActive() || PaletteEditorPanel::BlocksNavigation()) {
         return false;
     }
     if (g_shell.focusRegion == FocusRegion::Content) return false;
@@ -1740,7 +1752,8 @@ void Render() {
 
     static unsigned long s_renderFrame = 0;
     static unsigned long s_framesSinceOpen = 0xFFFFFFFFul;
-    if (MaybeRefreshOnOpen()) {
+    const bool opened = MaybeRefreshOnOpen();
+    if (opened) {
         s_framesSinceOpen = 0;
         LogMenuTrace("Render: visibility edge 0->1 detected at frame %lu", s_renderFrame + 1);
     } else if (!ImGuiImpl::IsVisible()) {
@@ -1761,11 +1774,10 @@ void Render() {
         return;
     }
 
-    if (PaletteEditorPanel::IsOpen()) {
-        PaletteEditorPanel::Render();
-        SyncPalettePreview();
-        return;
-    }
+    if (PaletteEditorPanel::IsOpen() && g_shell.activeTopTab != TT_PALETTE)
+        SetActiveTopTab(TT_PALETTE, "palette opened");
+    else if (opened && g_shell.activeTopTab == TT_PALETTE && !PaletteEditorPanel::IsOpen())
+        OpenPaletteEditor();
     ApplyPendingMenuNavigation();
 
     ++s_renderFrame;
@@ -1786,7 +1798,7 @@ void Render() {
     const int topTabNumber = Input::TopTabNumberEdge();
 
     if (!g_edit.active && !Screens::IsPopupActive() && !Screens::IsKeybindActive() &&
-        !Screens::IsTextEditorActive()) {
+        !Screens::IsTextEditorActive() && !PaletteEditorPanel::BlocksNavigation()) {
         if (Input::TopTabPrev()) {
             CancelEditMode();
             SetActiveTopTab((g_shell.activeTopTab + TT_COUNT - 1) % TT_COUNT, "top-tab prev");
@@ -1830,6 +1842,15 @@ void Render() {
     RenderTabBar(L);
 
     const int activePane = ActivePane();
+    if (g_shell.activeTopTab == TT_PALETTE) {
+        const bool contentInput = g_shell.focusRegion == FocusRegion::Content &&
+            !tabClickConsumed && !tabFocusConsumed;
+        PaletteEditorPanel::Render(dl, L.dataStartY, contentInput);
+        if (PaletteEditorPanel::ConsumeFocusAboveRequest()) MoveFocusAboveContent("palette top nav up");
+        if (PaletteEditorPanel::ConsumeCloseRequest()) BeginCloseAnimation();
+        SyncPalettePreview();
+        return;
+    }
     static bool s_crEditorWasActive = false;
     const bool crEditor = activePane == PANE_VALUES && Screens::IsValuesContinuousRecoveryActive();
     if (crEditor && !s_crEditorWasActive) {
@@ -2025,7 +2046,7 @@ void Render() {
         hint = SettingsTabActive()
             ? "L/R CHANGE TAB   DOWN ENTER SUBTABS   D SAVE   ESC CLOSE"
             : "L/R CHANGE TAB   DOWN ENTER SUBTABS   ESC CLOSE";
-        setDescription("Switch between the main menu groups: Main, Auto, Chars, Settings, and Help.");
+        setDescription("Switch between the main menu groups: Main, Auto, Chars, Palette, Settings, and Help.");
     } else if (g_shell.focusRegion == FocusRegion::SubTabs) {
         hint = SettingsTabActive()
             ? "L/R CHANGE SUBTAB   UP TABS   DOWN ENTER OPTIONS   D SAVE   ESC CLOSE"

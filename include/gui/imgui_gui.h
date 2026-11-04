@@ -34,7 +34,7 @@ namespace ImGuiGui {
     
     bool ShouldShowCharacterSettings();
     
-    // Logical top-tab order: Main, Auto Actions, Characters, Settings, Help.
+    // Logical top-tab order: Main, Auto Actions, Characters, Palette, Settings, Help.
     void RequestTopTabCycle(int direction);
     void RequestActiveSubTabCycle(int direction);
     void RequestTopTabAbsolute(int logicalIndex);

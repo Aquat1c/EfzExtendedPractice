@@ -132,6 +132,19 @@ int main() {
     const auto committed = engine.memory;
     Check(session.Restore(engine.owner, access) && engine.memory == committed, "closing after explicit use keeps the applied colors");
 
+    colors[0] = {90, 80, 70};
+    Check(session.Request(engine.owner, colors) && session.Pump(engine.owner, true, access),
+          "edits after Apply capture the committed palette as their baseline");
+    Check(session.Restore(engine.owner, access) && engine.memory == committed,
+          "Restore after a further edit returns to the last applied palette");
+    const int writesBeforeCancel = engine.writes;
+    Check(session.Request(engine.owner, colors), "an edit can wait for the next admitted callback");
+    session.RequestRestore();
+    session.Pump(engine.owner, true, access);
+    Check(session.GetStatus() == Status::Restored && !session.HasWork()
+              && engine.writes == writesBeforeCancel && engine.memory == committed,
+          "Restore cancels a pending edit before it writes or commits");
+
     for (int field = 0; field < 4; ++field) {
         session.Invalidate();
         Check(session.Request(engine.owner, colors) && session.Pump(engine.owner, true, access), "identity test captures live ownership");

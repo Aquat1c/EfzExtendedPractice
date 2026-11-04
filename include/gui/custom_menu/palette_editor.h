@@ -5,6 +5,7 @@
 #include <string>
 
 struct IDirect3DDevice9;
+struct ImDrawList;
 
 namespace CustomMenu::PaletteEditorPanel {
 struct Context {
@@ -18,12 +19,17 @@ struct Context {
 };
 using ContextProvider = bool (*)(int player, Context& context, std::string& error);
 using UseSlot = bool (*)(int player, const std::string& expectedResource, int slot, std::string& error);
+using ApplyColors = bool (*)(int player, const std::string& expectedResource, const ::PaletteEditor::Palette& colors, std::string& error);
+using RestorePreview = void (*)(bool cancelPendingApply);
 
 // Except IsOpen/RequestSuspend, calls belong to the render owner thread.
-void Configure(ContextProvider contextProvider, UseSlot useSlot);
-void Open(int player = 1);
+void Configure(ContextProvider contextProvider, UseSlot useSlot, ApplyColors applyColors = nullptr, RestorePreview restorePreview = nullptr);
+void Open(int player = 0);
 bool IsOpen();
-void Render();
+void Render(ImDrawList* drawList = nullptr, float contentTop = 66, bool inputEnabled = true);
+bool BlocksNavigation();
+bool ConsumeFocusAboveRequest();
+bool ConsumeCloseRequest();
 void Close();
 void Suspend();
 void RequestSuspend() noexcept;

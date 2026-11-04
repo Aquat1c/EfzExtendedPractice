@@ -1,4 +1,3 @@
-#include "gui/custom_menu/palette_editor_integration.h"
 #include "gui/lifecycle_state.h"
 #include "../include/gui/custom_menu/screens.h"
 #include "../include/gui/custom_menu/sound.h"
@@ -4701,7 +4700,7 @@ Row* BuildHelpMenuTipsRows(int& count) {
     s_rows[n++] = Header("TABS");
     s_rows[n++] = Info  (g_helpTopTabs);
     s_rows[n++] = Info  (g_helpSubTabs);
-    s_rows[n++] = Info  ("Number keys 1..5 jump directly to a top tab. From the first row in a list, press Up to move focus into subtab and tab selection.");
+    s_rows[n++] = Info  ("Number keys 1..6 jump directly to a top tab. From the first row in a list, press Up to move focus into subtab and tab selection.");
     s_rows[n++] = Spacer();
     s_rows[n++] = Header("MOUSE");
     s_rows[n++] = Info  ("Mouse hover only takes focus after the pointer moves. Keyboard and gamepad edges take priority over a resting cursor.");
@@ -5803,7 +5802,6 @@ Row* BuildCharsRows(int& count) {
     auto& d = ImGuiGui::guiState.localData;
 
     s_rows[n++] = Header("CHARACTER CONTROLS");
-    s_rows[n++] = Action("PALETTE EDITOR", [] { CustomMenu::OpenPaletteEditor(); });
     s_rows[n++] = Action("REFRESH CHARACTER DATA", RefreshCharacterDataAction);
 
     s_rows[n++] = Spacer();

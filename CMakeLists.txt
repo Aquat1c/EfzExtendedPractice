@@ -617,6 +617,9 @@ if(BUILD_TESTING)
     set_property(TARGET palette_editor_ui_tests PROPERTY
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME palette_editor_ui_tests COMMAND palette_editor_ui_tests)
+    add_test(NAME palette_editor_ui_d3d9ex_tests COMMAND palette_editor_ui_tests --d3d9ex
+        "${CMAKE_CURRENT_BINARY_DIR}/palette-ui-smoke-ex")
+    set_tests_properties(palette_editor_ui_d3d9ex_tests PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(collision_display_visibility_tests
         tests/collision_display_visibility_tests.cpp)

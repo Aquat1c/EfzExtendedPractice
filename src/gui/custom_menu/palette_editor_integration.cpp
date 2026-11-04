@@ -72,6 +72,25 @@ bool ReadContext(int player, PaletteEditorPanel::Context& context, std::string& 
     return true;
 }
 
+bool ApplyCurrentPalette(int player, const std::string& resource, const PaletteEditor::Palette& colors,
+                         std::string& error) {
+    std::lock_guard<std::recursive_mutex> control(g_p2ControlMutex);
+    if (!PaletteEditor::Live::Apply(player, resource, colors, error)) return false;
+    s_usePlayer = player;
+    s_forceUse = true;
+    s_useResource = resource;
+    s_useGeneration = GetRuntimeLifecycleGeneration();
+    return true;
+}
+
+void RestorePalettePreview(bool cancelPendingApply) {
+    std::lock_guard<std::recursive_mutex> control(g_p2ControlMutex);
+    if (s_usePlayer && !cancelPendingApply) return;
+    s_usePlayer = 0;
+    s_forceUse = false;
+    PaletteEditor::Live::Restore();
+}
+
 bool UseExportedPalette(int player, const std::string& resource, int slot, std::string& error) {
     std::lock_guard<std::recursive_mutex> control(g_p2ControlMutex);
     PaletteEditorPanel::Context context;
@@ -84,20 +103,15 @@ bool UseExportedPalette(int player, const std::string& resource, int slot, std::
     PaletteEditor::Palette colors;
     if (!PaletteEditor::ReadNativePalette(path, colors, error)) return false;
     CharacterHotswap::InvalidateCustomPaletteCache();
-    if (!PaletteEditor::Live::Apply(player, resource, colors, error)) return false;
-    s_usePlayer = player;
-    s_forceUse = true;
-    s_useResource = resource;
-    s_useGeneration = GetRuntimeLifecycleGeneration();
-    return true;
+    return ApplyCurrentPalette(player, resource, colors, error);
 }
 }
 
 void OpenPaletteEditor(int player) {
     std::lock_guard<std::recursive_mutex> control(g_p2ControlMutex);
-    s_usePlayer = 0;
-    PaletteEditor::Live::BeginPreview();
-    PaletteEditorPanel::Configure(ReadContext, UseExportedPalette);
+    if (s_usePlayer && s_useGeneration != GetRuntimeLifecycleGeneration()) s_usePlayer = 0;
+    if (!s_usePlayer) PaletteEditor::Live::BeginPreview();
+    PaletteEditorPanel::Configure(ReadContext, UseExportedPalette, ApplyCurrentPalette, RestorePalettePreview);
     PaletteEditorPanel::Open(player);
 }
 
