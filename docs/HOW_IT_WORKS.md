@@ -1127,6 +1127,9 @@ Capability bits say which field groups are live on this tick, and a bit can be z
 
 ### OST playback and native audio
 
+The [audio implementation guide](AUDIO_VOLUME_CONTROLS.md) covers native loading,
+character sound banks, volume hooks, fades and Revival compatibility.
+
 The training mod leaves BGM/SE volume and all fade timing to EFZ and Revival.
 It installs no volume, fade, sound-buffer or Revival audio callback hooks,
 and it has no audio settings worker or shared volume configuration bridge.
