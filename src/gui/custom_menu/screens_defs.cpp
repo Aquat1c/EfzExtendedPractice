@@ -42,8 +42,6 @@
 #include "../include/utils/pause_integration.h"
 #include "../include/utils/switch_players.h"
 #include "../include/utils/bgm_control.h"
-#include "../include/utils/audio_control.h"
-#include "../include/utils/extended_config_bridge.h"
 #include "../include/input/framestep.h"
 #include "../include/input/input_motion.h"
 #include "../include/core/memory.h"
@@ -186,7 +184,6 @@ void ReloadSettingsFromDisk() {
             Config::SetSetting("General", "enableDebugFileLog", "0");
             LogOut("[CONFIG/UI][SETUP-FAILURE] Could not enable efz_training_debug.log", false);
         }
-        AudioControl::ApplyConfiguredVolumesNow();
         LogOut("[CONFIG/UI] Settings reloaded from ini", false);
         DirectDrawHook::AddMessage("Settings reloaded from disk", "SYSTEM", RGB(180, 255, 220), 1200, 0, 120);
     } else {
@@ -1771,13 +1768,6 @@ void OnPracticeHint() {
 void OnCheckForUpdates() {
     PersistBool("General", "checkForUpdates", MutableSettings().checkForUpdates);
 }
-void OnBgmVolume() {
-    ExtendedConfigBridge::PublishAudioLaneSetting(true, MutableSettings().bgmVolumePercent);
-}
-void OnSeVolume() {
-    ExtendedConfigBridge::PublishAudioLaneSetting(false, MutableSettings().seVolumePercent);
-}
-
 const char* FormatPercentRowValue(const Row& row) {
     static char buf[32];
     const int value = row.intPtr ? *row.intPtr : 0;
@@ -1786,13 +1776,6 @@ const char* FormatPercentRowValue(const Row& row) {
 }
 
 const char* ValInterfaceSettings() { return MutableSettings().useCustomMenu ? "CUSTOM" : "IMGUI"; }
-const char* ValAudioSettings() {
-    static char buf[32];
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "BGM %d / SE %d",
-                MutableSettings().bgmVolumePercent,
-                MutableSettings().seVolumePercent);
-    return buf;
-}
 const char* ValRecoverySettings()  { return MutableSettings().crRequireBothNeutral ? "NEUTRAL" : "ANY"; }
 const char* ValPracticeSettings()  { return "PRACTICE"; }
 
@@ -1915,23 +1898,6 @@ Row* BuildSettingsRecoveryRows(int& count) {
     return s_rows;
 }
 
-Row* BuildSettingsAudioRows(int& count) {
-    static Row s_rows[8];
-    int n = 0;
-    auto& s = MutableSettings();
-
-    s_rows[n++] = Header("AUDIO");
-    Row bgmVolume = IntSlider("BGM VOLUME", &s.bgmVolumePercent, 0, 100, 1, 10, OnBgmVolume);
-    bgmVolume.valueFormatter = FormatPercentRowValue;
-    s_rows[n++] = bgmVolume;
-    Row seVolume = IntSlider("SE VOLUME", &s.seVolumePercent, 0, 100, 1, 10, OnSeVolume);
-    seVolume.valueFormatter = FormatPercentRowValue;
-    s_rows[n++] = seVolume;
-    s_rows[n++] = Info("100% leaves the game's own volume untouched.");
-    count = n;
-    return s_rows;
-}
-
 Row* BuildSettingsPracticeRows(int& count) {
     static Row s_rows[8];
     int n = 0;
@@ -1950,7 +1916,6 @@ Row* BuildSettingsGeneralRows(int& count) {
     s_rows[n++] = Header("GENERAL MENUS");
     s_rows[n++] = Submenu("INTERFACE", "INTERFACE", BuildSettingsInterfaceRows, ValInterfaceSettings);
     s_rows[n++] = Submenu("DISPLAY",   "DISPLAY OVERLAYS", BuildDisplayOverlayRows, ValDisplaySettings);
-    s_rows[n++] = Submenu("AUDIO",     "AUDIO",     BuildSettingsAudioRows,     ValAudioSettings);
     s_rows[n++] = Submenu("RECOVERY",  "RECOVERY",  BuildSettingsRecoveryRows,  ValRecoverySettings);
     s_rows[n++] = Submenu("PRACTICE",  "PRACTICE",  BuildSettingsPracticeRows,  ValPracticeSettings);
     s_rows[n++] = Spacer();
@@ -6789,7 +6754,6 @@ const char* ValExitToTitle() {
 }
 
 Row* BuildHotswapOptionsRows(int& count);
-Row* BuildSettingsAudioRows(int& count);
 Row* BuildHelpMacroRows(int& count);
 
 void QueueMenuNav(int pane, int focusRow, RowListBuilder sub, const char* subTitle, int subFocus) {
@@ -6817,10 +6781,6 @@ void NavToAbout() {
 void NavToMacroHelp() {
     QueueMenuNav(Screens::MenuPane::HelpGuide, 0, BuildHelpMacroRows, "MACROS", 1);
 }
-void NavToSound() {
-    QueueMenuNav(Screens::MenuPane::SettingsGeneral, 0, BuildSettingsAudioRows, "AUDIO", 1);
-}
-
 Row* BuildMenuRows(int& count) {
     static Row s_rows[16];
     int n = 0;
@@ -6831,7 +6791,6 @@ Row* BuildMenuRows(int& count) {
     s_rows[n++] = WithHelp(Action("HELP", NavToHelp),
                            "Opens help pages with setup notes and troubleshooting.");
     s_rows[n++] = Action("ABOUT", NavToAbout, ValUpdateBadge);
-    s_rows[n++] = Action("SOUND SETTINGS", NavToSound, ValAudioSettings);
 
     s_rows[n++] = Spacer();
     s_rows[n++] = Header("EXIT");

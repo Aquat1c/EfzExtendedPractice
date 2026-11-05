@@ -4,6 +4,7 @@
 #include "runtime/practice_runtime.h"
 #include "runtime/practice_worker.h"
 #include "utils/utilities.h"
+#include "utils/bgm_control.h"
 #include <windows.h>
 
 namespace {
@@ -58,8 +59,8 @@ bool CleanupParticipantsReady() {
     const auto timing=Practice::ReadMonitorStatus();
     if(timing.timerHeld || timing.priorityHeld || timing.waitFaulted)return false;
     for(const auto& record:hooks->Snapshot()) {
-        // Audio hooks are process-lifetime, not Practice-owned.
-        if(record.spec.owner=="[AUDIO][HOOK]")continue;
+        // Track observation outlives individual Practice sessions.
+        if(record.spec.owner==kBgmTrackObserverOwner)continue;
         const bool retainedFrontend=record.spec.owner=="PracticeFrontend" ||
             (retiring.reason==EFZ_TM_RELOAD_WORLD && record.spec.owner=="[HOTSWAP][DIRECT]");
         if(!retainedFrontend || record.callbacks->outstanding.load())return false;

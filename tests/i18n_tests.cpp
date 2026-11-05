@@ -77,10 +77,7 @@ void TestTableIntegrity() {
         CHECK(ja && *ja);
         CHECK(std::strcmp(en, ja) != 0);
         if (i > 0) CHECK(std::strcmp(kJaTable[i - 1].en, en) < 0);
-        // Plain text containing '%' that is never used as a format.
-        if (std::strcmp(en, "100% leaves the game's own volume untouched.") != 0) {
-            CHECK(ConversionSequence(en) == ConversionSequence(ja));
-        }
+        CHECK(ConversionSequence(en) == ConversionSequence(ja));
         if (std::strchr(en, '%') == nullptr) CHECK(std::strchr(ja, '%') == nullptr);
         // Replacement character and half-width katakana (U+FF61-U+FF9F) are not allowed.
         const unsigned char* p = reinterpret_cast<const unsigned char*>(ja);

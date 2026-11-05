@@ -18,9 +18,6 @@
 #include "../include/game/collision_display.h"
 #include "../include/core/constants.h"
 #include "../include/utils/utilities.h"
-#include "../include/utils/bgm_control.h"
-#include "../include/utils/audio_control.h"
-#include "../include/utils/audio_runtime_state.h"
 #include "../include/core/memory.h"
 #include "../include/core/logger.h"
 #include "../include/gui/overlay.h"
@@ -1114,8 +1111,6 @@ void FrameDataMonitor() {
     bool lastFmSyncFeatures = g_featuresEnabled.load(std::memory_order_relaxed);
     bool lastFmSyncNetplay = g_onlineModeActive.load(std::memory_order_relaxed);
     int matchLogAnchorInternal = -1;
-    bool audioHookOwnershipTerminal = false;
-    DWORD lastAudioHookResolveTick = GetTickCount() - 1000u;
 
     while (!g_isShuttingDown && !Practice::MonitorStopRequested()) {
         const bool scopedMonitor=Practice::MonitorLifecycleOwned();
@@ -1158,28 +1153,6 @@ void FrameDataMonitor() {
 
         ConsumeRuntimeLifecycleResyncRequests();
 
-        const DWORD audioResolveNow = GetTickCount();
-        if (!scopedMonitor && !audioHookOwnershipTerminal
-            && static_cast<DWORD>(audioResolveNow - lastAudioHookResolveTick) >= 1000u) {
-            lastAudioHookResolveTick = audioResolveNow;
-            const uintptr_t efzBase = GetEFZBase();
-            if (efzBase) {
-                const AudioControl::HookInstallResult audioResult = AudioControl::InstallHooks(
-                    efzBase,
-                    AudioControl::HookInstallPhase::HostResolved);
-                if (audioResult != AudioControl::HookInstallResult::Deferred) {
-                    audioHookOwnershipTerminal = true;
-                    LogOut(std::string("[AUDIO] persistent host resolution result=")
-                           + AudioControl::HookInstallResultName(audioResult), true);
-                    if (audioResult == AudioControl::HookInstallResult::Ready
-                        && AudioControl::EnableVolumeApplicationIfSoundReady(
-                            0, "persistent host resolution")) {
-                        AudioControl::ApplyConfiguredVolumesNow();
-                    }
-                }
-            }
-        }
-
         const uint32_t lifecycleGeneration = GetRuntimeLifecycleGeneration();
         if (lifecycleGeneration != lastLifecycleGeneration) {
             cachedMoveIDAddr1 = 0;
@@ -1214,8 +1187,6 @@ void FrameDataMonitor() {
             expectedNext = clock::now() + targetFrameTime;
             continue;
         }
-
-        if (AudioControl::ConsumeAudioApplyRequest()) AudioControl::ApplyConfiguredVolumesNow();
 
     GamePhase currentPhase = scopedMonitor?GamePhase::Match:GetCurrentGamePhase();
     GameMode currentMode = scopedMonitor?GameMode::Practice:GetCurrentGameMode();
@@ -1664,14 +1635,6 @@ void FrameDataMonitor() {
         if (g_featuresEnabled.load() && currentMode != s_previousGameMode) {
             if (!isValidGameMode && IsValidGameMode(s_previousGameMode)) {
                 LogOut("[FRAME MONITOR] Detected exit from valid game mode, cleaning up resources", true);
-                
-                uintptr_t base = GetEFZBase();
-                if (base) {
-                    uintptr_t gameStatePtr = 0;
-                    if (SafeReadMemory(base + EFZ_BASE_OFFSET_GAME_STATE, &gameStatePtr, sizeof(uintptr_t)) && gameStatePtr) {
-                        SetBGMSuppressed(false);
-                    }
-                }
                 
                 StopBufferFreezing();
                 

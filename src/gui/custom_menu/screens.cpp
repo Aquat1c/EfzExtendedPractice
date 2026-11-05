@@ -270,7 +270,6 @@ const char* DefaultActionHelpText(const char* label) {
     if (TextEquals(label, "CHANGE CHARACTERS / STAGE")) return "Opens match hotswap for characters, palettes, stage, and music.";
     if (TextEquals(label, "CHARACTER SETTINGS")) return "Opens controls specific to the current characters.";
     if (TextEquals(label, "ABOUT")) return "Opens version and project information.";
-    if (TextEquals(label, "SOUND SETTINGS")) return "Opens audio and music settings.";
     if (TextEquals(label, "EXIT TO CHARACTER SELECT")) return "Leaves Practice and returns to character select.";
     if (TextEquals(label, "EXIT TO TITLE SCREEN")) return "Leaves Practice and returns to the title screen.";
     if (TextEquals(label, "APPLY SELECTIONS")) return "Applies the selected hotswap changes to the current match.";
@@ -373,8 +372,6 @@ const char* DefaultNumberHelpText(const char* label) {
     label = CleanLabel(label);
     if (LabelEquals(label, "UI SCALE")) return "Changes the size of the custom menu.";
     if (LabelEquals(label, "BOX FILL ALPHA")) return "Adjusts how opaque filled collision boxes appear.";
-    if (LabelEquals(label, "BGM VOLUME")) return "Adjusts background music volume as a percentage.";
-    if (LabelEquals(label, "SE VOLUME")) return "Adjusts sound-effect volume as a percentage.";
     if (LabelEquals(label, "CR NEUTRAL DELAY (MS)")) return "Sets how long both players must stay neutral before continuous recovery applies.";
     if (LabelEquals(label, "AUTO-BLOCK TIMEOUT (MS)")) return "Sets how long neutral must last before First Hit and After Hit reset. 0 resets as soon as neutral starts.";
     if (LabelEquals(label, "CURRENT SLOT")) return "Chooses the active macro slot.";
@@ -453,7 +450,6 @@ const char* DefaultSubmenuHelpText(const char* label) {
     label = CleanLabel(label);
     if (LabelEquals(label, "INTERFACE")) return "Opens menu appearance and behavior settings.";
     if (LabelEquals(label, "DISPLAY")) return "Opens hitbox, hurtbox, and overlay display settings.";
-    if (LabelEquals(label, "AUDIO")) return "Opens volume and music settings.";
     if (LabelEquals(label, "RECOVERY")) return "Opens continuous recovery and RF freeze settings.";
     if (LabelEquals(label, "PRACTICE")) return "Opens practice-mode behavior settings.";
     if (LabelEquals(label, "CONTINUOUS RECOVERY")) return "Opens per-player continuous recovery controls.";

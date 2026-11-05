@@ -1,5 +1,3 @@
-#include "../include/utils/audio_runtime_state.h"
-#include "../include/utils/audio_file_control.h"
 #include "../include/utils/config.h"
 #include "../include/utils/i18n.h"
 #include "../include/core/logger.h"
@@ -52,7 +50,6 @@ namespace Config {
     static std::atomic<bool> s_efzBoundVks[256];
 
     void SetIniValue(const std::string& section, const std::string& key, const std::string& value);
-#include "../include/utils/audio_config_publication.inl"
 
     bool GetValueBool(const std::string& section, const std::string& key, bool defaultValue);
     int GetValueInt(const std::string& section, const std::string& key, int defaultValue);
@@ -290,9 +287,6 @@ namespace Config {
             file << "showFrameBar = 0\n\n";
             file << "frameBarMoveData = 1\n\n";
             file << "menuAnimations = 1\n\n";
-            file << "; Audio volume levels as percent of the current default mix (0-100)\n";
-            file << "bgmVolumePercent = 100\n";
-            file << "seVolumePercent = 100\n\n";
             file << "; FrameBar cell cadence: 0 = subframes, 1 = visual frames\n";
             file << "frameBarTimingMode = 0\n";
             file << "; FrameBar detail: 0 = full, 1 = compact, 2 = bars only\n";
@@ -542,12 +536,6 @@ namespace Config {
             settings.frameBarMoveData = GetValueBool("General", "frameBarMoveData", true);
             settings.menuAnimations = GetValueBool("General", "menuAnimations", true);
             settings.checkForUpdates = GetValueBool("General", "checkForUpdates", true);
-            settings.bgmVolumePercent = GetValueInt("General", "bgmVolumePercent", 100);
-            if (settings.bgmVolumePercent < 0) settings.bgmVolumePercent = 0;
-            if (settings.bgmVolumePercent > 100) settings.bgmVolumePercent = 100;
-            settings.seVolumePercent = GetValueInt("General", "seVolumePercent", 100);
-            if (settings.seVolumePercent < 0) settings.seVolumePercent = 0;
-            if (settings.seVolumePercent > 100) settings.seVolumePercent = 100;
             settings.frameBarTimingMode = GetValueInt("General", "frameBarTimingMode", 0);
             if (settings.frameBarTimingMode < 0 || settings.frameBarTimingMode > 1) {
                 settings.frameBarTimingMode = 0;
@@ -799,7 +787,6 @@ namespace Config {
             settings.savestateBackendMode   = GetValueInt("General", "savestateBackendMode", 2);
             if (settings.savestateBackendMode < 0 || settings.savestateBackendMode > 2) settings.savestateBackendMode = 2;
             settings.savestateLoadCustomPalettes = GetValueBool("General", "savestateLoadCustomPalettes", true);
-            PublishLoadedAudioSettings();
             LogOut("[CONFIG] Settings loaded successfully", true);
             LogOut("[CONFIG] UseImGui: " + std::to_string(settings.useImGui), true);
             LogOut("[CONFIG] DetailedLogging: " + std::to_string(settings.detailedLogging), true);
@@ -893,9 +880,6 @@ namespace Config {
             file << "showFrameBar = " << (settings.showFrameBar ? "1" : "0") << "\n\n";
             file << "frameBarMoveData = " << (settings.frameBarMoveData ? "1" : "0") << "\n\n";
             file << "menuAnimations = " << (settings.menuAnimations ? "1" : "0") << "\n\n";
-            file << "; Audio volume levels as percent of the current default mix (0-100)\n";
-            file << "bgmVolumePercent = " << settings.bgmVolumePercent << "\n";
-            file << "seVolumePercent = " << settings.seVolumePercent << "\n\n";
             file << "; FrameBar cell cadence: 0 = subframes, 1 = visual frames\n";
             file << "frameBarTimingMode = " << settings.frameBarTimingMode << "\n";
             file << "; FrameBar detail: 0 = full, 1 = compact, 2 = bars only\n";
@@ -1069,7 +1053,6 @@ namespace Config {
     }
     
     void SetSetting(const std::string& section, const std::string& key, const std::string& value) {
-        if (TrySetAudioSetting(section, key, value)) return;
         std::string sec = ToLower(section);
         std::string k = ToLower(key);
         SetIniValue(sec, k, value);

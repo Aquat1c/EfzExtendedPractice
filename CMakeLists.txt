@@ -300,27 +300,16 @@ if(BUILD_TESTING)
     target_include_directories(pointer_mapping_tests PRIVATE include ${IMGUI_DIR})
     add_test(NAME pointer_mapping_tests COMMAND pointer_mapping_tests)
 
-    add_executable(audio_output_lifetime_tests
-        tests/practice_isolation/audio_output_lifetime_tests.cpp)
-    target_include_directories(audio_output_lifetime_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    set_property(TARGET audio_output_lifetime_tests PROPERTY
-        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
-    add_test(NAME audio_output_lifetime_tests COMMAND audio_output_lifetime_tests)
-
     if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         add_executable(savestate_load_tests tests/practice_isolation/savestate_load_tests.cpp)
         target_include_directories(savestate_load_tests PRIVATE include)
         set_property(TARGET savestate_load_tests PROPERTY MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
         add_test(NAME savestate_load_tests COMMAND savestate_load_tests)
 
-        add_executable(audio_configured_apply_tests
-            tests/practice_isolation/audio_configured_apply_tests.cpp src/utils/audio_runtime_state.cpp)
-        target_include_directories(audio_configured_apply_tests PRIVATE include)
-        set_property(TARGET audio_configured_apply_tests PROPERTY MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
-        add_test(NAME audio_configured_apply_tests COMMAND audio_configured_apply_tests)
         add_executable(native_hook_passthrough_tests
             tests/practice_isolation/native_hook_passthrough_tests.cpp
+            src/utils/bgm_control.cpp
+            src/gui/custom_menu/sound.cpp
             src/utils/minhook_utils.cpp
             src/runtime/hook_registry.cpp
             src/runtime/patch_ledger.cpp)
@@ -335,13 +324,6 @@ if(BUILD_TESTING)
         endif()
         add_test(NAME native_hook_passthrough_tests COMMAND native_hook_passthrough_tests)
 
-        add_executable(audio_native_adapter_abi_tests
-            tests/practice_isolation/audio_native_adapter_abi_tests.cpp)
-        target_include_directories(audio_native_adapter_abi_tests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/include)
-        set_property(TARGET audio_native_adapter_abi_tests PROPERTY
-            MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
-        add_test(NAME audio_native_adapter_abi_tests COMMAND audio_native_adapter_abi_tests)
     endif()
 
     add_executable(patch_ledger_win32_tests
@@ -353,44 +335,6 @@ if(BUILD_TESTING)
     set_property(TARGET patch_ledger_win32_tests PROPERTY
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME patch_ledger_win32_tests COMMAND patch_ledger_win32_tests)
-
-    add_executable(audio_runtime_state_tests
-        tests/practice_isolation/audio_runtime_state_tests.cpp
-        src/utils/audio_runtime_state.cpp)
-    target_include_directories(audio_runtime_state_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    set_property(TARGET audio_runtime_state_tests PROPERTY
-        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
-    add_test(NAME audio_runtime_state_tests COMMAND audio_runtime_state_tests)
-
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../ExtendedConfig/src/feature/audio_control.cpp"
-       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../ExtendedConfig/src/feature/shared_config_store.cpp")
-        add_executable(audio_file_transactions_tests
-            tests/practice_isolation/audio_file_transactions_tests.cpp
-            tests/practice_isolation/audio_transaction_training.cpp
-            tests/practice_isolation/audio_transaction_companion.cpp
-            src/utils/audio_runtime_state.cpp)
-        target_include_directories(audio_file_transactions_tests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/../ExtendedConfig/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/minhook/include)
-        target_compile_definitions(audio_file_transactions_tests PRIVATE
-            NOMINMAX WIN32_LEAN_AND_MEAN)
-        if(MSVC)
-            target_compile_options(audio_file_transactions_tests PRIVATE /Gy)
-        endif()
-        set_property(TARGET audio_file_transactions_tests PROPERTY
-            MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
-        if(TARGET minhook)
-            target_link_libraries(audio_file_transactions_tests PRIVATE minhook)
-        else()
-            target_link_libraries(audio_file_transactions_tests PRIVATE
-                "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/minhook/lib/libMinHook.x86.lib")
-        endif()
-        add_test(NAME audio_file_transactions_tests COMMAND audio_file_transactions_tests)
-    else()
-        message(STATUS "Audio companion transaction tests unavailable: ExtendedConfig source checkout is required")
-    endif()
 
     add_executable(patch_ledger_tests
         tests/practice_isolation/patch_ledger_tests.cpp
@@ -525,14 +469,6 @@ if(BUILD_TESTING)
     set_property(TARGET practice_frontend_result_tests PROPERTY
         MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
     add_test(NAME practice_frontend_result_tests COMMAND practice_frontend_result_tests)
-
-    add_executable(audio_volume_contract
-        tests/practice_isolation/audio_volume_contract.cpp)
-    target_include_directories(audio_volume_contract PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    set_property(TARGET audio_volume_contract PROPERTY
-        MSVC_RUNTIME_LIBRARY "${EFZ_MSVC_RUNTIME_LIBRARY}")
-    add_test(NAME audio_volume_contract COMMAND audio_volume_contract)
 
     add_executable(revival_profile_tests
         tests/revival_profile_tests.cpp)

@@ -226,6 +226,10 @@ External libraries (bundled under `3rdparty/`):
   - Eternal Fighter Zero -Revival- 1.02e/1.02g/1.02f/1.02h!!!/1.02i!!!/1.02j
 - On other versions, the mod should work fine as well but some features might not work properly.
 
+Volume and music fades are handled by EFZ and Revival. The training mod keeps
+the Practice OST selector and menu sounds, but no longer overrides BGM or SE
+volume. Old volume settings in its configuration file are ignored.
+
 ---
 
 **Special Thanks**
@@ -258,5 +262,5 @@ External libraries (bundled under `3rdparty/`):
   layouts, safety rules, cross-references). Explanations of how a subsystem
   works belong in `docs/HOW_IT_WORKS.md`, not in the code.
 - The exported headers other mods build against (`include/compat/`,
-  `include/utils/efz_netplay_state.h`, `audio_owner_abi.h`) are cross-mod ABI:
+  `include/utils/efz_netplay_state.h`) are cross-mod ABI:
   change them deliberately and bump the ABI version, not casually.

@@ -1,13 +1,9 @@
 #pragma once
-#include <windows.h>
-#include <string>
+#include <cstdint>
 
-// DirectSound scale: 0 = max, -10000 = mute
-bool SetBGMVolume(uintptr_t gameStatePtr, int volume);
+inline constexpr char kBgmTrackObserverOwner[] = "[BGM][TRACK]";
 
-bool MuteBGM(uintptr_t gameStatePtr);
-
-bool UnmuteBGM(uintptr_t gameStatePtr);
+bool InstallBgmTrackObserver();
 
 bool StopBGM(uintptr_t gameStatePtr);
 
@@ -16,18 +12,8 @@ bool PlayBGM(uintptr_t gameStatePtr, unsigned short trackNumber);
 // Active DirectSound buffer index, NOT the logical track number accepted by PlayBGM.
 int GetBGMBufferIndex(uintptr_t gameStatePtr);
 
-int GetBGMSlot(uintptr_t gameStatePtr);
-
 int GetBGMVolume(uintptr_t gameStatePtr);
-
-void LogBGMState(uintptr_t gameStatePtr);
-
-void SetBGMSuppressed(bool suppress); // no-op
-bool IsBGMSuppressed();               // always false
 
 // Last logical track observed at playBackgroundMusic; 0xFFFF = none observed.
 unsigned short GetLastBgmTrack();
 void SetLastBgmTrack(unsigned short track);
-bool SetBGMVolumeViaGame(uintptr_t gameSystemPtr, int volumeLevel);
-void StartBGMSuppressionPoller(); // no-op
-void StopBGMSuppressionPoller();  // no-op

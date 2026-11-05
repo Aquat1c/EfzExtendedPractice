@@ -7,8 +7,6 @@
 
 namespace Config {
     using ConfigPolicy::ResolveHotkey;
-    // Caller serializes the accepted audio control transaction; never republishes.
-    void SetAudioSettingsMirror(int bgm, int se);
     struct Settings {
         bool useImGui;
         bool useCustomMenu;
@@ -23,8 +21,6 @@ namespace Config {
     bool showFrameBar;
     bool frameBarMoveData;
     bool menuAnimations;
-    int  bgmVolumePercent;       // 0..100, 100 = current/default BGM level
-    int  seVolumePercent;        // 0..100, 100 = current/default SE level
     int  frameBarTimingMode;     // 0 = subframes, 1 = visual frames
     int  frameBarDetailMode;     // 0 = full, 1 = compact, 2 = bars only
     bool collisionDisplayEnabled = true;

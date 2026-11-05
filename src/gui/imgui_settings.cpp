@@ -9,8 +9,6 @@
 #include "../include/game/game_state.h"
 #include "../include/utils/debug_log.h"
 #include "../include/input/framestep.h"
-#include "../include/utils/audio_control.h"
-#include "../include/utils/extended_config_bridge.h"
 #include "../include/utils/network.h"
 #include <windows.h>
 #include <Xinput.h>
@@ -336,34 +334,6 @@ namespace ImGuiSettings {
                 }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("When using First Hit/After First Hit modes, require this much continuous neutral before re-arming/disabling. 0 = toggle on the first neutral frame.");
-                }
-
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::SeparatorText("Audio");
-
-                int bgmVolumePercent = AudioControl::GetConfiguredBgmVolumePercent();
-                ImGui::Text("BGM Volume:");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(200);
-                if (ImGui::SliderInt("##BgmVolumePercent", &bgmVolumePercent, 0, 100, "%d%%")) {
-                    ExtendedConfigBridge::PublishAudioLaneSetting(true, bgmVolumePercent);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Reset##BgmVolumePercent")) {
-                    ExtendedConfigBridge::PublishAudioLaneSetting(true, 100);
-                }
-
-                int seVolumePercent = AudioControl::GetConfiguredSeVolumePercent();
-                ImGui::Text("SE Volume:");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(200);
-                if (ImGui::SliderInt("##SeVolumePercent", &seVolumePercent, 0, 100, "%d%%")) {
-                    ExtendedConfigBridge::PublishAudioLaneSetting(false, seVolumePercent);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Reset##SeVolumePercent")) {
-                    ExtendedConfigBridge::PublishAudioLaneSetting(false, 100);
                 }
 
                 ImGui::Spacing();

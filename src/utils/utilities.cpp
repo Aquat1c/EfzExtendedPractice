@@ -2,7 +2,6 @@
 #include "gui/custom_menu/palette_editor.h"
 #include "game/practice_snapshots.h"
 #include "../include/utils/utilities.h"
-#include "../include/utils/audio_control.h"
 
 #include "../include/core/constants.h"
 #include "../include/runtime/practice_runtime.h"
@@ -68,7 +67,6 @@
 #include "../include/input/input_core.h"
 #include "../include/input/auto_action_motion_transaction.h"
 
-#include "../include/utils/bgm_control.h"
 #include "../include/utils/network.h"
 #include "../include/utils/minhook_utils.h"
 #include "../include/utils/pause_integration.h"
@@ -1099,7 +1097,7 @@ void AppendPlayerReadbackSummary(
 
 void EnterNetplaySuspend() {
     Practice::RetireLegacyPractice(g_p2ControlMutex, g_onlineModeActive, [] {
-        AudioControl::SuspendForNetplay();
+        MinHookUtils::SetNativePassthrough(true);
         MinHookUtils::SetPracticeBattleActive(false);
         GameThread::Clear();
         {
@@ -1168,9 +1166,6 @@ void EnterNetplaySuspend() {
     if (IsKeyMonitoringRunning()) {
         StopKeyMonitoring();
     }
-
-    StopBGMSuppressionPoller();
-    SetBGMSuppressed(false);
 
     ImGuiImpl::ForceHide();
 
@@ -1260,7 +1255,7 @@ void ExitNetplaySuspend() {
     DirectDrawHook::SetD3D9Active(true);
     ImGuiImpl::AttachWndProc();
     MinHookUtils::SetPracticeBattleActive(false);
-    AudioControl::ResumeFromNetplay();
+    MinHookUtils::SetNativePassthrough(false);
 
     LogOut(
         std::string("[NETPLAY] Resume cleanup complete: transient overrides cleared, caches invalidated")

@@ -27,7 +27,7 @@ session is live, every feature that could desync the match is switched off.
 | `src/gui/custom_menu/` | The hand-drawn Revival-look menu (fonts, layout, screens) |
 | `src/input/` | Input hooks, input buffer control, motion patterns, frame stepping |
 | `src/runtime/` | Hook registry, patch ledger, practice-mode isolation runtime |
-| `src/utils/` | Config, audio, netplay detection, update check, controllers, misc |
+| `src/utils/` | Config, OST playback, netplay detection, update check, controllers, misc |
 | `include/` | Headers mirroring the above; `include/compat/` holds cross-mod ABI |
 | `tests/` | Plain C++ policy tests run under CTest |
 | `assets/` | Shipped data: fonts, control icons, movedata tables, mission packs |
@@ -46,19 +46,16 @@ timer-freeze patch baselines.
 
 Some of the staging exists for a reason you can't see from the code:
 
-- Audio hooks go in over two phases. The four EFZ audio hooks Revival does not
-  own go in early. `playSoundBuffer` and `setSoundVolume` stay untouched until
-  the host and version are resolved, because Revival could otherwise copy
-  MinHook's relative JMP into its own trampoline without relocating it.
+- The OST track observer installs early so the selector can identify music
+  started by the game. It records logical track numbers without changing
+  volume, playback arguments or fade state.
 - Startup force-restores the Final Memory bypass and the timer freezes, because
   a previous injected session may have left them patched. The runtime decides
   afterwards whether to reapply them for local Practice.
 - The XP build links the static CRT, where `DisableThreadLibraryCalls` is
   disallowed, so thread notifications simply stay on.
 - Explicit `FreeLibrary` is not a real shutdown API. One would have to quiesce
-  and join every worker first. Revival callback hooks also hold a module
-  reference, which is kept until process exit because `FreeLibrary` must never
-  run under the loader lock.
+  and join every worker first.
 
 `src/utils/crash_handler.cpp` writes the report from a helper thread with its
 own stack, so a stack overflow can still be reported. The minidump comes first,
@@ -75,8 +72,8 @@ Hooks and patches that depend on the game's memory layout check the build
 first, and not every hook is gated the same way.
 `GetQualifiedMemorialImage` (`src/runtime/native_game_profile.cpp`) admits
 the executable only on an exact PE-identity and hash match, and guards the
-byte patches, framestep and the collision layout. The audio hooks compare
-entry bytes instead. `src/utils/network.cpp` detects which EfzRevival version (1.02e through
+byte patches, framestep and the collision layout. The OST track observer checks
+the playback entry bytes instead. `src/utils/network.cpp` detects which EfzRevival version (1.02e through
 1.02j, including the two 1.02j build profiles in
 `include/utils/efz_revival_profile.h`) is hosting the process. Per-version
 addresses come from the accessors in `src/game/efzrevival_addrs.cpp`.
@@ -124,16 +121,15 @@ consumption. The mod preserves the native call path instead of changing the
 game's collision table or RNG.
 
 Startup holds all entries on their native route until the initial netplay
-state is resolved. Gameplay and audio callbacks open only for an offline
-Practice battle. Replay, VS and Arcade retain the native route. The title
-and loading callbacks are explicit offline exceptions so Practice can be
-entered again. Leaving a Practice battle closes gameplay routing before
+state is resolved. Gameplay callbacks open only for an offline Practice
+battle. Replay, VS and Arcade retain the native gameplay route. The title,
+loading and OST track observer callbacks are explicit offline exceptions.
+Leaving a Practice battle closes gameplay routing before
 the next screen runs.
 
 Netplay suspension overrides every entry, including those frontend
-exceptions; reopening an individual feature cannot override it. Native
-audio volume processing runs without training's per-play gain changes
-while suspended.
+exceptions; reopening an individual feature cannot override it. Volume and
+fade processing always belong to the game and Revival.
 
 ### Why the hook registry is so cautious
 
@@ -197,7 +193,7 @@ look already bypassed, since those could belong to something else.
 
 ## Practice-only hook bodies
 
-Hooks stay installed for the whole process, because they can't always be removed safely, but their bodies only run in a live Practice battle. `PracticeBattleHooksOpen` (`include/game/game_state.h`) is the shared check: it is open only while the polling flag is set and no netplay state is published, and it shuts at battle exit and before netplay starts. Everywhere else a hook calls the original and does nothing else. The battle update hook checks `IsPracticeContext` directly so it can still run the exit cleanup on the battle's last frame. Audio hooks also run in offline menus, so saved volume settings apply to startup music and later scene fades. Pending volume settings retry when the sound system becomes ready. During netplay, the native entry gates forward audio calls directly to the original functions.
+Hooks stay installed for the whole process, because they can't always be removed safely, but their gameplay bodies only run in a live Practice battle. `PracticeBattleHooksOpen` (`include/game/game_state.h`) is the shared check: it is open only while the polling flag is set and no netplay state is published, and it shuts at battle exit and before netplay starts. Everywhere else a hook calls the original and does nothing else. The battle update hook checks `IsPracticeContext` directly so it can still run the exit cleanup on the battle's last frame. The OST track observer also runs in offline menus; during netplay its entry gate forwards directly to native playback.
 
 The battle update and battle hotkey hooks treat their byte signatures as advisory.
 Under EfzRevival those prologues are already JMP-patched, so live bytes never match
@@ -1083,9 +1079,6 @@ it never competes over `title_ob.dat`. Starting Practice copies the vanilla case
   with the netplay mod loaded keeps the last known state, and when only Revival's
   own online state is available it takes three offline polls in a row
   (`RefreshNetplayRuntimeState` in `src/utils/network.cpp`).
-- The audio control plane (`include/utils/audio_owner_abi.h`) arbitrates
-  volume ownership between this mod and ExtendedConfig through
-  `EfzAudioOwnerApiV1`; the bridge is `src/utils/extended_config_bridge.cpp`.
 - The overlay reset contract
   ([displaymanager-reset-contract.md](displaymanager-reset-contract.md))
   lets EfzDisplayManager reset the Direct3D device without destroying this
@@ -1096,10 +1089,10 @@ it never competes over `title_ob.dat`. Starting Practice copies the vanilla case
 ### Netplay suspend
 
 Suspend drains the current Practice writers before publishing the online
-boundary. The monitor, battle callback and direct volume apply share the
-P2 control mutex; retirement also drains the input buffer worker and
-restores owned state. The monitor releases that mutex while parked or
-sleeping. On exit, resets run while online mode is still published, then
+boundary. The monitor and battle callback share the P2 control mutex; retirement also drains the input buffer worker and
+restores owned state. Suspend selects native hook routing directly before
+cleanup; it has no audio subsystem dependency. The monitor releases that
+mutex while parked or sleeping. On exit, resets run while online mode is still published, then
 only offline frontend callbacks reopen. A new Practice battle opens its
 own gameplay callbacks.
 
@@ -1132,20 +1125,33 @@ compatibility, but their raw pointer views do not synchronize with writes.
 
 Capability bits say which field groups are live on this tick, and a bit can be zero simply because its data source is unavailable, so check the bit rather than trusting the struct version. Async hosting keeps `sessionMode` at hosting while the local player uses EFZ normally, so use `inNetplayMatch` to detect a live match. Scores are absolute, not adjusted for the local player's side.
 
-### Audio and EfzRevival
+### OST playback and native audio
 
-- The Revival launcher creates `efz.exe` suspended and injects later, so the mod takes the vanilla audio entries only after a stable, positively standalone launch signature. If that's never proven within a time limit, the entries stay unowned, because claiming an unproven entry could break a late Revival.
-- Revival rebuilds its EFZ wrappers from its frame hook, so a torn read is normal and only defers the decision. Snapshots use `ReadProcessMemory`, which fails cleanly if a wrapper is freed mid-read.
-- Revival's audio callback receives its saved machine state rather than conventional arguments. The hook cross-checks the saved ESP, so an ordinary cdecl caller can't make it write through an unrelated stack slot, and it also writes the live stack argument, because the copied EFZ prologue reads it after the callback returns.
-- The game system's BGM field holds the allocated buffer index, so the play hook records the logical track separately.
-- BGM gain uses the latest native volume sample for the current buffer. Track loads reset this observation, and an initial DirectSound volume read captures an already-playing track. The game drives fade targets and timing while configured gain scales the output. Raw samples continue to update while muted, so unmuting follows the current fade.
-- Netplay suspension closes gain admission under the audio boundary and restores the last known raw BGM level. A Revival volume write can finish after its callback returns, so the same buffer waits for a fresh offline native sample before accepting another settings apply. A new track also resets this wait. Mute can apply immediately because its output level is independent of the raw sample.
+The training mod leaves BGM/SE volume and all fade timing to EFZ and Revival.
+It installs no volume, fade, sound-buffer or Revival audio callback hooks,
+and it has no audio settings worker or shared volume configuration bridge.
+The old `bgmVolumePercent` and `seVolumePercent` keys are ignored on load and
+omitted when settings are saved.
 
-### Sharing audio settings with ExtendedConfig
+Practice's OST selector calls native `playBackgroundMusic` or
+`stopBackgroundMusic` through `src/utils/bgm_control.cpp`. GameSystem+0xF26
+is an allocated buffer index, not a track number, so one read-only observer
+records the logical track requested by the game. It uses the owned hook
+registry and runs only offline. Netplay routes directly to the original
+entry without entering the observer. Track selection does not write native
+volume or fade fields.
 
-Every callback and transform runs under one recursive boundary that no IO may run under. It uses `__finally`, because native exceptions must release it and a C++ lock alone isn't enough under `/EHsc`. Registration freezes initial ownership, so a late `Initialize` can't activate a transform behind a lane already acknowledged as raw.
+Menu cursor and confirmation sounds call native `playSoundEffect` after
+checking the sound manager, buffer index and required COM methods. These
+checks do not change volume or take ownership of audio playback.
 
-This mod and ExtendedConfig name the same process-scoped Win32 mutex, because their separate C++ locks couldn't otherwise stop overlapping file operations. Lock order is module control mutex, then this mutex, then the audio boundary; it's never taken from a native callback, and recursive acquisition by the same control thread lets helpers compose. Writers mark `writeInProgress`, write the payload and revision, then clear the marker, and readers keep the last accepted tuple until a complete pair is written. Moving a slider requests an event-driven apply, including outside Practice. Direct applies acquire the P2 control mutex before the audio boundary and recheck netplay ownership; online changes remain pending until offline ownership returns.
+The removed gain layer could reset native fade state or change volume at
+an online ownership boundary. A replacement audio mod must preserve native
+fade samples and playback lifetimes without adding work to a simulation
+stack that affects EFZ's uninitialized throw-contact data. Wave and streamed
+music have different creation and reuse paths; a volume setter hook alone
+does not cover first playback. Gain arithmetic tests alone cannot establish
+netplay compatibility.
 
 ## Controllers and hotkeys
 
@@ -1216,6 +1222,5 @@ than the toolchain:
   not in the repository, so it fails on a fresh clone.
 - `mission_entity_manifest_check` needs tooling that is not in the repository
   and is only registered when that tooling is present.
-- The audio transaction tests need a sibling ExtendedConfig checkout and are
-  only built when it is present.
-- `audio_native_adapter_abi_tests` is built only for 32-bit MSVC.
+- `native_hook_passthrough_tests` needs 32-bit MSVC. It also exercises native
+  OST playback, offline track observation, online bypass and menu sound readiness.

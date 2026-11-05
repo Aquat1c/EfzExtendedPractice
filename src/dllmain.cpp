@@ -29,8 +29,6 @@
 #include "../include/input/input_hook.h" 
 #include "../3rdparty/minhook/include/MinHook.h" 
 #include "../include/utils/bgm_control.h"
-#include "../include/utils/audio_control.h"
-#include "../include/utils/extended_config_bridge.h"
 #include "../include/game/game_state.h"
 #include "../include/core/globals.h"  
 #include "../include/game/collision_hook.h"
@@ -183,23 +181,12 @@ void DelayedInitialization(HMODULE hModule) {
         LogOut("[PRACTICE_MENU] Title patch and trial/tutorial modes are disabled for this build", true);
 #endif
 
-        bool audioHooksReady = false;
-        AudioControl::HookInstallResult audioHookResult = AudioControl::HookInstallResult::Failed;
-        // Only the four audio hooks Revival does not own. playSoundBuffer/setSoundVolume stay untouched until
-        // host resolution below, or Revival can copy MinHook's relative JMP without relocating it.
         try {
-            const uintptr_t efzBase = GetEFZBase();
-            audioHookResult = AudioControl::InstallHooks(
-                efzBase,
-                AudioControl::HookInstallPhase::CommonOnly);
-            LogOut(std::string("[AUDIO] Early common-hook phase result=")
-                   + AudioControl::HookInstallResultName(audioHookResult)
-                   + "; contested audio ownership remains deferred", true);
+            InstallBgmTrackObserver();
         } catch (...) {
-            LogOut("[AUDIO] Exception while installing early non-conflicting audio hooks.", true);
+            LogOut("[BGM] Could not install the track observer", true);
         }
 
-        // Do not touch Revival's two contested EFZ entrypoints anywhere in this window.
         {
             constexpr DWORD kStartupStabilizeDelayMs = 1500;
             Sleep(kStartupStabilizeDelayMs);
@@ -277,52 +264,6 @@ void DelayedInitialization(HMODULE hModule) {
         } catch (...) {
             LogOut("[SYSTEM] Exception while installing HUD-disable hook.", true);
         }
-        try {
-            if (!audioHooksReady) {
-                const uintptr_t efzBase = GetEFZBase();
-                audioHookResult = AudioControl::InstallHooks(
-                    efzBase,
-                    AudioControl::HookInstallPhase::HostResolved);
-                for (int attempt = 0;
-                     audioHookResult == AudioControl::HookInstallResult::Deferred && attempt < 20;
-                     ++attempt) {
-                    Sleep(50);
-                    audioHookResult = AudioControl::InstallHooks(
-                        efzBase,
-                        AudioControl::HookInstallPhase::HostResolved);
-                }
-                audioHooksReady = audioHookResult == AudioControl::HookInstallResult::Ready;
-                if (audioHooksReady) {
-                    LogOut("[AUDIO] Runtime audio ownership resolved and hooks are ready", true);
-                } else {
-                    LogOut(std::string("[AUDIO] Runtime audio ownership result=")
-                           + AudioControl::HookInstallResultName(audioHookResult), true);
-                }
-            }
-
-            if (audioHookResult != AudioControl::HookInstallResult::Suppressed) {
-                bool audioReady = AudioControl::EnableVolumeApplicationIfSoundReady(0, "delayed initialization");
-                for (int attempt = 0; !audioReady && attempt < 20; ++attempt) {
-                    Sleep(50);
-                    audioReady = AudioControl::EnableVolumeApplicationIfSoundReady(0, "delayed initialization poll");
-                }
-
-                if (audioReady) {
-                    AudioControl::ApplyConfiguredVolumesNow();
-                } else {
-                    LogOut("[AUDIO] Runtime volume sync remains deferred; EFZ sound buffers are not ready yet"
-                           " (contested hook ownership may still be pending).", true);
-                }
-            }
-        } catch (...) {
-            LogOut("[AUDIO] Exception while applying runtime audio settings.", true);
-        }
-        try {
-            StartBGMSuppressionPoller();
-        } catch (...) {
-            LogOut("[SYSTEM] Exception while starting BGM suppression poller.", true);
-        }
-
         // A previous injected session may have left the FM bypass patched; restore before reapplying locally.
         ForceRestoreFinalMemoryHPBypass("startup baseline");
         TimerFreeze::ForceRestore("startup baseline");
@@ -373,8 +314,6 @@ void InitializeConfig() {
     LogOut("[SYSTEM] Initializing configuration system...", true);
     if (Config::Initialize()) {
         LogOut("[SYSTEM] Configuration loaded successfully", true);
-        ExtendedConfigBridge::InitializeAudioControl();
-        ExtendedConfigBridge::ImportAudioSettingsIfAvailable(true);
 
         detailedLogging = Config::GetSettings().detailedLogging;
     DebugLog::g_EnableDebugLog = Config::GetSettings().enableDebugFileLog;
@@ -382,7 +321,6 @@ void InitializeConfig() {
     }
     else {
         LogOut("[SYSTEM] Failed to initialize configuration, using defaults", true);
-        ExtendedConfigBridge::InitializeAudioControl();
     }
 }
 
@@ -402,7 +340,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
         break;
     case DLL_PROCESS_DETACH:
-        ExtendedConfigBridge::SignalAudioControlStop();
         // Signal only: at process exit DllMain holds the loader lock. Waiting for workers, flushing
         // streams, or unloading MinHook/DirectX here can deadlock.
         g_isShuttingDown = true;
@@ -432,7 +369,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             RemoveCollisionHook();
             HudDisable::Remove();
             CollisionDisplay::Shutdown();
-            StopBGMSuppressionPoller();
             SavestateHook::Uninstall();
             if (g_guiActive.load()) {
                 g_guiActive = false;
@@ -441,10 +377,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         Sleep(100);
-
-        // Revival callback hooks hold a module reference. Remove the hooks, but never FreeLibrary under the
-        // loader lock; keep the reference until process exit.
-        AudioControl::ShutdownHooks(false);
 
         MH_Uninitialize();
         break;
