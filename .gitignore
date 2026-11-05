@@ -101,3 +101,8 @@ Thumbs.db
 # Local notes stay local: every markdown file except the README
 *.md
 !README.md
+
+# Public audio implementation guide
+!docs/
+docs/*
+!docs/AUDIO_VOLUME_CONTROLS.md
