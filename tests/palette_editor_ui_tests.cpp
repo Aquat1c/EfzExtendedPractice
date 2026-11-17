@@ -92,20 +92,9 @@ void SetFonts(float scale) {
     bodyFont=Fonts::Body();headerFont=Fonts::Header();
     Require(bodyFont && headerFont && Fonts::IsLoaded(),"Production menu fonts unavailable");
 }
-std::filesystem::path dialogSelection,dialogInitial;
-std::string dialogError;
-bool dialogAccepted=false,dialogSave=false;
-int dialogCalls=0;
-bool TestFileDialog(bool save,const std::filesystem::path& initial,std::filesystem::path& selected,std::string& error) {
-    ++dialogCalls;dialogSave=save;dialogInitial=initial;error=dialogError;
-    if(dialogAccepted) selected=dialogSelection;
-    return dialogAccepted;
-}
 
 void Seed() {
     Panel::g=Panel::State{};
-    Panel::g_fileDialog=TestFileDialog;
-    dialogSelection.clear();dialogInitial.clear();dialogError.clear();dialogAccepted=false;dialogCalls=0;
     Panel::g.open=Panel::g.loaded=true;
     Panel::g_open.store(true);
     Panel::g.context.resourceName="ayu";
@@ -174,7 +163,7 @@ void SaveBitmap(IDirect3DDevice9* device,const std::filesystem::path& path) {
 std::filesystem::path contextFixture;
 int contextStage=0;
 bool TestContext(int,Panel::Context& context,std::string&) {
-    context.gameDirectory=contextFixture;context.libraryDirectory=contextFixture/"library";
+    context.gameDirectory=contextFixture;
     context.resourceName="ayu";context.displayName="Ayu";context.hasCustom=true;context.stageId=contextStage;
     return true;
 }
@@ -212,67 +201,55 @@ void CheckSources(const std::filesystem::path& directory) {
     auto* queuedTexture=Panel::g_workingTexture.value;
     Panel::LoadPlayer(1);
     Require(Panel::g.loaded && Panel::g.document.Colors()==native,"Opening active custom PAL substituted stock colors");
-    Require(!Panel::g.document.Dirty() && !Panel::g.source,"Active game PAL became dirty or writable source");
+    Require(!Panel::g.document.Dirty() && Panel::g.nativeName=="ayu1.pal","Active game PAL became dirty or lost its name");
     Require(Panel::g.document.Original()!=native,"Native import overwrote immutable stock baseline");
     Require(Panel::g_workingTexture.value==queuedTexture,"Source switch released a queued texture");
-    Panel::g_fileDialog=TestFileDialog;dialogAccepted=true;dialogSelection=contextFixture/"UI Test.json";
-    BeginFrame();Panel::Save();
-    Require(dialogSave && Panel::g.source && Panel::g.source->path==dialogSelection && !Panel::g.document.Dirty(),
-        "Saving a new palette did not use Save As");
-    const int saveDialogs=dialogCalls;
-    Panel::g.document.SetColor(1,{99,88,77});Panel::Save();
-    Require(dialogCalls==saveDialogs && !Panel::g.document.Dirty(),"Plain Save reopened the dialog or failed");
-    ::PaletteEditor::PaletteFile saved;std::string error;
-    Require(::PaletteEditor::ReadPaletteFile(dialogSelection,saved,error) && saved.palette.colors[1]==::PaletteEditor::Color{99,88,77},
-        "Plain Save did not persist colors");
-    const auto originalEntry=*Panel::g.source;
-    Panel::g.document.SetColor(2,{55,66,77});const auto copyColors=Panel::g.document.Colors();
-    dialogSelection=contextFixture/"UI Test copy.json";Panel::SaveAs();
-    Require(Panel::g.source->path==dialogSelection && Panel::g.document.State().name=="UI Test copy" && !Panel::g.document.Dirty(),
-        "Save As did not create a separate named palette");
-    const auto copyEntry=*Panel::g.source;
-    Require(::PaletteEditor::ReadPaletteFile(copyEntry.path,saved,error) && saved.palette.colors==copyColors,"Save As colors did not round-trip");
-    Require(::PaletteEditor::ReadPaletteFile(originalEntry.path,saved,error) && saved.palette.colors[2]!=copyColors[2],
-        "Save As overwrote the original palette");
-    Panel::g.document.SetColor(3,{22,44,88});const auto draft=Panel::g.document.Colors();
-    dialogAccepted=false;Panel::SaveAs();
-    Require(Panel::g.source->path==copyEntry.path && Panel::g.source->fingerprint==copyEntry.fingerprint &&
-        Panel::g.document.State().name=="UI Test copy" && Panel::g.document.Colors()==draft && Panel::g.document.Dirty(),
-        "Cancelled Save As changed source, name, or draft");
-    dialogError="Dialog fixture failed";Panel::SaveAs();dialogError.clear();
-    Require(Panel::g.source->path==copyEntry.path && Panel::g.document.Colors()==draft && Panel::g.document.Dirty(),
-        "Failed Save As changed source or draft");
-    dialogAccepted=true;dialogSelection=contextFixture/"unsupported.txt";Panel::SaveAs();
-    Require(Panel::g.source->path==copyEntry.path && Panel::g.document.State().name=="UI Test copy" &&
-        Panel::g.document.Colors()==draft && Panel::g.document.Dirty(),"Rejected Save As changed source, name, or draft");
-    auto external=Panel::g.document.State();external.colors[1]={9,8,7};
-    Require(::PaletteEditor::SavePaletteFile(copyEntry.path,external,copyEntry.fingerprint,saved,error),"External edit fixture failed");
-    Panel::Save();
-    Require(Panel::g.document.Dirty() && Panel::g.document.Colors()==draft && Panel::g.source->fingerprint==copyEntry.fingerprint,
-        "Stale Save lost its draft or adopted changed disk contents");
-    Require(::PaletteEditor::ReadPaletteFile(copyEntry.path,saved,error) && saved.palette.colors==external.colors,
-        "Stale Save overwrote external changes");
-    dialogAccepted=true;dialogSelection=contextFixture/"Malformed.json";WriteBytes(dialogSelection,{'{','}'});Panel::SaveAs();
-    Require(Panel::g.source->path==dialogSelection && !Panel::g.document.Dirty() &&
-        ::PaletteEditor::ReadPaletteFile(dialogSelection,saved,error) && saved.palette.colors==draft,
-        "Approved Save As could not replace malformed destination");
-    dialogSelection=contextFixture/"Native copy.pal";Panel::SaveAs();
-    Require(Panel::g.source->native && !Panel::g.document.Dirty(),"Native Save As failed");
-    Panel::g.document.SetColor(4,{25,50,75});const auto nativeDraft=Panel::g.document.Colors();Panel::Save();
-    Require(::PaletteEditor::ReadPaletteFile(dialogSelection,saved,error) && saved.native && saved.palette.colors==nativeDraft,
-        "Plain Save did not preserve native format");
-    const auto nativeSource=*Panel::g.source;
-    WriteBytes(contextFixture/"invalid.json",{'{','}'});
-    Require(!Panel::LoadPalettePath(contextFixture/"invalid.json") && Panel::g.source->path==nativeSource.path &&
-        Panel::g.document.Colors()==nativeDraft,"Failed load changed source or colors");
-    dialogAccepted=false;Panel::LoadFile();
-    Require(!dialogSave && Panel::g.source->path==nativeSource.path && Panel::g.document.Colors()==nativeDraft,
-        "Cancelled Load changed source or colors");
-    const auto baseline=Panel::g.document.Original();
-    Require(Panel::LoadPalettePath(originalEntry.path) && Panel::g.source->path==originalEntry.path &&
-        Panel::g.document.Colors()[1]==::PaletteEditor::Color{99,88,77},"External JSON load failed");
-    Require(Panel::LoadPalettePath(nativeSource.path) && Panel::g.source->native && Panel::g.document.Colors()==nativeDraft &&
-        Panel::g.document.Original()==baseline && !Panel::g.document.Dirty(),"Native load lost stock baseline or source");
+    BeginFrame();
+    ::PaletteEditor::Palette disk{};std::string error;
+    Panel::g.document.SetColor(1,{99,88,77});const auto draft=Panel::g.document.Colors();
+    Panel::SaveSlot();
+    Require(bool(Panel::g.confirm) && Panel::g.document.Dirty() &&
+        ::PaletteEditor::ReadNativePalette(contextFixture/"ayu"/"ayu1.pal",disk,error) && disk==native,
+        "Save replaced an existing custom palette without asking");
+    Panel::g.confirm={};Panel::SaveSlot();
+    {auto action=std::move(Panel::g.confirm);Panel::g.confirm={};action();}
+    Require(!Panel::g.document.Dirty() && Panel::g.document.Colors()==draft &&
+        ::PaletteEditor::ReadNativePalette(contextFixture/"ayu"/"ayu1.pal",disk,error) && disk==draft,
+        "Confirmed Save did not write the custom palette");
+    Panel::OpenColor(2,false);
+    Require(!Panel::g.confirm && Panel::g.stock==2 && Panel::g.nativeName.empty() &&
+        Panel::g.document.Colors()==Panel::g.assets.stockPalettes[2],"Color without a custom file did not open its stock palette");
+    Panel::g.document.SetColor(4,{25,50,75});const auto third=Panel::g.document.Colors();
+    Panel::SaveSlot();
+    Require(!Panel::g.confirm && !Panel::g.document.Dirty() && Panel::g.nativeName=="ayu3.pal" &&
+        ::PaletteEditor::ReadNativePalette(contextFixture/"ayu"/"ayu3.pal",disk,error) && disk==third,
+        "Save did not create the custom palette for the chosen color");
+    Panel::SaveSlot(4);
+    Require(!Panel::g.confirm && Panel::g.stock==4 && !Panel::g.document.Dirty() && Panel::g.nativeName=="ayu5.pal" &&
+        Panel::g.document.Colors()==third && Panel::g.document.Original()==Panel::g.assets.stockPalettes[4] &&
+        ::PaletteEditor::ReadNativePalette(contextFixture/"ayu"/"ayu5.pal",disk,error) && disk==third,
+        "Saving to another color did not write it and move the editor there");
+    {const auto entries=Panel::ColorEntries();
+     Require(entries.size()==9 && entries[1].slot==0 && entries[1].custom && entries[4].slot==2 && entries[4].custom &&
+         entries[7].slot==4 && entries[7].custom && !entries[8].custom,"Color list did not offer each saved custom palette after its stock color");}
+    Panel::OpenColor(0,false);
+    Require(Panel::g.document.Colors()==Panel::g.assets.stockPalettes[0] && Panel::g.nativeName.empty(),
+        "Choosing a stock color opened its custom palette");
+    Panel::StepColor(1);
+    Require(Panel::g.document.Colors()==draft && Panel::g.nativeName=="ayu1.pal" && !Panel::g.document.Dirty() &&
+        Panel::g.document.Original()!=draft,"Choosing a custom palette did not open it over the stock baseline");
+    {::PaletteEditor::Palette loose{};loose.fill({5,6,7});const auto bytes=::PaletteEditor::EncodeNativePalette(loose);
+     static std::filesystem::path picked;picked=contextFixture/"shared.pal";
+     WriteBytes(picked,std::vector<uint8_t>(bytes.begin(),bytes.end()));
+     const auto before=Panel::g.document.Colors();
+     Panel::g_fileDialog=[](const std::filesystem::path&,std::filesystem::path& selected,std::string&){selected=picked;return true;};
+     Panel::LoadFile();
+     Require(Panel::g.document.Colors()==loose && Panel::g.document.Dirty() && Panel::g.nativeName=="ayu1.pal",
+         "Loading a palette file did not import it into the draft");
+     Panel::g.document.Undo();Require(Panel::g.document.Colors()==before,"Undo did not restore colors before the file load");
+     Panel::g_fileDialog=[](const std::filesystem::path&,std::filesystem::path&,std::string&){return false;};
+     Panel::LoadFile();Require(Panel::g.document.Colors()==before,"Cancelled file load changed the draft");
+     Panel::g_fileDialog=nullptr;}
     Panel::g.document.SetColor(2,{11,22,33});const auto retained=Panel::g.document.Colors();
     contextStage=2;Panel::Open(1);
     Require(Panel::g.context.stageId==2 && Panel::g.document.Colors()==retained,"Reopen did not refresh context while retaining draft");
@@ -295,29 +272,29 @@ void CheckSources(const std::filesystem::path& directory) {
 }
 void CheckOpeningClicks(const std::filesystem::path& directory) {
     SetFonts(1.5f);Seed();
-    const auto path=CreateFixtureDirectory(directory,"modal")/"Selected.json";
-    ::PaletteEditor::PaletteFile saved;std::string error;
-    Require(::PaletteEditor::SavePaletteFile(path,Panel::g.document.State(),std::nullopt,saved,error),"Modal fixture could not be saved");
+    Panel::g.context.gameDirectory=CreateFixtureDirectory(directory,"modal");
+    const auto path=Panel::g.context.gameDirectory/"ayu"/"ayu1.pal";
     const auto savedColors=Panel::g.document.Colors();
+    const auto bytes=::PaletteEditor::EncodeNativePalette(savedColors);
+    WriteBytes(path,std::vector<uint8_t>(bytes.begin(),bytes.end()));
     Panel::g.document.SetColor(3,{10,20,30});const auto draft=Panel::g.document.Colors();
-    dialogAccepted=true;dialogSelection=path;
-    BeginFrame();input.click=true;input.x=80;input.y=400;DrawPalettePage();
-    Require(bool(Panel::g.confirm) && Panel::g.document.Dirty() && Panel::g.document.Colors()==draft,
-        "Load click bypassed the draft guard or activated its new confirmation");
+    ::PaletteEditor::Palette disk{};std::string error;
+    BeginFrame();input.click=true;input.x=500;input.y=400;DrawPalettePage();
+    Require(!Panel::g.confirm && Screens::IsPopupActive(),"Save did not offer a color to save to");
+    NextFrame();input.activate=true;DrawPalettePage();
+    Require(bool(Panel::g.confirm) && Panel::g.document.Dirty(),"Save click replaced a file without confirmation");
     NextFrame();input.back=true;DrawPalettePage();
-    Require(!Panel::g.confirm && Panel::g.document.Colors()==draft,"Cancelling Load confirmation changed the draft");
-    NextFrame();input.click=true;input.x=80;input.y=400;DrawPalettePage();
+    Require(!Panel::g.confirm && Panel::g.document.Colors()==draft &&
+        ::PaletteEditor::ReadNativePalette(path,disk,error) && disk==savedColors,"Cancelling Save changed the draft or the file");
+    NextFrame();input.click=true;input.x=500;input.y=400;DrawPalettePage();
+    NextFrame();input.activate=true;DrawPalettePage();
     NextFrame();Panel::g.confirmFocus=1;input.activate=true;DrawPalettePage();
-    Require(!Panel::g.confirm && Panel::g.source && Panel::g.source->path==path && Panel::g.document.Colors()==savedColors,
-        "Confirmed Load did not load the selected file");
-    dialogAccepted=false;const int before=dialogCalls;
-    NextFrame();input.click=true;input.x=320;input.y=400;DrawPalettePage();
-    Require(dialogCalls==before+1 && dialogSave && !Panel::Modal() && Panel::g.source->path==path,
-        "Save As action did not use the dialog or leaked cancellation");
+    Require(!Panel::g.confirm && !Panel::g.document.Dirty() &&
+        ::PaletteEditor::ReadNativePalette(path,disk,error) && disk==draft,"Confirmed Save did not write the palette");
     NextFrame();Panel::StartText(Panel::State::TextKind::Hex);
-    input.click=true;input.x=320;input.y=400;DrawPalettePage();
-    Require(Panel::g.textKind==Panel::State::TextKind::Hex && dialogCalls==before+1,
-        "Bottom Save As clicked through a text modal");
+    Panel::g.document.SetColor(4,{1,2,3});input.click=true;input.x=500;input.y=400;DrawPalettePage();
+    Require(Panel::g.textKind==Panel::State::TextKind::Hex && !Panel::g.confirm && Panel::g.document.Dirty(),
+        "Bottom Save clicked through a text modal");
     NextFrame();input.back=true;DrawPalettePage();EndFrame(nullptr);SetFonts(1);
 }
 void CaptureClasses(const std::filesystem::path& directory,const std::string& character) {
@@ -381,7 +358,7 @@ void CaptureRealAssets(IDirect3DDevice9* device,const std::filesystem::path& gam
             state.color=int(selected);
             for(unsigned ramp=0;ramp<state.document.Ramps().size();++ramp) {
                 const auto& span=state.document.Ramps()[ramp];
-                if(selected>=span.first && selected<=span.last) {state.ramp=int(ramp);state.target=1;state.document.SetRampHsv(ramp,{185,85,90});break;}
+                if(span.Has(selected)) {state.ramp=int(ramp);state.target=1;state.document.SetRampHsv(ramp,{185,85,90});break;}
             }
             state.playing=false;state.compare=2;
             Panel::g_originalTexture.sprite=Panel::g_workingTexture.sprite=-1;
@@ -390,6 +367,13 @@ void CaptureRealAssets(IDirect3DDevice9* device,const std::filesystem::path& gam
             for(int target:{0,1}) {
                 state.target=target;state.autoFit=true;BeginFrame();DrawPalettePage();EndFrame(device);
                 SaveBitmap(device,output/(std::string(language==I18n::Japanese?"ja-":"en-")+character+"-"+std::to_string(int(scale*100))+(target?"-ramps.bmp":"-editor.bmp")));
+            }
+            if(language==I18n::English && scale==1.0f) for(unsigned seed=1;seed<=4;++seed) {
+                Require(state.document.Background()==state.assets.transparentKey,"Area table background differs from the sprite transparent key");
+                state.document.ResetAll();Require(state.document.RandomPalette(seed,state.assets.transparentKey),"Random palette left real stock colors unchanged");
+                state.compare=0;state.autoFit=true;BeginFrame();DrawPalettePage();EndFrame(device);
+                SaveBitmap(device,output/(character+"-random-"+std::to_string(seed)+".bmp"));
+                state.compare=2;
             }
             state.editorFocus=10;BeginFrame();input.activate=true;DrawPalettePage();EndFrame(device);
             Require(Screens::IsPopupActive(),"Real move picker did not open");
@@ -405,10 +389,10 @@ void CaptureRealAssets(IDirect3DDevice9* device,const std::filesystem::path& gam
     }
 }
 void CheckFontFit() {
-    const std::pair<std::string,int> labels[]={{"TOOLS",76},{"PICKER",88},{"RGB",88},{"HSV",88},{"#FFFFFF",158},{"UNPIN",76},{"RESET",76},
-        {"400%",96},{"PAN*",100},{"CENTER",108},{"ORIGINAL",110},{"MARK",80},{"PREVIEW",114},{"APPLY",112},{"RESTORE",112},
-        {"ALT",64},{"SAVE",112},{"SAVE AS",112},{"LOAD",112},
-        {I18n::TrFormat("UNDO %zu",size_t(16)),88},{I18n::TrFormat("Stock %d",6),100},
+    const std::pair<std::string,int> labels[]={{"TOOLS",72},{"PICKER",86},{"RGB",86},{"HSV",86},{"#FFFFFF",146},{"UNPIN",76},{"RESET",76},
+        {"400%",82},{"PAN*",100},{"CENTER",108},{"ORIGINAL",106},{"MARK",80},{"PREVIEW",104},{"APPLY",180},{"RESTORE",180},
+        {"ALT",64},{"SAVE",200},
+        {I18n::TrFormat("UNDO %zu",size_t(16)),88},{I18n::TrFormat("COLOR %d",6),104},{I18n::TrFormat("CUSTOM %d",6),104},
         {I18n::TrFormat("PAUSE  %d / %d",999,999),228}};
     for(const auto& label:labels) {
         const auto* translated=I18n::Tr(label.first.c_str());
@@ -550,9 +534,6 @@ void CheckTabContent() {
     Require(bool(Panel::g.confirm),"Content player selector ignored a mouse click");
     NextFrame();input.back=true;DrawPalettePage();
     Require(!Panel::g.confirm && Panel::g.document.Colors()==draft,"Player switch cancellation lost the draft");
-    NextFrame();input.click=true;input.x=320;input.y=400;DrawPalettePage();
-    Require(dialogCalls==1 && dialogSave && !Panel::Modal() && Panel::g.document.Colors()==draft,
-        "Bottom Save As did not use the dialog or retain cancelled draft");
     NextFrame();input.back=true;DrawPalettePage();
     Require(Panel::ConsumeCloseRequest() && Panel::IsOpen() && Panel::g.document.Colors()==draft && !Panel::g.confirm,
         "Editor Back lost the draft or failed to return to game");
@@ -561,9 +542,8 @@ void CheckTabContent() {
     NextFrame();Panel::g.editorFocus=0;Panel::g.panMode=true;input.back=true;DrawPalettePage();
     Require(!Panel::g.panMode && !Panel::ConsumeCloseRequest(),"Back while panning closed the menu");
     Panel::StartText(Panel::State::TextKind::Hex);
-    const int before=dialogCalls;
-    input={};input.click=true;input.x=320;input.y=400;DrawPalettePage();
-    Require(Panel::BlocksNavigation() && dialogCalls==before,"Save As clicked through text entry");
+    input={};input.click=true;input.x=500;input.y=400;DrawPalettePage();
+    Require(Panel::BlocksNavigation() && !Panel::g.confirm && Panel::g.document.Dirty(),"Save clicked through text entry");
     NextFrame();input.back=true;DrawPalettePage();
     Require(!Panel::BlocksNavigation() && !input.back,"Closing text entry leaked its input");
     Panel::Confirm("TEST","Keep draft?","DISCARD",[]{});
@@ -647,7 +627,7 @@ void CheckColorPicker() {
     const auto pick=[&](float x,float y){input={};input.click=true;input.x=x;input.y=y;Panel::DrawPreview(dl,28,90,200,120,true);};
     pick(128,184);Require(Panel::g.target==1,"Sprite eyedropper silently changed Ramp mode to Shade mode");
     const auto ramp=Panel::g.document.Ramps()[Panel::g.ramp];
-    Require(ramp.first<=1 && ramp.last>=1,"Sprite eyedropper selected the wrong ramp");
+    Require(ramp.Has(1),"Sprite eyedropper selected the wrong ramp");
     Panel::g.target=0;Panel::g.color=5;Panel::SyncColor();pick(128,184);
     Require(Panel::g.target==0 && Panel::g.color==1,"Shade eyedropper did not select its clicked shade");
     const auto pickedColors=Panel::g.document.Colors();pick(127,184);
@@ -660,7 +640,7 @@ void CheckIconClicks() {
     Seed();BeginFrame();Panel::g.target=0;Panel::g.color=3;Panel::SyncColor();
     const auto original=Panel::g.document.Colors()[3];
     const auto click=[&](int column,int focus) {
-        input={};input.click=true;input.x=46+36.0f*column;input.y=339;
+        input={};input.click=true;input.x=43+32.0f*column;input.y=339;
         Panel::g.mouseHelp=true;Panel::g.helpControl=-1;
         Panel::DrawEditor(ImGui::GetForegroundDrawList(),72,true);
         Require(Panel::g.helpControl==focus,"Square icon hover missed its description");

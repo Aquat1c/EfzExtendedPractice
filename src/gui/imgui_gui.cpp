@@ -613,6 +613,7 @@ namespace ImGuiGui {
                     ImGui::TableNextColumn(); ImGui::TextUnformatted("Freeze RF");
                     ImGui::TableNextColumn();
                     {
+                        s_uiFreezeP1 = GetRFFreezeOrigin(1) == RFFreezeOrigin::ManualUI;
                         bool fr1 = s_uiFreezeP1; if (ImGui::Checkbox("Freeze##rf_p1", &fr1)) {
                             s_uiFreezeP1 = fr1;
                             if (fr1) { StartRFFreezeOneFromUI(1, guiState.localData.rf1); }
@@ -626,6 +627,7 @@ namespace ImGuiGui {
                     }
                     ImGui::TableNextColumn();
                     {
+                        s_uiFreezeP2 = GetRFFreezeOrigin(2) == RFFreezeOrigin::ManualUI;
                         bool fr2 = s_uiFreezeP2; if (ImGui::Checkbox("Freeze##rf_p2", &fr2)) {
                             s_uiFreezeP2 = fr2;
                             if (fr2) { StartRFFreezeOneFromUI(2, guiState.localData.rf2); }
@@ -4396,6 +4398,7 @@ namespace ImGuiGui {
                 auto enforceForPlayer = [&](int p){
                     // CRITICAL: Never modify game memory during online mode
                     if (g_onlineModeActive.load()) return;
+                    if (IsEngineRegenActive()) return;
                     bool enabled = (p==1) ? displayData.p1ContinuousRecoveryEnabled : displayData.p2ContinuousRecoveryEnabled;
                     if (!enabled) return;
                     uintptr_t p1B=0, p2B=0; SafeReadMemory(base + EFZ_BASE_OFFSET_P1, &p1B, sizeof(p1B)); SafeReadMemory(base + EFZ_BASE_OFFSET_P2, &p2B, sizeof(p2B));
@@ -4414,7 +4417,7 @@ namespace ImGuiGui {
                         SafeWriteMemory(pB + METER_OFFSET, &tgt, sizeof(tgt));
                         wrote = true;
                     }
-                    if (tg.rfOn) {
+                    if (tg.rfOn && GetRFFreezeOrigin(p) != RFFreezeOrigin::ManualUI) {
                         double p1rf=0.0, p2rf=0.0;
                         SafeReadMemory(p1B + RF_OFFSET, &p1rf, sizeof(p1rf));
                         SafeReadMemory(p2B + RF_OFFSET, &p2rf, sizeof(p2rf));
@@ -4443,8 +4446,8 @@ namespace ImGuiGui {
                     }
                 };
 
-                if (!displayData.p1ContinuousRecoveryEnabled || displayData.p1RecoveryRfMode <= 0) { StopRFFreezePlayer(1); }
-                if (!displayData.p2ContinuousRecoveryEnabled || displayData.p2RecoveryRfMode <= 0) { StopRFFreezePlayer(2); }
+                if (!displayData.p1ContinuousRecoveryEnabled || displayData.p1RecoveryRfMode <= 0) { StopRFFreezeFromCR(1); }
+                if (!displayData.p2ContinuousRecoveryEnabled || displayData.p2RecoveryRfMode <= 0) { StopRFFreezeFromCR(2); }
 
                 enforceForPlayer(1);
                 enforceForPlayer(2);

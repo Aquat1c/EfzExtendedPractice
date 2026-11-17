@@ -50,35 +50,29 @@ Execution EnterExecution(int) { return {}; }
 #include "game/savestate_load.inl"
 
 int main() {
-    for (bool owned : {false, true}) {
-        ownedPause = owned;
-        nativeResult = false;
-        Check(!SavestateHook::TriggerLoad(), "native failure propagates");
-        Check(nativeCalls == completed && completedOwnedPause == owned, "failure releases original pause ownership");
-        Check(!s_loadStartedFromOwnedPause, "failure clears tracked pause ownership");
-        Check(!s_loadCount && !restored && !notified && !overlayResets && !enforced && !messages,
-              "failure has no successful restore effects");
+    // Revival's load leaves AL as loop scratch, so its return value must never decide success.
+    for (bool native : {false, true}) {
+        nativeResult = native;
+        ownedPause = native;
+        Check(SavestateHook::TriggerLoad(), "a native call is a completed load");
+        Check(completedOwnedPause == native && !s_loadStartedFromOwnedPause, "pause ownership is released");
     }
-    nativeResult = true;
-    ownedPause = true;
-    Check(SavestateHook::TriggerLoad(), "native success propagates");
-    Check(nativeCalls == 3 && completed == 3 && completedOwnedPause, "successful pause cleanup runs once");
-    Check(s_loadCount == 1 && restored == 1 && notified == 1 && overlayResets == 1 && enforced == 1 && messages == 1,
-          "successful restore effects run once");
+    Check(nativeCalls == 2 && completed == 2, "each load runs once");
+    Check(s_loadCount == 2 && restored == 2 && notified == 2 && overlayResets == 2 && enforced == 2 && messages == 2,
+          "restore effects run whatever the native return value");
     hooksOpen = false;
-    Check(SavestateHook::TriggerLoad() && nativeCalls == 4 && completed == 3 && s_loadCount == 1,
+    Check(SavestateHook::TriggerLoad() && nativeCalls == 3 && completed == 2 && s_loadCount == 2,
           "non-Practice load only invokes native operation");
     hooksOpen = true;
     admitted = false;
-    nativeResult = false;
-    Check(!SavestateHook::TriggerLoad() && nativeCalls == 5 && completed == 3,
-          "closed admission preserves native failure without mod effects");
+    Check(SavestateHook::TriggerLoad() && nativeCalls == 4 && completed == 2,
+          "closed admission only invokes native operation");
     admitted = true;
     controller = nullptr;
-    Check(!SavestateHook::TriggerLoad() && nativeCalls == 5, "missing controller fails without native call");
+    Check(!SavestateHook::TriggerLoad() && nativeCalls == 4, "missing controller fails without native call");
     controller = reinterpret_cast<void*>(1);
     s_installed = false;
-    Check(!SavestateHook::TriggerLoad() && nativeCalls == 5, "uninstalled load fails without native call");
+    Check(!SavestateHook::TriggerLoad() && nativeCalls == 4, "uninstalled load fails without native call");
     std::printf("savestate load: %d failures\n", failures);
     return failures ? 1 : 0;
 }

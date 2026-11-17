@@ -325,7 +325,12 @@ bool ReadEngineRegenParams(uint16_t& outParamA, uint16_t& outParamB) {
     outParamA = a; outParamB = b; return true;
 }
 
+// Param A of an F4 value this mod wrote itself; such a write has no stepping to observe.
+static std::atomic<int> s_modF4ParamA{-1};
+static std::atomic<bool> s_engineRegenActive{false};
+
 bool WriteEngineRegenParams(uint16_t paramA, uint16_t paramB) {
+    s_modF4ParamA.store((paramB == 9999 && paramA != 1000 && paramA != 2000) ? int(paramA) : -1);
     uintptr_t base = GetEFZBase(); if (!base) return false;
     uintptr_t p1PtrAddr = base + EFZ_BASE_OFFSET_P1;
     uintptr_t p2PtrAddr = base + EFZ_BASE_OFFSET_P2;
@@ -403,7 +408,7 @@ static int s_stepRun = 0;
 static int s_f4Cooldown = 0;
 static bool s_prevValid = false;
 
-bool GetEngineRegenStatus(EngineRegenMode& outMode, uint16_t& outParamA, uint16_t& outParamB) {
+static bool ObserveEngineRegenStatus(EngineRegenMode& outMode, uint16_t& outParamA, uint16_t& outParamB) {
     outMode = EngineRegenMode::Unknown; outParamA = outParamB = 0;
     uint16_t a=0,b=0; if (!ReadEngineRegenParams(a,b)) return false;
     outParamA = a; outParamB = b;
@@ -440,6 +445,17 @@ bool GetEngineRegenStatus(EngineRegenMode& outMode, uint16_t& outParamA, uint16_
 
     s_prevValid = true; s_prevA = a; s_prevB = b; return true;
 }
+
+bool GetEngineRegenStatus(EngineRegenMode& outMode, uint16_t& outParamA, uint16_t& outParamB) {
+    const bool ok = ObserveEngineRegenStatus(outMode, outParamA, outParamB);
+    if (ok && outMode == EngineRegenMode::Normal && outParamB == 9999 && int(outParamA) == s_modF4ParamA.load())
+        outMode = EngineRegenMode::F4_FineTuneActive;
+    s_engineRegenActive.store(ok && (outMode == EngineRegenMode::F4_FineTuneActive ||
+                                     outMode == EngineRegenMode::F5_FullOrPreset));
+    return ok;
+}
+
+bool IsEngineRegenActive() { return s_engineRegenActive.load(); }
 
 // Param A: 0..999 = red, RF = A; 1000 = blue full; 1001..2000 = blue, RF = 2000 - A.
 bool DeriveRfFromParamA(uint16_t paramA, float& rfValue, bool& isBlueIC) {
@@ -761,6 +777,8 @@ void StopRFFreeze() {
     rfFreezing.store(false);
     rfFreezeP1Active.store(false);
     rfFreezeP2Active.store(false);
+    rfFreezeOriginP1.store((int)RFFreezeOrigin::None);
+    rfFreezeOriginP2.store((int)RFFreezeOrigin::None);
     LogOut("[RF] Stopped freezing RF values", detailedLogging.load());
 }
 
@@ -785,8 +803,14 @@ void SetRFFreezeNeutralOnly(bool enabled) {
     (void)enabled;
 }
 
+void StopRFFreezeFromCR(int player) {
+    if (GetRFFreezeOrigin(player) == RFFreezeOrigin::ContinuousRecovery) StopRFFreezePlayer(player);
+}
+
 void UpdateRFFreezeTick() {
     if (!rfFreezing.load()) return;
+    // The engine drives RF and IC itself under F4/F5.
+    if (s_engineRegenActive.load()) return;
     uintptr_t base = GetEFZBase();
     if (!base) return;
     uintptr_t p1Base = 0, p2Base = 0;
@@ -870,35 +894,16 @@ void UpdateRFFreezeTick() {
             p2SkipNonNeutral = true;
         }
     }
-    static bool s_lastP1Color = false;
-    static bool s_lastP1ColorEnabled = false;
-    static bool s_lastP2Color = false;
-    static bool s_lastP2ColorEnabled = false;
-    if (rfFreezeP1Active.load() && rfFreezeColorP1Enabled) {
-        if (!s_lastP1ColorEnabled || s_lastP1Color != rfFreezeColorP1Blue) {
-            std::ostringstream logMsg;
-            logMsg << "[IC][RF_FREEZE] P1 IC color enforced by RF freeze: "
-                   << (rfFreezeColorP1Blue ? "Blue" : "Red")
-                   << " (was " << (s_lastP1ColorEnabled ? (s_lastP1Color ? "Blue" : "Red") : "unmanaged") << ")";
-            LogOut(logMsg.str(), true);
-            SetICColorPlayer(1, rfFreezeColorP1Blue);
-            s_lastP1ColorEnabled = true; s_lastP1Color = rfFreezeColorP1Blue;
-        }
-    } else {
-        s_lastP1ColorEnabled = false;
-    }
-    if (rfFreezeP2Active.load() && rfFreezeColorP2Enabled) {
-        if (!s_lastP2ColorEnabled || s_lastP2Color != rfFreezeColorP2Blue) {
-            std::ostringstream logMsg;
-            logMsg << "[IC][RF_FREEZE] P2 IC color enforced by RF freeze: "
-                   << (rfFreezeColorP2Blue ? "Blue" : "Red")
-                   << " (was " << (s_lastP2ColorEnabled ? (s_lastP2Color ? "Blue" : "Red") : "unmanaged") << ")";
-            LogOut(logMsg.str(), true);
-            SetICColorPlayer(2, rfFreezeColorP2Blue);
-            s_lastP2ColorEnabled = true; s_lastP2Color = rfFreezeColorP2Blue;
-        }
-    } else {
-        s_lastP2ColorEnabled = false;
+    // The colour lock holds: any other writer is corrected on the next tick.
+    for (int player = 1; player <= 2; ++player) {
+        if (!IsRFFreezeColorManaging(player)) continue;
+        const bool blue = player == 1 ? rfFreezeColorP1Blue : rfFreezeColorP2Blue;
+        int current = 0;
+        if (!SafeReadMemory((player == 1 ? p1Base : p2Base) + IC_COLOR_OFFSET, &current, sizeof(current))) continue;
+        if ((current != 0) == blue) continue;
+        LogOut(std::string("[IC][RF_FREEZE] P") + (player == 1 ? "1" : "2") + " IC color enforced by RF freeze: " +
+               (blue ? "Blue" : "Red"), true);
+        SetICColorPlayer(player, blue);
     }
 
     #if defined(ENABLE_FRAME_ADV_DEBUG)
@@ -964,6 +969,8 @@ void SetRFFreezeColorDesired(int player, bool enabled, bool blueIC) {
 }
 
 bool IsRFFreezeColorManaging(int player) {
+    // Only a manual freeze carries a colour lock; a Continuous Recovery freeze holds RF alone.
+    if (GetRFFreezeOrigin(player) != RFFreezeOrigin::ManualUI) return false;
     if (player == 1) {
         return rfFreezeP1Active.load() && rfFreezeColorP1Enabled;
     } else if (player == 2) {
@@ -979,6 +986,7 @@ void StartRFFreezeOneFromUI(int player, double value) {
 }
 
 void StartRFFreezeOneFromCR(int player, double value) {
+    if (GetRFFreezeOrigin(player) == RFFreezeOrigin::ManualUI) return;
     StartRFFreezeOne(player, value);
     if (player == 1) rfFreezeOriginP1.store((int)RFFreezeOrigin::ContinuousRecovery);
     else if (player == 2) rfFreezeOriginP2.store((int)RFFreezeOrigin::ContinuousRecovery);
@@ -988,13 +996,13 @@ bool GetRFFreezeStatus(int player, bool& isActive, double& value, bool& colorMan
     if (player == 1) {
         isActive = rfFreezeP1Active.load();
         value = rfFreezeValueP1.load();
-        colorManaged = (isActive && rfFreezeColorP1Enabled);
+        colorManaged = IsRFFreezeColorManaging(1);
         colorBlue = rfFreezeColorP1Blue;
         return true;
     } else if (player == 2) {
         isActive = rfFreezeP2Active.load();
         value = rfFreezeValueP2.load();
-        colorManaged = (isActive && rfFreezeColorP2Enabled);
+        colorManaged = IsRFFreezeColorManaging(2);
         colorBlue = rfFreezeColorP2Blue;
         return true;
     }

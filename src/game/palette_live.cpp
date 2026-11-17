@@ -304,9 +304,12 @@ bool Apply(int player, const std::string& expectedResource, const Palette& palet
         return false;
     }
     Owner owner;
-    if (!CaptureOwner(player - 1, owner) || !ExpectedResource(owner, expectedResource) || !VerifyNative(owner.moduleBase)) {
+    const char* refusal = !CaptureOwner(player - 1, owner) ? "The fighter could not be read from the match."
+        : !ExpectedResource(owner, expectedResource) ? "The fighter in the match is not the one being edited."
+        : !VerifyNative(owner.moduleBase) ? "This game build's palette functions were not recognized." : nullptr;
+    if (refusal) {
         s_status = Status::Refused;
-        error = "The fighter changed or the native palette functions could not be verified.";
+        error = refusal;
         return false;
     }
     const int side = player - 1;

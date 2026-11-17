@@ -28,7 +28,7 @@ void ColorTests() {
         Check(HsvToRgb(RgbToHsv(rgb))==rgb,"HSV round trip");
     }
     Check(HsvToRgb({-120,100,100})==Color{0,0,255},"negative hue wraps");
-    Document d;d.LoadStock("misaki",0,Stock());
+    Document d;d.LoadStock("sample",0,Stock());
     Check(d.SetHsv(0,{123,0,40}),"gray HSV");
     Check(d.ColorHsv(0).h==123,"gray hue retained");
     Check(d.SetHsv(0,{234,87,0})&&d.ColorHsv(0).s==87,"black saturation retained");
@@ -36,7 +36,7 @@ void ColorTests() {
     Check(!d.SetColor(40,{})&&!d.SetRampColor(100,{}),"invalid selection");
 }
 void ScopedHsvTests() {
-    Document d;d.LoadStock("misaki",0,Stock());
+    Document d;d.LoadStock("sample",0,Stock());
     const auto key=d.Ramps()[0].key;
     d.SetColor(key,{210,20,40});const auto pinned=d.ColorHsv(key);
     d.SetRampHsv(0,{180,100,60});
@@ -56,7 +56,7 @@ void ScopedHsvTests() {
     Check(d.ColorHsv(key).h==pinned.h,"ramp undo keeps pinned entry HSV");
 }
 void GenerationTests() {
-    const auto stock=Stock();Document d;d.LoadStock("misaki",0,stock);
+    const auto stock=Stock();Document d;d.LoadStock("sample",0,stock);
     d.SetHsv(1,{210,80,0});const auto pinnedHsv=d.ColorHsv(1);
     const auto before=d.State();const auto undos=d.UndoCount();
     std::srand(1234);const auto expectedRandom=std::rand();std::srand(1234);
@@ -77,13 +77,36 @@ void GenerationTests() {
     Check(!d.Generate(0,ColorScope::Shade,1,0) && !d.Generate(0,ColorScope::Shade,0,0),"generator respects protected shade");
     Check(!d.Generate(0,ColorScope::Ramp,99,0) && !d.Generate(0,ColorScope::Shade,40,0) &&
         !d.Generate(0,static_cast<ColorScope>(99),0,0) && d.UndoCount()==count,"invalid generation is atomic");
+    Document areas;areas.LoadStock("ayu",0,stock);const auto areaUndos=areas.UndoCount();
+    Check(areas.RandomPalette(42,15) && areas.UndoCount()==areaUndos+1,"area recolour is one edit");
+    const auto recolored=areas.Colors();
+    for(unsigned slot:{0u,1u,2u,3u,4u,15u}) Check(recolored[slot]==stock[slot],"area recolour keeps skin, eye whites and background");
+    Check(recolored!=stock && areas.Original()==stock,"area recolour changes the outfit over the stock baseline");
+    for(const auto& ramp:areas.Ramps()) for(unsigned i:ramp.Slots())
+        Check(areas.Pinned(i) || !areas.State().targets[ramp.key] || recolored[i]!=stock[i] || i!=ramp.key,"area recolour leaves a consistent ramp state");
+    Check(areas.State().pins.none(),"area recolour pins nothing");
+    areas.Undo();Check(areas.Colors()==stock && areas.RandomPalette(42,15) && areas.Colors()==recolored,"area recolour is reproducible");
+    areas.Undo();Check(areas.RandomPalette(43,15) && areas.Colors()!=recolored,"area recolour varies with the seed");
+    Check(areas.Background()==15,"ayu background slot");
+    for(const auto& ramp:areas.Ramps()) Check(!ramp.Has(15),"no ramp holds the background slot");
+    {std::bitset<40> covered;for(const auto& ramp:areas.Ramps()) for(unsigned i:ramp.Slots()) {Check(!covered[i],"slot in two ramps");covered.set(i);}
+     Check(covered.count()==39,"ramps cover every slot except the background");}
+    {const auto hair=std::find_if(areas.Ramps().begin(),areas.Ramps().end(),[](const Ramp& r){return r.Has(10);});
+     Check(hair->Slots()==std::vector<unsigned>{10,9,8} && hair->key==9,"ramp follows the hair area");
+     for(unsigned i:hair->Slots()) Check(recolored[i]!=stock[i],"area recolour reaches every hair shade");
+     Document edit;edit.LoadStock("ayu",0,stock);edit.RandomPalette(42,15);const auto rolled=edit.Colors();
+     Check(edit.SetRampColor(unsigned(hair-areas.Ramps().begin()),{20,200,90}),"ramp edit after area recolour");
+     for(unsigned i:hair->Slots()) Check(edit.Colors()[i]!=rolled[i],"ramp edit after area recolour moves every shade");}
+    Document unknown;unknown.LoadStock("misaki2",0,stock);
+    Check(unknown.Background()==40,"unknown character has no background slot");
+    Check(!unknown.RandomPalette(1,0) && unknown.UndoCount()==0,"unknown character has no area recolour");
     for(unsigned i=0;i<40;++i)d.SetPinned(i,true);
     const auto allPinned=d.State();const auto pinnedUndos=d.UndoCount();
     Check(!d.Generate(7,ColorScope::Palette,0,40) && d.State().targets==allPinned.targets && d.UndoCount()==pinnedUndos,
         "fully pinned generation must be a no-op");
 }
 void GradientTests() {
-    Document d;auto stock=Stock();d.LoadStock("misaki",0,stock);
+    Document d;auto stock=Stock();d.LoadStock("sample",0,stock);
     auto saved=d.State();saved.ramps={{0,4,2},{5,39,20}};saved.colors[0]={255,0,0};saved.colors[4]={0,0,255};
     std::string error;Check(d.LoadSaved(saved,stock,error),"gradient fixture");
     const auto count=d.UndoCount();Check(d.Gradient(0,40,false),"RGB gradient");
@@ -101,7 +124,7 @@ void GradientTests() {
     Check(!d.Gradient(0,40,true),"single shade has no gradient");
 }
 void DocumentTests() {
-    const auto stock=Stock(); Document d;d.LoadStock("misaki",2,stock);
+    const auto stock=Stock(); Document d;d.LoadStock("sample",2,stock);
     Check(!d.Dirty()&&d.Original()==stock,"stock is immutable");
     Check(d.Ramps().front().first==0&&d.Ramps().front().last==4,"conservative contiguous gray ramp");
     Check(d.SetPinned(0,true),"pin shade");const auto pinned=d.Colors()[0];
@@ -126,21 +149,25 @@ void DocumentTests() {
     Check(d.Colors()==saved.colors&&d.Pinned(4)&&d.Pinned(39),"rebase preserves RGB and pins differences");
     Check(std::none_of(d.State().targets.begin(),d.State().targets.end(),[](const auto& t){return bool(t);}),"rebase drops targets");
     auto imported=stock;imported[0]={9,8,7};d.Import(imported);
-    Check(d.Colors()==imported&&d.Pinned(0),"native import");
+    Check(d.Colors()==imported&&d.State().pins.none(),"native import pins nothing");
+    {Document all;all.LoadStock("sample",0,stock);auto custom=stock;for(auto& c:custom) c={std::uint8_t(c.b),c.g,std::uint8_t(c.r/2+7)};
+     all.Import(custom);Check(all.RampColor(0)==custom[all.Ramps()[0].key],"import shows the ramp's own colour");
+     Check(all.SetRampColor(0,{20,200,90}),"ramp edit after import");
+     for(unsigned i:all.Ramps()[0].Slots()) Check(all.Colors()[i]!=custom[i],"ramp edit after import moves every shade");}
     d.ResetAll();Check(d.Colors()==altered,"reset all uses current baseline");
 }
 void Write(const std::filesystem::path& path,const std::string& bytes) {
     std::ofstream out(path,std::ios::binary|std::ios::trunc);out<<bytes;out.close();Check(bool(out),"write fixture");
 }
 void PaletteFileTests(const std::filesystem::path& root) {
-    Document d;d.LoadStock("misaki",3,Stock());
+    Document d;d.LoadStock("sample",3,Stock());
     d.SetName("Old name");d.SetRampColor(0,{20,50,180});d.SetPinned(0,true);
     const auto path=root/"user selected folder"/"Selected name.JSON";
     PaletteFile saved,loaded;std::string error;
     Check(SavePaletteFile(path,d.State(),std::nullopt,saved,error),"external JSON create");
     Check(saved.path==path&&!saved.native&&saved.palette.name=="Selected name","selected filename sets name");
     Check(ReadPaletteFile(path,loaded,error)&&loaded.fingerprint==saved.fingerprint&&
-        loaded.palette.name=="Selected name"&&loaded.palette.character=="misaki"&&loaded.palette.stockSlot==3&&
+        loaded.palette.name=="Selected name"&&loaded.palette.character=="sample"&&loaded.palette.stockSlot==3&&
         loaded.palette.baseline==d.Original()&&loaded.palette.colors==d.Colors()&&
         loaded.palette.pins==d.State().pins&&loaded.palette.targets==d.State().targets&&
         loaded.palette.ramps.size()==d.Ramps().size(),"external JSON metadata round trip");
@@ -207,7 +234,7 @@ void PaletteFileTests(const std::filesystem::path& root) {
 }
 
 void LibraryTests(const std::filesystem::path& root) {
-    Library library(root);Document d;d.LoadStock("misaki",3,Stock());
+    Library library(root);Document d;d.LoadStock("sample",3,Stock());
     d.SetName("Blue");d.SetRampColor(0,{20,50,180});d.SetPinned(0,true);
     LibraryEntry first;std::string error;SavedPalette loaded;
     Check(library.SaveNew(d.State(),first,error),"save new");
@@ -219,14 +246,14 @@ void LibraryTests(const std::filesystem::path& root) {
     Check(library.Replace(first,d.State(),replacement,error)&&replacement.path==first.path,"replace retains filename");
     Check(!library.Read(first,loaded,error),"stale entry refuses changed disk");
     Check(library.Read(replacement,loaded,error)&&loaded.name=="Blue renamed","renamed metadata");
-    auto entries=library.Scan("misaki",false,error);
+    auto entries=library.Scan("sample",false,error);
     Check(error.empty()&&entries.size()==1&&entries[0].name=="Blue renamed","scan");
     LibraryEntry deleted,restored;
     Check(library.Delete(replacement,deleted,error)&&!std::filesystem::exists(replacement.path),"recoverable delete");
-    Check(library.Scan("misaki",true,error).size()==1,"trash scan");
+    Check(library.Scan("sample",true,error).size()==1,"trash scan");
     Check(library.Restore(deleted,restored,error)&&std::filesystem::exists(first.path),"restore");
     Check(library.Delete(restored,deleted,error),"delete again");
-    Document collision;collision.LoadStock("misaki",0,Stock());collision.SetName("Blue");
+    Document collision;collision.LoadStock("sample",0,Stock());collision.SetName("Blue");
     LibraryEntry occupied;Check(library.SaveNew(collision.State(),occupied,error),"new palette takes old filename");
     Check(!library.Restore(deleted,restored,error)&&std::filesystem::exists(deleted.path),"restore collision retains deleted file");
     LibraryEntry secondDeleted;Check(library.Delete(occupied,secondDeleted,error)&&secondDeleted.path!=deleted.path,"delete collision chooses a recoverable filename");
@@ -251,8 +278,8 @@ void LibraryTests(const std::filesystem::path& root) {
     Check(ReadNativePalette(native,imported,error)&&imported==Stock(),"native replaced bytes");
     const auto before=imported;Write(native,"bad");
     Check(!ReadNativePalette(native,imported,error)&&imported==before,"invalid native leaves output");
-    const auto malformed=root/"misaki"/"Malformed.json";Write(malformed,"{}");
-    entries=library.Scan("misaki",false,error);
+    const auto malformed=root/"sample"/"Malformed.json";Write(malformed,"{}");
+    entries=library.Scan("sample",false,error);
     Check(entries.size()==2&&std::any_of(entries.begin(),entries.end(),[](const auto& e){return !e.error.empty();}),"bad files listed without hiding good files");
     auto invalid=occupied;invalid.fingerprint=0;
     std::ifstream file(occupied.path);nlohmann::json json;file>>json;file.close();

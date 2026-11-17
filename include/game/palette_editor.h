@@ -8,13 +8,27 @@
 
 namespace PaletteEditor {
 struct Hsv { float h = 0, s = 0, v = 0; };
-struct Ramp { unsigned first = 0, last = 0, key = 0; };
+// A shade group. count == 0: the contiguous slots first..last. Otherwise `slots`, brightest to
+// darkest, with first/last their lowest and highest slot.
+struct Ramp {
+    unsigned first = 0, last = 0, key = 0;
+    std::uint8_t count = 0;
+    std::array<std::uint8_t, 16> slots{};
+    unsigned Size() const { return count ? count : last - first + 1; }
+    unsigned At(unsigned n) const { return count ? slots[n] : first + n; }
+    bool Has(unsigned slot) const { for (unsigned n = 0; n < Size(); ++n) if (At(n) == slot) return true; return false; }
+    std::vector<unsigned> Slots() const { std::vector<unsigned> s; for (unsigned n = 0; n < Size(); ++n) s.push_back(At(n)); return s; }
+};
 enum class ColorScope { Palette, Ramp, Shade };
 Hsv RgbToHsv(Color color);
 Color HsvToRgb(Hsv color);
 bool ParseHex(const std::string& text, Color& color);
 std::string FormatHex(Color color);
-std::vector<Ramp> DetectRamps(const Palette& original);
+// Background slot of a character resource, 40 when unknown.
+unsigned BackgroundSlot(const std::string& character);
+// A character with an area table gets one ramp per area; slots outside every area, and unknown
+// characters, are grouped by colour. The background slot is in no ramp.
+std::vector<Ramp> DetectRamps(const Palette& original, const std::string& character = {});
 
 struct SavedPalette {
     std::string name, character;
@@ -33,6 +47,7 @@ public:
     const Palette& Colors() const { return state_.colors; }
     const SavedPalette& State() const { return state_; }
     const std::vector<Ramp>& Ramps() const { return state_.ramps; }
+    unsigned Background() const { return BackgroundSlot(state_.character); }
     bool Dirty() const;
     bool Pinned(unsigned entry) const { return entry < 40 && state_.pins[entry]; }
     Hsv ColorHsv(unsigned entry) const;
@@ -50,6 +65,8 @@ public:
     bool ResetRamp(unsigned ramp);
     bool ResetAll();
     bool Generate(std::uint32_t seed, ColorScope scope, unsigned selection, unsigned transparent);
+    // False when the character has no area table or nothing changed.
+    bool RandomPalette(std::uint32_t seed, unsigned transparent);
     bool Gradient(unsigned ramp, unsigned transparent, bool hsv);
     void BeginGesture();
     void EndGesture();

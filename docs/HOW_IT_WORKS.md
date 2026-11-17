@@ -606,7 +606,13 @@ follow-up states.
 Continuous Recovery stands down when the engine's own F4/F5 regen is active. EFZ's regen state is visible as two parameter words kept in
 sync across both players: F5 cycles A between 1000 and 2000 and sets B to 3332, and F4 forces B to 9999 and steps A through 0..2000 by 5.
 A also encodes the RF gauge: below 1000 is red with RF equal to A, 1000 is full blue, and 1001..2000 is blue with RF = 2000 - A. Detection
-needs A actually stepping, because a static B of 9999 is common at max HP.
+needs A actually stepping, because a static B of 9999 is common at max HP. A value the menu wrote itself never steps, so the mod remembers
+the A it wrote and treats that exact pair as F4.
+
+RF and IC colour have one owner per player at a time. Engine regen comes first: while it is active neither the RF freeze nor Continuous
+Recovery writes RF or colour. A manual RF freeze comes next: Continuous Recovery leaves that player's RF and IC colour alone and can only
+stop a freeze it started itself. The colour lock of a manual freeze is re-checked every tick and rewritten when it differs; a freeze started
+by Continuous Recovery holds RF only.
 
 ### Combo overlay
 
@@ -836,7 +842,7 @@ seam, so they always pass through. All six hooks are refused as a unit if any en
 ## Palette editing
 
 Both menu styles expose a top-level Palette tab. Compact colour controls sit
-beside an animated preview. Load, Save, Save As, Apply and Restore form the
+beside an animated preview. Restore, Apply and Save form the
 bottom action row; the shared menu header is unchanged. Palette uses the
 same pane transition as other tabs, including its clip rectangles, and
 waits for the transition to finish before accepting input. Each control
@@ -849,16 +855,31 @@ The visual picker edits saturation/value and hue in the existing colour
 control area. RGB/HSV sliders and three/six-digit hex entry are also available.
 The sprite eyedropper selects the clicked index in Shade mode and its group
 in Ramp mode; transparent and shared effect colours remain uneditable.
+Shade groups come from `palette_area_table.h`: each named area of the
+character (skin, hair, top and so on) is one group, with its slots in the
+table's brightest-to-darkest order even when they are not adjacent. Slots
+outside every area, and characters without a table, are grouped by colour
+similarity. The background slot belongs to no group and shows as an empty
+slashed cell in Shade mode that cannot be selected. The preview animation
+starts paused.
 Numbered shade groups preserve the stock palette's lightness relationships.
 Pins protect individual edits from group changes. Undo keeps sixteen edits,
 with a slider drag or held adjustment recorded as one edit. Hue remains editable on black and
 gray even when changing it does not change the visible RGB value.
 
-Tools beside the stock selector provides whole-palette generation, selected
-ramp/shade randomization and RGB/HSV endpoint gradients. Small square icons
+Tools beside the colour selector provides a random palette, selected
+ramp/shade randomization, RGB/HSV endpoint gradients and a reset of every
+colour to stock. Small square icons
 below the color controls provide Pin, Reset, Undo, Lighten, Darken, Copy and
 Paste; hover or keyboard focus shows their descriptions.
-Generation samples hue, saturation and lightness, then uses the
+Random palette works from `palette_area_table.h`, which names each
+character's palette areas (skin, eye whites, iris, hair, clothing,
+accessories, effects, background). Every area except skin, eye whites and
+the background slot gets one random hue, chroma and lightness shift, and its
+shades follow that colour in Oklab so the stock shading survives. The result
+replaces the draft over the stock baseline and pins nothing, as does opening
+a saved custom palette, so a later group edit moves every shade of the group. Selection
+randomization samples hue, saturation and lightness, then uses the
 existing ramp composition to retain stock shading. Each invocation uses a
 private random engine; it does not consume game or process-wide RNG values.
 Generators preserve pinned shades and the sprite's actual transparent index.
@@ -886,15 +907,19 @@ Nanase and Ikumi's alternate tables. External move-data files are not required
 or read; resource filenames remain internal keys while menus use character
 display names.
 
-`palette_editor.cpp` owns the document and file operations. Windows Open and
-Save As choose JSON or native PAL files at a user-selected path. The initial
-directory is `palettes` beside the configuration file; older library JSON
-files remain readable. JSON stores the immutable stock baseline, edited
-colours, pins and group targets. Native PAL stores forty BGR colour triples
-and their count. Invalid or wrong-character imports leave the draft intact.
-Save checks the loaded file's fingerprint before replacement; Save As uses
-the native overwrite confirmation. Writes use a flushed temporary file and
-atomic rename. Cancelling either dialog preserves the draft and source path.
+The editor works on the game's own custom palettes. The colour selector
+lists the six stock colours, each followed by its custom palette when
+`<character>/<character><n>.pal` exists in the game folder (or its
+`system/` copy). On opening, the editor follows the fighter: a fighter
+using its custom palette opens on it. The folder icon reads any 40-colour
+`.pal` into the draft as one Undo step without touching the file. The stock
+colours stay the reset baseline either way. Save asks which of the six
+colours to write, defaulting to the one being edited, writes the draft to
+`<character>/<character><n>.pal`, asks before replacing an existing file,
+then applies the saved colours to the match. Saving to another colour moves
+the editor onto that colour and its stock baseline. A native PAL stores forty
+BGR colour triples and their count, so pins and group targets last only for
+the editing session. Writes use a flushed temporary file and atomic rename.
 Japanese labels, descriptions and move names use the shared translation
 table and embedded font. A language change rebuilds cached move labels
 without discarding the palette draft.

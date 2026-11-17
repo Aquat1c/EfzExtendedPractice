@@ -9,7 +9,7 @@ struct ImDrawList;
 
 namespace CustomMenu::PaletteEditorPanel {
 struct Context {
-    std::filesystem::path gameDirectory, libraryDirectory;
+    std::filesystem::path gameDirectory;
     std::string resourceName, displayName;
     int characterId = -1;
     int stockSlot = 0;

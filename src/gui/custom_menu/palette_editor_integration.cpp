@@ -53,7 +53,6 @@ bool ReadContext(int player, PaletteEditorPanel::Context& context, std::string& 
     }
     PaletteEditorPanel::Context candidate;
     candidate.gameDirectory = std::filesystem::path(executable).parent_path();
-    candidate.libraryDirectory = std::filesystem::path(Config::GetConfigFilePath()).parent_path() / "palettes";
     candidate.resourceName = resource;
     candidate.characterId = character;
     candidate.displayName = CharacterSettings::GetCharacterName(character);

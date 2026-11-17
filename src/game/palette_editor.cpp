@@ -1,4 +1,5 @@
 #include "game/palette_editor.h"
+#include "game/palette_area_table.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -87,7 +88,7 @@ Color Shade(const Palette& original, Ramp ramp, unsigned index, Color target) {
     const Lab k = ToLab(key), t = ToLab(target), c = ToLab(original[index]);
     const double kc = std::hypot(k.a, k.b), tc = std::hypot(t.a, t.b);
     double top = k.l;
-    for (unsigned i = ramp.first; i <= ramp.last; ++i) top = std::max(top, ToLab(original[i]).l);
+    for (unsigned i : ramp.Slots()) top = std::max(top, ToLab(original[i]).l);
     const double scale = k.l > 1e-6 ? std::min(1., t.l/k.l) : 1.;
     const double up = top > k.l + 1e-9 && t.l + (top-k.l)*scale > 1 ? (1-t.l)/(top-k.l) : scale;
     const double lightness = t.l + (c.l-k.l)*(c.l > k.l ? up : scale);
@@ -319,11 +320,32 @@ std::string FormatHex(Color color) {
         << std::setw(2) << unsigned(color.g) << std::setw(2) << unsigned(color.b);
     return out.str();
 }
-std::vector<Ramp> DetectRamps(const Palette& original) {
+unsigned BackgroundSlot(const std::string& character) {
+    const auto resource = std::find(std::begin(kPaletteAreaResources), std::end(kPaletteAreaResources), character);
+    if (resource != std::end(kPaletteAreaResources))
+        for (const auto& a : kPaletteAreas)
+            if (a.ch == resource - std::begin(kPaletteAreaResources) && a.kind == PaletteArea::Background) return a.slots[0];
+    return 40;
+}
+std::vector<Ramp> DetectRamps(const Palette& original, const std::string& character) {
     std::vector<Ramp> ramps;
+    std::array<bool,40> taken{};
+    const auto resource = std::find(std::begin(kPaletteAreaResources), std::end(kPaletteAreaResources), character);
+    if (resource != std::end(kPaletteAreaResources)) for (const auto& a : kPaletteAreas) {
+        if (a.ch != resource - std::begin(kPaletteAreaResources)) continue;
+        Ramp r{};
+        // A slot listed by two areas stays with the first.
+        for (unsigned n = 0; n < a.count; ++n)
+            if (a.slots[n] < 40 && !taken[a.slots[n]]) { taken[a.slots[n]] = true; r.slots[r.count++] = a.slots[n]; }
+        if (!r.count || a.kind == PaletteArea::Background) continue;
+        r.first = *std::min_element(r.slots.begin(), r.slots.begin() + r.count);
+        r.last = *std::max_element(r.slots.begin(), r.slots.begin() + r.count);
+        r.key = r.slots[r.count / 2];
+        ramps.push_back(r);
+    }
     unsigned first=0; int direction=0;
     for(unsigned i=1;i<=40;++i) {
-        bool split=i==40;
+        bool split=i==40 || taken[i] || taken[i-1];
         int step=0;
         if (!split) {
             const auto a=RgbToHsv(original[i-1]), b=RgbToHsv(original[i]), anchor=RgbToHsv(original[first]);
@@ -335,14 +357,14 @@ std::vector<Ramp> DetectRamps(const Palette& original) {
             split=(!gray && !hueClose) || std::abs(b.s-a.s)>40 ||
                 std::abs(delta)>0.32 || (step && direction && step!=direction);
         }
-        if (split) { ramps.push_back({first,i-1,(first+i-1)/2}); first=i; direction=0; }
+        if (split) { if (!taken[first]) ramps.push_back({first,i-1,(first+i-1)/2}); first=i; direction=0; }
         else if (step) direction=step;
     }
     return ramps;
 }
 void Document::LoadStock(const std::string& character, unsigned slot, const Palette& stock) {
     state_={}; state_.character=character; state_.stockSlot=slot; state_.name="Palette";
-    state_.baseline=state_.colors=stock; state_.ramps=DetectRamps(stock);
+    state_.baseline=state_.colors=stock; state_.ramps=DetectRamps(stock,state_.character);
     loaded_=state_; history_.clear(); EndGesture();
     ResetHsv();
 }
@@ -351,7 +373,7 @@ bool Document::LoadSaved(const SavedPalette& saved, const Palette& stock, std::s
     if (!Valid(saved,error,false)) return false;
     state_=saved;
     if (stock!=saved.baseline) {
-        state_.baseline=stock; state_.ramps=DetectRamps(stock); state_.targets={}; state_.pins.reset();
+        state_.baseline=stock; state_.ramps=DetectRamps(stock,state_.character); state_.targets={}; state_.pins.reset();
         for(unsigned i=0;i<40;++i) state_.pins[i]=state_.colors[i]!=stock[i];
     }
     loaded_=state_; history_.clear(); EndGesture();
@@ -398,7 +420,7 @@ bool Document::SetHsv(unsigned entry,Hsv color) {
 bool Document::SetHex(unsigned entry,const std::string& text) { Color color{}; return ParseHex(text,color) && SetColor(entry,color); }
 void Document::ComposeRamp(unsigned ramp) {
     const auto r=state_.ramps[ramp];
-    for(unsigned i=r.first;i<=r.last;++i) if(!state_.pins[i]) {
+    for(unsigned i:r.Slots()) if(!state_.pins[i]) {
         state_.colors[i]=state_.targets[r.key] ? Shade(state_.baseline,r,i,*state_.targets[r.key]) : state_.baseline[i];
         hsv_[i]=RgbToHsv(state_.colors[i]);
     }
@@ -424,7 +446,7 @@ bool Document::SetPinned(unsigned entry,bool pinned) {
     if(entry>=40) return false;
     if(state_.pins[entry]==pinned) return true;
     Checkpoint(); state_.pins[entry]=pinned;
-    if(!pinned) for(unsigned i=0;i<state_.ramps.size();++i) if(entry>=state_.ramps[i].first && entry<=state_.ramps[i].last) { ComposeRamp(i); break; }
+    if(!pinned) for(unsigned i=0;i<state_.ramps.size();++i) if(state_.ramps[i].Has(entry)) { ComposeRamp(i); break; }
     return true;
 }
 bool Document::ResetEntry(unsigned entry) {
@@ -436,10 +458,10 @@ bool Document::ResetRamp(unsigned ramp) {
     if(ramp>=state_.ramps.size()) return false;
     const auto r=state_.ramps[ramp];
     bool changed=bool(state_.targets[r.key]);
-    for(unsigned i=r.first;i<=r.last;++i) changed=changed||state_.pins[i]||state_.colors[i]!=state_.baseline[i];
+    for(unsigned i:r.Slots()) changed=changed||state_.pins[i]||state_.colors[i]!=state_.baseline[i];
     if(!changed) return true;
     Checkpoint(); state_.targets[r.key].reset(); rampHsv_[ramp]=RgbToHsv(state_.baseline[r.key]);
-    for(unsigned i=r.first;i<=r.last;++i) state_.pins.reset(i);
+    for(unsigned i:r.Slots()) state_.pins.reset(i);
     ComposeRamp(ramp); return true;
 }
 bool Document::ResetAll() {
@@ -478,31 +500,105 @@ bool Document::Generate(std::uint32_t seed,ColorScope scope,unsigned selection,u
         if(scope==ColorScope::Ramp && i!=selection) continue;
         const auto ramp=state_.ramps[i];
         bool editable=false;
-        for(unsigned index=ramp.first;index<=ramp.last;++index)
+        for(unsigned index:ramp.Slots())
             editable=editable || (index!=transparent && !state_.pins[index]);
         if(!editable) continue;
         const auto target=color();next.targets[ramp.key]=target;
-        for(unsigned index=ramp.first;index<=ramp.last;++index)
+        for(unsigned index:ramp.Slots())
             if(index!=transparent && !state_.pins[index]) next.colors[index]=Shade(state_.baseline,ramp,index,target);
     }
     return CommitGenerated(std::move(next));
 }
+namespace {
+std::uint64_t Mix(std::uint64_t x) {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+std::uint64_t Key(std::uint32_t seed, std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+    return Mix(Mix(Mix(Mix(0x45465a33ULL ^ seed) ^ a) ^ b) ^ c);
+}
+std::uint32_t RollRange(std::uint64_t key, std::uint64_t domain, int lo, int hi) {
+    if (hi <= lo) return static_cast<std::uint32_t>(lo);
+    const auto span = static_cast<std::uint64_t>(hi - lo) + 1;
+    return static_cast<std::uint32_t>(lo + static_cast<std::int64_t>(Mix(key ^ Mix(domain)) % span));
+}
+enum : std::uint64_t { dHue = 34, dChroma, dLight };
+// Shade slot `c` of an area whose key colour `k` moves to target `t`; `top` = lightest slot.
+Lab ShadeArea(Lab k, Lab t, Lab c, double top) {
+    const double kc = std::hypot(k.a, k.b), tc = std::hypot(t.a, t.b);
+    const double scale = k.l > 1e-6 ? std::min(1., t.l / k.l) : 1.;
+    const double up = top > k.l + 1e-9 && t.l + (top - k.l) * scale > 1 ? (1 - t.l) / (top - k.l) : scale;
+    const double lightness = t.l + (c.l - k.l) * (c.l > k.l ? up : scale);
+    if (kc < 1e-4) return {lightness, c.a + t.a - k.a, c.b + t.b - k.b};
+    const double kh = std::atan2(k.b, k.a), th = std::atan2(t.b, t.a);
+    const double weight = std::max(0., 1 - std::abs(std::remainder(th - kh, 2*pi)) / (pi/2));
+    const double chroma = std::hypot(c.a, c.b) * tc / kc;
+    const double hue = std::hypot(c.a, c.b) < 1e-4 ? th : th + weight * std::remainder(std::atan2(c.b, c.a) - kh, 2*pi);
+    return {lightness, chroma * std::cos(hue), chroma * std::sin(hue)};
+}
+}
+// Recolours the stock bank area by area along each area's shade ramp. Skin, eye whites and the
+// background slot never change. The result replaces the draft: shades a ramp target reproduces stay
+// ramp-driven, the rest become pinned overrides.
+bool Document::RandomPalette(std::uint32_t seed, unsigned transparent) {
+    const auto resource = std::find(std::begin(kPaletteAreaResources), std::end(kPaletteAreaResources), state_.character);
+    if (resource == std::end(kPaletteAreaResources)) return false;
+    const auto charId = static_cast<std::uint8_t>(resource - std::begin(kPaletteAreaResources));
+    const Palette& bank = state_.baseline;
+    Palette out = bank;
+    std::array<bool, 40> locked{};   // protected or already recoloured by an earlier (overlapping) area
+    if (transparent < 40) locked[transparent] = true;
+    for (const auto& a : kPaletteAreas)
+        if (a.ch == charId && (a.kind == PaletteArea::Skin || a.kind == PaletteArea::EyeWhite
+            || a.kind == PaletteArea::Background))
+            for (unsigned i = 0; i < a.count; ++i) locked[a.slots[i]] = true;
+    unsigned areaIndex = 0;
+    for (const auto& a : kPaletteAreas) {
+        if (a.ch != charId) continue;
+        ++areaIndex;
+        if (a.kind == PaletteArea::Skin || a.kind == PaletteArea::EyeWhite || a.kind == PaletteArea::Background) continue;
+        const auto key = Key(seed, 0x504c, charId, areaIndex);
+        const Lab k = ToLab(bank[a.slots[a.count / 2]]);
+        double top = k.l;
+        for (unsigned i = 0; i < a.count; ++i) top = std::max(top, ToLab(bank[a.slots[i]]).l);
+        const double hue = RollRange(key, dHue, 0, 359) * pi / 180;
+        const double kc = std::hypot(k.a, k.b);
+        const double chroma = kc < 0.03 ? RollRange(key, dChroma, 0, 150) / 1000.0              // greys may gain colour
+                                        : std::min(0.32, kc * RollRange(key, dChroma, 60, 140) / 100.0);
+        const double light = std::clamp(k.l + (static_cast<int>(RollRange(key, dLight, 0, 240)) - 120) / 1000.0, 0.12, 0.96);
+        const Lab t{light, chroma * std::cos(hue), chroma * std::sin(hue)};
+        for (unsigned i = 0; i < a.count; ++i) {
+            const auto slot = a.slots[i];
+            if (locked[slot]) continue;
+            out[slot] = FromLab(ShadeArea(k, t, ToLab(bank[slot]), top));
+            locked[slot] = true;
+        }
+    }
+    auto next = state_;
+    next.colors = out; next.targets = {}; next.pins.reset();
+    // Nothing is pinned, so a later ramp edit moves the whole ramp.
+    for (const auto& ramp : state_.ramps)
+        if (out[ramp.key] != bank[ramp.key]) next.targets[ramp.key] = out[ramp.key];
+    return CommitGenerated(std::move(next));
+}
 bool Document::Gradient(unsigned ramp,unsigned transparent,bool hsv) {
     if(ramp>=state_.ramps.size()) return false;
-    unsigned first=state_.ramps[ramp].first,last=state_.ramps[ramp].last;
-    if(first==last) return false;
-    if(first==transparent) ++first;
-    if(last==transparent) --last;
-    if(first>=last) return false;
-    const auto start=state_.colors[first],end=state_.colors[last];
+    auto slots=state_.ramps[ramp].Slots();
+    if(slots.front()==transparent) slots.erase(slots.begin());
+    if(!slots.empty() && slots.back()==transparent) slots.pop_back();
+    if(slots.size()<2) return false;
+    const auto start=state_.colors[slots.front()],end=state_.colors[slots.back()];
     auto a=RgbToHsv(start),b=RgbToHsv(end);
     if(a.s==0) a.h=b.h;
     if(b.s==0) b.h=a.h;
     const float hueDelta=float(Wrap(b.h-a.h+180,360)-180);
     auto next=state_;
-    for(unsigned i=first+1;i<last;++i) {
+    for(unsigned n=1;n+1<slots.size();++n) {
+        const unsigned i=slots[n];
         if(i==transparent || state_.pins[i]) continue;
-        const float t=float(i-first)/float(last-first);
+        const float t=float(n)/float(slots.size()-1);
         const auto mix=[t](float x,float y){return x+(y-x)*t;};
         const auto byte=[&](unsigned x,unsigned y){return std::uint8_t(std::lround(mix(float(x),float(y))));};
         const Color value=hsv?HsvToRgb({a.h+hueDelta*t,mix(a.s,b.s),mix(a.v,b.v)}):
@@ -513,8 +609,9 @@ bool Document::Gradient(unsigned ramp,unsigned transparent,bool hsv) {
 }
 void Document::Import(const Palette& colors) {
     if(state_.colors==colors) return;
-    Checkpoint(); state_.colors=colors; state_.targets={};
-    for(unsigned i=0;i<40;++i) state_.pins[i]=colors[i]!=state_.baseline[i];
+    // Nothing is pinned, so a later ramp edit moves the whole ramp.
+    Checkpoint(); state_.colors=colors; state_.targets={}; state_.pins.reset();
+    for(const auto& ramp:state_.ramps) if(colors[ramp.key]!=state_.baseline[ramp.key]) state_.targets[ramp.key]=colors[ramp.key];
     ResetHsv();
 }
 bool Document::Undo() {

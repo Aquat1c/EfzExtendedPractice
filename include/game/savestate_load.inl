@@ -30,9 +30,10 @@ namespace {
         }
 
         BeginTrackedLoad();
-        bool result = oLoadState ? oLoadState(self) : false;
-        FinishTrackedLoad(result);
-        return result;
+        // Revival's load returns no status: AL is left over from its loop, so the call is the load.
+        const bool nativeResult = oLoadState ? oLoadState(self) : false;
+        FinishTrackedLoad(oLoadState != nullptr);
+        return nativeResult;
     }
 }
 
@@ -45,6 +46,7 @@ namespace SavestateHook {
             LogOut("[SAVESTATE][REVIVAL] TriggerLoad: Practice controller unavailable", true);
             return false;
         }
-        return HookedLoadState(ptr, nullptr);
+        (void)HookedLoadState(ptr, nullptr);
+        return true;
     }
 }

@@ -10,11 +10,10 @@
 #include "gui/custom_menu/scale.h"
 #include "gui/custom_menu/screens.h"
 #include <windows.h>
-#include <shellapi.h>
-#include <shlobj.h>
 #include <commdlg.h>
 #include <d3d9.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -31,6 +30,8 @@ ContextProvider g_contextProvider = nullptr;
 UseSlot g_useSlot = nullptr;
 ApplyColors g_applyColors = nullptr;
 RestorePreview g_restorePreview = nullptr;
+using FileDialog = bool (*)(const std::filesystem::path& initial, std::filesystem::path& selected, std::string& error);
+FileDialog g_fileDialog = nullptr;
 std::atomic<bool> g_suspendRequested{false};
 std::atomic<bool> g_open{false};
 IDirect3DDevice9* g_device = nullptr;
@@ -50,13 +51,13 @@ struct State {
     bool mouseHelp = false;
     float helpMouseX = -1, helpMouseY = -1;
     I18n::Language language = I18n::English;
-    int category = 1, moveChoice = 0, toolChoice = 0;
+    int category = 1, moveChoice = 0, toolChoice = 0, saveChoice = 0;
     std::optional<Model::Color> copiedColor;
     bool closeRequested = false, focusAbove = false, panMode = false, classesKnown = false, keyboardGesture = false;
     int keyboardChannel = -1;
     int components[3]{}, stock = 0;
     int animation = 0, frame = 0, zoom = 100, panX = 0, panY = 0, compare = 0;
-    bool playing = true, marking = false, pin = false, dragging = false;
+    bool playing = false, marking = false, pin = false, dragging = false;
     bool panning = false, live = true, alternate = false, previewWheel = false, autoFit = true;
     int sliderRow = -1;
     float sliderLeft = 0, sliderWidth = 0;
@@ -69,7 +70,6 @@ struct State {
     std::vector<std::string> moveLabels;
     std::vector<const char*> moveOptions;
     std::vector<int> moveCategories, moveIndices, choiceCategories;
-    std::optional<Model::PaletteFile> source;
     Screens::ScrollState popupScroll;
     DWORD statusTick = 0;
     std::string status, assetWarning, liveStatus, nativeName;
@@ -82,8 +82,10 @@ struct State {
     bool lowerCase = false;
 };
 State g;
-using FileDialog = bool (*)(bool save,const std::filesystem::path& initial,std::filesystem::path& selected,std::string& error);
-FileDialog g_fileDialog = nullptr;
+constexpr ImU32 kButtonFill=IM_COL32(30,36,44,255),kButtonHover=IM_COL32(46,56,68,255),kButtonFocus=IM_COL32(18,80,100,255),
+    kButtonEdge=IM_COL32(100,114,128,255),kButtonText=IM_COL32(228,232,236,255),kButtonOff=IM_COL32(18,20,23,255),
+    kAccent=IM_COL32(105,235,235,255);
+enum class Mark {None,Dropdown,Cycle};
 
 bool HsvControls() {return g.colorControls!=State::ColorControls::RGB;}
 bool Modal() { return bool(g.confirm) || g.textKind != State::TextKind::None; }
@@ -126,6 +128,7 @@ void GuardDraft(std::function<void()> action) {
 void SyncColor() {
     if (g.document.Ramps().empty()) g.target = 0;
     g.color = (std::clamp)(g.color,0,39);
+    if (!g.target && unsigned(g.color) == g.document.Background()) g.color = (g.color + 1) % 40;
     g.ramp = (std::clamp)(g.ramp,0,(std::max)(0,int(g.document.Ramps().size())-1));
     if (g.target && !g.document.Ramps().empty()) g.color = int(g.document.Ramps()[g.ramp].key);
     const auto c = g.target ? g.document.RampColor(unsigned(g.ramp)) : g.document.Colors()[g.color];
@@ -259,7 +262,7 @@ void BuildMoveChoices() {
     FilterMoves();
     if(g.moveIndices.empty()) {g.category=0;FilterMoves();}
 }
-void ResetPreview() { g.animation=0; g.frame=0; g.elapsed=0; g.panX=0; g.panY=0;g.autoFit=true; }
+void ResetPreview() { g.animation=0; g.frame=0; g.elapsed=0; g.playing=false; g.panX=0; g.panY=0;g.autoFit=true; }
 void LoadPlayer(int player) {
     Context context;
     std::string error;
@@ -279,7 +282,7 @@ void LoadPlayer(int player) {
     g.alternate=false;
     g.stock=(std::clamp)(g.context.stockSlot,0,5);
     g.document.LoadStock(g.context.resourceName,unsigned(g.stock),g.assets.stockPalettes[g.stock]);
-    g.source.reset();g.nativeName.clear();
+    g.nativeName.clear();
     std::string nativeError;
     if(g.context.hasCustom) {
         Model::Palette colors;
@@ -304,86 +307,106 @@ g.loaded=true;
     Neutral();
 }
 void SwitchPlayer() { const int player=3-g.player; GuardDraft([player]{LoadPlayer(player);}); }
-void LoadStock() {
-    const int slot=g.stock;g.stock=int(g.document.State().stockSlot);
-    GuardDraft([slot]{
+void OpenColor(int slot,bool custom) {
+    GuardDraft([slot,custom]{
         g.stock=slot;
         g.document.LoadStock(g.context.resourceName,unsigned(slot),g.assets.stockPalettes[slot]);
-        g.source.reset();g.nativeName.clear(); g.target=1; SyncColor();
-        Status(I18n::TrFormat("Stock %d loaded.",slot+1)); Neutral();
+        g.nativeName.clear();
+        std::string error;
+        if(custom) {
+            const auto path=NativePath(slot,true);Model::Palette colors;
+            if(Model::ReadNativePalette(path,colors,error)) {
+                g.document.Import(colors);g.document.MarkSaved();g.nativeName=path.filename().u8string();
+            }
+        }
+        g.target=1; SyncColor();
+        Status(!error.empty()?error:g.nativeName.empty()?I18n::TrFormat("Stock %d loaded.",slot+1):I18n::TrFormat("Loaded %s.",g.nativeName.c_str())); Neutral();
     });
+}
+struct ColorEntry { int slot; bool custom; };
+// Each stock colour, followed by its custom palette when one is saved.
+std::vector<ColorEntry> ColorEntries() {
+    std::vector<ColorEntry> entries;std::error_code missing;
+    for(int slot=0;slot<6;++slot) {
+        entries.push_back({slot,false});
+        if(std::filesystem::exists(NativePath(slot,true),missing)) entries.push_back({slot,true});
+    }
+    return entries;
+}
+int CurrentColorEntry(const std::vector<ColorEntry>& entries) {
+    for(size_t i=0;i<entries.size();++i)
+        if(entries[i].slot==g.stock && entries[i].custom==!g.nativeName.empty()) return int(i);
+    return 0;
+}
+std::string ColorLabel(int slot,bool custom) { return I18n::TrFormat(custom?"CUSTOM %d":"COLOR %d",slot+1); }
+std::vector<ColorEntry> g_colorEntries;
+std::vector<std::string> g_colorLabels;
+std::vector<const char*> g_colorItems;
+int g_colorChoice=0;
+void ColorChoiceChanged() {
+    if(g_colorChoice>=0 && g_colorChoice<int(g_colorEntries.size()))
+        OpenColor(g_colorEntries[g_colorChoice].slot,g_colorEntries[g_colorChoice].custom);
+}
+void StepColor(int direction) {
+    const auto entries=ColorEntries();const int count=int(entries.size());
+    const auto entry=entries[(CurrentColorEntry(entries)+direction+count)%count];
+    OpenColor(entry.slot,entry.custom);
+}
+std::wstring WideText(const std::string& text) {
+    std::wstring wide(text.size()+1,L'\0');
+    const int length=MultiByteToWideChar(CP_UTF8,0,text.c_str(),-1,wide.data(),int(wide.size()));
+    wide.resize(length>0?size_t(length-1):0);return wide;
+}
+bool NativeFileDialog(const std::filesystem::path& initial,std::filesystem::path& selected,std::string& error) {
+    std::array<wchar_t,32768> filename{};
+    const auto directory=initial.parent_path().wstring();
+    std::wstring filters=WideText(I18n::Tr("Palette files (*.pal)"));
+    filters.push_back(L'\0');filters+=L"*.pal";filters.push_back(L'\0');filters.push_back(L'\0');
+    const auto title=WideText(I18n::Tr("Open palette"));
+    OPENFILENAMEW dialog{};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=GetForegroundWindow();
+    dialog.lpstrFile=filename.data();dialog.nMaxFile=DWORD(filename.size());dialog.lpstrInitialDir=directory.c_str();
+    dialog.lpstrFilter=filters.c_str();dialog.lpstrTitle=title.c_str();dialog.nFilterIndex=1;
+    dialog.Flags=OFN_EXPLORER|OFN_PATHMUSTEXIST|OFN_FILEMUSTEXIST|OFN_NOCHANGEDIR;
+    error.clear();
+    if(!GetOpenFileNameW(&dialog)) {if(CommDlgExtendedError()) error="The palette file chooser could not open.";return false;}
+    selected=std::filesystem::path(filename.data());return true;
+}
+// Imports into the draft only; the file is never written back.
+void LoadFile() {
+    g.document.EndGesture();g.dragging=false;g.sliderRow=-1;
+    std::filesystem::path path;std::string error;
+    if(!(g_fileDialog?g_fileDialog:NativeFileDialog)(NativePath(g.stock,true),path,error)) {if(!error.empty()) Status(error);Neutral();return;}
+    Model::Palette colors;
+    if(!Model::ReadNativePalette(path,colors,error)) {Status(error);Neutral();return;}
+    g.document.Import(colors);SyncColor();
+    Status(I18n::TrFormat("Loaded colors from %s. Undo restores the previous colors.",path.filename().u8string().c_str()));Neutral();
 }
 bool NoRamps() { return g.document.Ramps().empty(); }
 bool NoUndo() { return g.document.UndoCount()==0; }
 bool NoAnimations() { return g.assets.animations.empty() || g.moveIndices.empty(); }
-std::wstring WideText(const char* text) {
-    const int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text,-1,nullptr,0);
-    if(count<=0) return {};
-    std::wstring result(size_t(count),L'\0');
-    MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text,-1,&result[0],count);
-    result.pop_back();return result;
-}
-bool NativeFileDialog(bool save,const std::filesystem::path& initial,std::filesystem::path& selected,std::string& error) {
-    std::array<wchar_t,32768> filename{};
-    const auto initialName=initial.filename().wstring(),directory=initial.parent_path().wstring();
-    if(save) wcsncpy_s(filename.data(),filename.size(),initialName.c_str(),_TRUNCATE);
-    std::wstring filters;
-    const auto append=[&](const char* label,const wchar_t* pattern) {
-        filters+=WideText(I18n::Tr(label));filters.push_back(L'\0');filters+=pattern;filters.push_back(L'\0');
+void SaveSlot(int slot=-1) {
+    if(slot<0) slot=g.stock;
+    const auto path=NativePath(slot,false);const auto name=path.filename().u8string();
+    const auto write=[slot,path,name] {
+        std::string error;
+        const auto colors=g.document.Colors();
+        if(!Model::ExportNativePalette(path,colors,true,error)) {Status(error);return;}
+        // Saving to another colour moves the editor onto it, over that colour's stock baseline.
+        if(slot!=g.stock) {
+            g.stock=slot;g.document.LoadStock(g.context.resourceName,unsigned(slot),g.assets.stockPalettes[slot]);
+            g.document.Import(colors);SyncColor();
+        }
+        g.document.MarkSaved();g.nativeName=name;
+        const bool used=g_useSlot?g_useSlot(g.player,g.context.resourceName,slot,error):
+            g_applyColors && g_applyColors(g.player,g.context.resourceName,g.document.Colors(),error);
+        if(used) g.compare=0;
+        Status(I18n::TrFormat(used?"Saved %s and applied it to this match.":"Saved %s.",name.c_str()));
     };
-    if(!save) append("Palette files (*.json;*.pal)",L"*.json;*.pal");
-    append("Palette document (*.json)",L"*.json");append("Native palette (*.pal)",L"*.pal");filters.push_back(L'\0');
-    const auto title=WideText(I18n::Tr(save?"Save palette as":"Open palette"));
-    OPENFILENAMEW dialog{};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=GetForegroundWindow();
-    dialog.lpstrFile=filename.data();dialog.nMaxFile=DWORD(filename.size());dialog.lpstrInitialDir=directory.c_str();
-    dialog.lpstrFilter=filters.c_str();dialog.lpstrTitle=title.c_str();dialog.lpstrDefExt=L"json";dialog.nFilterIndex=1;
-    dialog.Flags=OFN_EXPLORER|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|(save?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST);
-    error.clear();
-    const bool accepted=save?GetSaveFileNameW(&dialog)!=FALSE:GetOpenFileNameW(&dialog)!=FALSE;
-    if(!accepted) {if(CommDlgExtendedError()) error="The palette file dialog could not open.";return false;}
-    selected=std::filesystem::path(filename.data());return true;
+    std::error_code missing;
+    if(std::filesystem::exists(path,missing))
+        Confirm("REPLACE PALETTE",I18n::TrFormat("Replace %s with these colors?",name.c_str()),"REPLACE",write);
+    else write();
 }
-std::filesystem::path InitialPalettePath() {
-    return g.source?g.source->path:g.context.libraryDirectory/(g.context.resourceName+".json");
-}
-bool LoadPalettePath(const std::filesystem::path& path) {
-    Model::PaletteFile file;std::string error;
-    if(!Model::ReadPaletteFile(path,file,error)) {Status(error);return false;}
-    if(!file.native && file.palette.character!=g.context.resourceName) {Status("Palette belongs to a different character.");return false;}
-    if(file.native) {
-        g.document.LoadStock(g.context.resourceName,unsigned(g.stock),g.assets.stockPalettes[g.stock]);
-        g.document.Import(file.palette.colors);g.document.SetName(file.palette.name);g.document.MarkSaved();
-    } else if(file.palette.stockSlot>=6 || !g.document.LoadSaved(file.palette,g.assets.stockPalettes[file.palette.stockSlot],error)) {
-        Status(error.empty()?"Invalid stock slot.":error);return false;
-    } else g.stock=int(file.palette.stockSlot);
-    g.source=std::move(file);g.nativeName.clear();g.target=1;SyncColor();Neutral();
-    Status(I18n::TrFormat("Loaded %s.",g.source->path.filename().u8string().c_str()));return true;
-}
-void LoadFile() {
-    std::filesystem::path path;std::string error;
-    const bool accepted=(g_fileDialog?g_fileDialog:NativeFileDialog)(false,InitialPalettePath(),path,error);
-    Neutral();if(!accepted) {if(!error.empty()) Status(error);return;}
-    GuardDraft([path]{LoadPalettePath(path);});
-}
-bool SavePalettePath(const std::filesystem::path& path,std::optional<uint64_t> expected) {
-    Model::PaletteFile saved;std::string error;
-    if(!Model::SavePaletteFile(path,g.document.State(),expected,saved,error)) {Status(error);return false;}
-    g.source=std::move(saved);g.document.SetName(g.source->palette.name);g.document.MarkSaved();
-    Status(I18n::TrFormat(g.source->native?"Saved colors to %s. PAL files do not store ramps or pins.":"Saved %s.",g.source->path.filename().u8string().c_str()));return true;
-}
-void SaveAs() {
-    std::filesystem::path path;std::string error;
-    const bool accepted=(g_fileDialog?g_fileDialog:NativeFileDialog)(true,InitialPalettePath(),path,error);
-    Neutral();if(!accepted) {if(!error.empty()) Status(error);return;}
-    std::error_code ec;std::optional<uint64_t> expected;
-    if(std::filesystem::exists(path,ec)) {
-        uint64_t fingerprint=0;
-        if(!Model::ReadPaletteFileIdentity(path,fingerprint,error)) {Status(error);return;}
-        expected=fingerprint;
-    } else if(ec) {Status("Could not read palette file.");return;}
-    SavePalettePath(path,expected);
-}
-void Save() {if(g.source) SavePalettePath(g.source->path,g.source->fingerprint);else SaveAs();}
 void StartText(State::TextKind kind) {
     g.textKind=kind;g.modalOpenedFrame=ImGui::GetCurrentContext()?ImGui::GetFrameCount():-1;
     g.text=Model::FormatHex(g.target?g.document.RampColor(unsigned(g.ramp)):g.document.Colors()[g.color]);g.textFocus=0;
@@ -398,7 +421,6 @@ void ResetSelected() {
 }
 void Undo() { g.document.Undo(); SyncColor(); }
 void ResetAll() { Confirm("RESET COLORS", "Reset all colors and pins to the original stock palette?", "RESET", []{g.document.ResetAll();SyncColor();}); }
-void Revert() { Confirm("REVERT DRAFT", "Restore the last loaded or saved state?", "REVERT", []{g.document.Revert();SyncColor();}); }
 const char* HexValue() { static std::string text; text=Model::FormatHex(g.target ? g.document.RampColor(unsigned(g.ramp)) : g.document.Colors()[g.color]); return text.c_str(); }
 void VariantChanged() {
     Model::CharacterAssets assets;
@@ -525,10 +547,10 @@ void DrawPreview(ImDrawList* dl,float x,float y,float width,float height,bool in
                 else {
                     if(g.target) {
                         const auto& ramps=g.document.Ramps();
-                        const auto found=std::find_if(ramps.begin(),ramps.end(),[index](const Model::Ramp& ramp){return unsigned(index)>=ramp.first && unsigned(index)<=ramp.last;});
+                        const auto found=std::find_if(ramps.begin(),ramps.end(),[index](const Model::Ramp& ramp){return ramp.Has(unsigned(index));});
                         if(found==ramps.end()) {Status("This shade has no ramp; switch to Shade to edit it.");return;}
                         g.ramp=int(found-ramps.begin());SelectRamp();
-                    } else {g.color=index;SelectColor();}
+                    } else if(unsigned(index)!=g.document.Background()) {g.color=index;SelectColor();}
                     Status(g.target?I18n::TrFormat("Picked ramp %d from shade %d.",g.ramp,index):I18n::TrFormat("Picked shade %d.",index));
                 }
             }
@@ -547,6 +569,11 @@ void DrawSwatches(ImDrawList* dl,float x,float y,float width,bool input,float av
     for(int i=0;i<40;++i) {
         const float sx=x+(i%8)*cell,sy=y+(i/8)*height;
         const auto c=g.document.Colors()[i];
+        if(unsigned(i)==g.document.Background()) {
+            dl->AddRect(ImVec2(sx+2,sy+2),ImVec2(sx+cell-2,sy+height-2),Theme::kTextInactive);
+            dl->AddLine(ImVec2(sx+2,sy+height-2),ImVec2(sx+cell-2,sy+2),Theme::kTextInactive);
+            continue;
+        }
         dl->AddRectFilled(ImVec2(sx+2,sy+2),ImVec2(sx+cell-2,sy+height-2),IM_COL32(c.r,c.g,c.b,255));
         if(i==g.color) dl->AddRect(ImVec2(sx,sy),ImVec2(sx+cell,sy+height),Theme::kSelectedLine,0,0,2);
         const auto color=(int(c.r)*299+int(c.g)*587+int(c.b)*114)>140000?IM_COL32(0,0,0,255):IM_COL32(255,255,255,255);
@@ -577,25 +604,60 @@ std::string ButtonLabel(const std::string& text,float width) {
     }
     return fitted+"...";
 }
+void ButtonFrame(ImDrawList* dl,float x,float y,float width,float height,bool focused,bool hovered,bool disabled) {
+    dl->AddRectFilled(ImVec2(x,y),ImVec2(x+width,y+height),disabled?kButtonOff:focused?kButtonFocus:hovered?kButtonHover:kButtonFill);
+    dl->AddRect(ImVec2(x+0.5f,y+0.5f),ImVec2(x+width-0.5f,y+height-0.5f),disabled?Theme::kTextDisabled:focused?kAccent:kButtonEdge);
+}
+void EndEdits() {g.document.EndGesture();g.keyboardGesture=false;g.sliderRow=-1;g.dragging=false;}
 bool EditorButton(ImDrawList* dl,int focus,float x,float y,float width,float height,
-                  const std::string& label,bool input,bool disabled=false,bool tabStyle=false) {
-    if(g.mouseHelp && Input::MouseHovering(x,y,width,height)) g.helpControl=focus;
+                  const std::string& label,bool input,bool disabled=false,Mark mark=Mark::None) {
+    const bool hovered=g.mouseHelp && Input::MouseHovering(x,y,width,height);
+    if(hovered) g.helpControl=focus;
     const bool clicked=input && !disabled && Input::MouseClickedIn(x,y,width,height);
     if(clicked) g.editorFocus=focus;
-    if(clicked || (input && g.editorFocus==focus && Input::Activate())) {g.document.EndGesture();g.keyboardGesture=false;g.sliderRow=-1;g.dragging=false;}
+    const bool pressed=clicked || (input && g.editorFocus==focus && Input::Activate());
+    if(pressed) EndEdits();
+    const bool focused=g.editorFocus==focus;
+    const ImU32 color=disabled?Theme::kTextDisabled:focused?Theme::kTextActive:kButtonText;
+    ButtonFrame(dl,x,y,width,height,focused,hovered,disabled);
     dl->PushClipRect(ImVec2(x,y),ImVec2(x+width,y+height),true);
-    const std::string fitted=ButtonLabel(label,width-16);
-    dl->AddRectFilled(ImVec2(x,y),ImVec2(x+width,y+height),Theme::kStrip | IM_COL32_A_MASK);
-    if(tabStyle) {
-        const bool focused=g.editorFocus==focus || g.helpControl==focus;
-        const ImU32 color=disabled?Theme::kTextDisabled:focused?Theme::kTextActive:Theme::kTextInactive;
-        if(focused) dl->AddRectFilled(ImVec2(x,y),ImVec2(x+width,y+height),Theme::kSelectedFill | IM_COL32_A_MASK);
-        dl->AddLine(ImVec2(x+4,y+height-2),ImVec2(x+width-4,y+height-2),focused?Theme::kSelectedLine:Theme::kTextInactive,focused?2.0f:1.0f);
-        const float textWidth=Layout::MeasureTextW(Layout::BodyFont(),Scale::Get().bodyPx,fitted.c_str());
-        Text(dl,x+(width-textWidth)/2,y+(height-Scale::Get().bodyPx)/2-1,fitted,color);
-    } else Layout::DrawButton(dl,x,y,width,height,fitted.c_str(),g.editorFocus==focus,disabled);
+    const float pad=mark==Mark::None?16.0f:mark==Mark::Dropdown?20.0f:30.0f,cy=y+height/2;
+    const std::string fitted=ButtonLabel(label,width-pad);
+    const float textWidth=Layout::MeasureTextW(Layout::BodyFont(),Scale::Get().bodyPx,fitted.c_str());
+    const float textX=mark==Mark::Dropdown?x+(width-14-textWidth)/2:x+(width-textWidth)/2;
+    Text(dl,std::floor(textX),std::floor(y+(height-Scale::Get().bodyPx)/2),fitted,color);
+    if(mark==Mark::Dropdown)
+        dl->AddTriangleFilled(ImVec2(x+width-14,cy-2),ImVec2(x+width-6,cy-2),ImVec2(x+width-10,cy+3),color);
+    else if(mark==Mark::Cycle) {
+        dl->AddTriangleFilled(ImVec2(x+9,cy-4),ImVec2(x+9,cy+4),ImVec2(x+5,cy),color);
+        dl->AddTriangleFilled(ImVec2(x+width-9,cy-4),ImVec2(x+width-9,cy+4),ImVec2(x+width-5,cy),color);
+    }
     dl->PopClipRect();
-    return !disabled && (clicked || (input && g.editorFocus==focus && Input::Activate()));
+    return !disabled && pressed;
+}
+// Returns the newly chosen segment, or -1.
+int Segmented(ImDrawList* dl,int focus,float x,float y,float width,float height,
+              const char* const* labels,int count,int active,bool input) {
+    if(g.mouseHelp && Input::MouseHovering(x,y,width,height)) g.helpControl=focus;
+    const float cell=width/count,px=Scale::Get().bodyPx;
+    int picked=-1;
+    for(int i=0;i<count;++i) {
+        const float sx=std::floor(x+i*cell),ex=i+1==count?x+width:std::floor(x+(i+1)*cell);
+        const bool hovered=g.mouseHelp && Input::MouseHovering(sx,y,ex-sx,height);
+        if(input && Input::MouseClickedIn(sx,y,ex-sx,height)) {g.editorFocus=focus;picked=i;}
+        dl->AddRectFilled(ImVec2(sx,y),ImVec2(ex,y+height),i==active?kButtonFocus:hovered?kButtonHover:kButtonFill);
+        const std::string fitted=ButtonLabel(labels[i],ex-sx-6);
+        const float textWidth=Layout::MeasureTextW(Layout::BodyFont(),px,fitted.c_str());
+        Text(dl,std::floor(sx+(ex-sx-textWidth)/2),std::floor(y+(height-px)/2),fitted,i==active?Theme::kTextActive:Theme::kTextInactive);
+        if(i) dl->AddLine(ImVec2(sx+0.5f,y),ImVec2(sx+0.5f,y+height),kButtonEdge);
+    }
+    dl->AddRect(ImVec2(x+0.5f,y+0.5f),ImVec2(x+width-0.5f,y+height-0.5f),g.editorFocus==focus?kAccent:kButtonEdge);
+    if(picked<0 && input && g.editorFocus==focus && Input::Activate()) picked=(active+1)%count;
+    if(picked<0 || picked==active) return -1;
+    EndEdits();return picked;
+}
+void Led(ImDrawList* dl,float x,float y,bool on) {
+    dl->AddRectFilled(ImVec2(x,y),ImVec2(x+5,y+5),on?kAccent:IM_COL32(64,72,80,255));
 }
 bool EditorIcon(ImDrawList* dl,int focus,float x,float y,bool input,bool disabled=false) {
     const bool clicked=EditorButton(dl,focus,x,y,26,26,"",input,disabled);
@@ -634,14 +696,19 @@ bool EditorIcon(ImDrawList* dl,int focus,float x,float y,bool input,bool disable
         dl->AddRectFilled(ImVec2(cx-3,cy-8),ImVec2(cx+3,cy-3),color);
         dl->AddLine(ImVec2(cx-3,cy+1),ImVec2(cx+3,cy+1),color);
         dl->AddLine(ImVec2(cx-3,cy+4),ImVec2(cx+3,cy+4),color);break;
+    case 23:
+        dl->PathLineTo(ImVec2(cx-7,cy+6));dl->PathLineTo(ImVec2(cx-7,cy-6));dl->PathLineTo(ImVec2(cx-2,cy-6));
+        dl->PathLineTo(ImVec2(cx,cy-4));dl->PathLineTo(ImVec2(cx+7,cy-4));dl->PathLineTo(ImVec2(cx+7,cy+6));
+        dl->PathStroke(color,ImDrawFlags_Closed,1.5f);
+        dl->AddLine(ImVec2(cx-7,cy-1),ImVec2(cx+7,cy-1),color,1.5f);break;
     }
     return clicked;
 }
 enum class ColorTool { Generate, Randomize, GradientRgb, GradientHsv, Lighten, Darken, Copy, Paste };
-constexpr const char* kColorTools[]={"Generate palette","Randomize selection","RGB gradient","HSV gradient"};
+constexpr const char* kColorTools[]={"Random palette","Randomize selection","RGB gradient","HSV gradient","Reset all colors"};
 const char* ColorToolHelp(const Screens::Row&,int choice) {
     static const char* help[]={
-        "Generate new ramp colors for the whole palette. Pins and transparency are protected; Undo restores the draft.",
+        "Give hair, clothes and accessories random colors along their own shading. Skin, eye whites and transparency are kept; Undo restores the draft.",
         "Randomize the selected ramp or shade. Pins and transparency are protected.",
         "Blend between this ramp's endpoint colors in RGB. Changed shades become pinned overrides; existing pins are kept.",
         "Blend this ramp's endpoints along the shortest hue path. Changed shades become pinned overrides; existing pins are kept.",
@@ -661,10 +728,11 @@ void RunColorTool(ColorTool tool) {
     if(tool==ColorTool::Generate || tool==ColorTool::Randomize) {
         static std::mt19937 random(GetTickCount());
         const auto scope=tool==ColorTool::Generate?Model::ColorScope::Palette:g.target?Model::ColorScope::Ramp:Model::ColorScope::Shade;
-        changed=g.document.Generate(random(),scope,unsigned(g.target?g.ramp:g.color),g.assets.transparentKey);
+        changed=(tool==ColorTool::Generate && g.document.RandomPalette(random(),g.assets.transparentKey)) ||
+            g.document.Generate(random(),scope,unsigned(g.target?g.ramp:g.color),g.assets.transparentKey);
     } else if(tool==ColorTool::GradientRgb || tool==ColorTool::GradientHsv) {
         const auto& ramps=g.document.Ramps();
-        const auto ramp=std::find_if(ramps.begin(),ramps.end(),[](const auto& r){return unsigned(g.color)>=r.first && unsigned(g.color)<=r.last;});
+        const auto ramp=std::find_if(ramps.begin(),ramps.end(),[](const auto& r){return r.Has(unsigned(g.color));});
         if(ramp!=ramps.end()) changed=g.document.Gradient(unsigned(ramp-ramps.begin()),g.assets.transparentKey,tool==ColorTool::GradientHsv);
     } else if(tool==ColorTool::Lighten || tool==ColorTool::Darken || tool==ColorTool::Paste) {
         const int step=tool==ColorTool::Lighten?16:-16;
@@ -675,7 +743,10 @@ void RunColorTool(ColorTool tool) {
     }
     SyncColor();Status(changed?"Palette tool applied. Undo restores the previous edit.":"No editable colors changed. Check pins and the selected ramp.");
 }
-void ToolChoiceChanged() {RunColorTool(static_cast<ColorTool>(g.toolChoice));}
+const char* ToolChoiceHelp(const Screens::Row& row,int choice) {
+    return choice==4?"Reset every color and pin to the original stock palette.":ColorToolHelp(row,choice);
+}
+void ToolChoiceChanged() {if(g.toolChoice==4) ResetAll();else RunColorTool(static_cast<ColorTool>(g.toolChoice));}
 void OpenEditorChoice(const Screens::Row& row) {
     Screens::OpenDropdownPopup(row);Neutral();
 }
@@ -694,8 +765,7 @@ void CompactSlider(ImDrawList* dl,int component,float x,float y,float width,bool
         const int value=int(std::lround(fraction*maximum));
         if(g.components[component]!=value) {g.components[component]=value;ApplyComponents();}
     }
-    dl->AddRectFilled(ImVec2(x,y),ImVec2(x+width,y+height),Theme::kStrip | IM_COL32_A_MASK);
-    Layout::DrawButton(dl,x,y,width,height,"",g.editorFocus==focus);
+    ButtonFrame(dl,x,y,width,height,g.editorFocus==focus,false,false);
     const float textY=y+(height-Scale::Get().bodyPx)/2;
     const char* rgb[]={"R","G","B"};const char* hsv[]={"H","S","V"};
     Text(dl,x+10,textY,HsvControls()?hsv[component]:rgb[component],Theme::kTextInactive);
@@ -769,10 +839,10 @@ struct RampGridLayout {int repRows,shadeRows;float repHeight,shadeY,shadeHeight;
 RampGridLayout RampGridGeometry(const std::vector<Model::Ramp>& ramps,int selected,float height) {
     const int repRows=(int(ramps.size())+9)/10;
     int maxShadeRows=1;
-    for(const auto& ramp:ramps) maxShadeRows=(std::max)(maxShadeRows,(int(ramp.last-ramp.first)+8)/8);
+    for(const auto& ramp:ramps) maxShadeRows=(std::max)(maxShadeRows,(int(ramp.Size())+7)/8);
     const float labelHeight=Scale::Get().bodyPx+9;
     const float repHeight=(std::min)(24.0f,(height-labelHeight-(std::max)(24.0f,maxShadeRows*8.0f))/repRows);
-    const auto& ramp=ramps[selected];const int shadeRows=(int(ramp.last-ramp.first)+8)/8;
+    const auto& ramp=ramps[selected];const int shadeRows=(int(ramp.Size())+7)/8;
     const float shadeY=repRows*repHeight+labelHeight;
     return {repRows,shadeRows,repHeight,shadeY,(std::min)(25.0f,(height-shadeY)/shadeRows)};
 }
@@ -793,11 +863,13 @@ void DrawRampGrid(ImDrawList* dl,float x,float y,float width,float height,bool i
     }
     const auto& ramp=ramps[g.ramp];
     const float labelY=y+geometry.repRows*geometry.repHeight+3;
-    Text(dl,x,labelY,I18n::TrFormat("SHADES %d - %d",ramp.first,ramp.last),Theme::kTextInactive);
-    const int shadeRows=(int(ramp.last-ramp.first)+8)/8;
+    std::string list;
+    for(unsigned slot:ramp.Slots()) list+=(list.empty()?"":" ")+std::to_string(slot);
+    Text(dl,x,labelY,ramp.count?I18n::TrFormat("SHADES %s",list.c_str()):I18n::TrFormat("SHADES %d - %d",ramp.first,ramp.last),Theme::kTextInactive);
+    const int shadeRows=(int(ramp.Size())+7)/8;
     const float shadeY=y+geometry.shadeY,shadeHeight=(std::min)(25.0f,(height-geometry.shadeY)/shadeRows),shadeWidth=width/8;
-    for(unsigned i=ramp.first;i<=ramp.last;++i) {
-        const unsigned slot=i-ramp.first;
+    for(unsigned slot=0;slot<ramp.Size();++slot) {
+        const unsigned i=ramp.At(slot);
         const float sx=x+(slot%8)*shadeWidth,sy=shadeY+(slot/8)*shadeHeight;
         const auto color=g.document.Colors()[i];
         dl->AddRectFilled(ImVec2(sx+2,sy+2),ImVec2(sx+shadeWidth-2,sy+shadeHeight-2),IM_COL32(color.r,color.g,color.b,255));
@@ -819,7 +891,7 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
         if(Input::NavUp()) g.panY=(std::max)(-2048,g.panY-4);if(Input::NavDown()) g.panY=(std::min)(2048,g.panY+4);
         if(Input::Activate() || Input::Back()) {g.panMode=false;Neutral();input=false;}
     } else if(input && g.sliderRow<0 && g.pickerInput==State::PickerInput::Idle) {
-        static const int order[]={22,9,28,0,1,2,3,4,5,6,7,8,29,30,31,32,10,26,11,12,13,14,15,16,17,18,19,23,24,25,20,21};
+        static const int order[]={22,9,28,0,1,2,3,4,5,6,7,8,29,30,31,32,23,10,26,11,12,13,14,15,16,17,18,19,21,20,24};
         if(Input::NavUp() || Input::NavDown()) {
             int position=int(std::find(std::begin(order),std::end(order),g.editorFocus)-std::begin(order));
             if(position==0 && Input::NavUp()) {g.focusAbove=true;Neutral();input=false;}
@@ -835,7 +907,11 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
         if(direction) switch(g.editorFocus) {
         case 0:
             if(g.target && !NoRamps()) {g.ramp=(g.ramp+direction+int(g.document.Ramps().size()))%int(g.document.Ramps().size());SelectRamp();}
-            else {g.color=(g.color+direction+40)%40;SelectColor();}break;
+            else {
+                g.color=(g.color+direction+40)%40;
+                if(unsigned(g.color)==g.document.Background()) g.color=(g.color+direction+40)%40;
+                SelectColor();
+            }break;
         case 1:CycleColorControls();break;
         case 3:case 4:case 5: {
             if(g.colorControls==State::ColorControls::Picker) break;
@@ -844,7 +920,7 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
             g.components[component]=(std::clamp)(g.components[component]+direction*(ImGui::GetIO().KeyShift?10:1),0,maximum);ApplyComponents();break;
         }
         case 6:g.pin=direction>0;Pin();break;
-        case 9:g.stock=(g.stock+direction+6)%6;LoadStock();break;
+        case 9:StepColor(direction);break;
         case 10:if(!g.moveIndices.empty()){g.moveChoice=(g.moveChoice+direction+int(g.moveIndices.size()))%int(g.moveIndices.size());MoveChoiceChanged();}break;
         case 11:case 12:case 13:Step(direction);break;
         case 14:g.zoom=(std::clamp)(g.zoom+direction*25,25,400);ZoomChanged();break;
@@ -858,33 +934,41 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
         if(Input::Back()) {g.closeRequested=true;Neutral();input=false;}
     }
     bool controls=input && !g.panMode && g.pickerInput==State::PickerInput::Idle && !Modal();
-    if(EditorButton(dl,22,left,top,64,20,"P"+std::to_string(g.player)+"  <>",controls)) SwitchPlayer();
+    static const char* players[]={"P1","P2"};
+    if(Segmented(dl,22,left,top,60,20,players,2,g.player-1,controls)>=0) SwitchPlayer();
     static const char* slots[]={"1","2","3","4","5","6"};
-    if(EditorButton(dl,9,left+70,top,100,20,I18n::TrFormat("Stock %d",g.stock+1),controls))
-        OpenEditorChoice(Screens::DropdownRow("Stock palette",&g.stock,slots,6,LoadStock));
-    if(EditorButton(dl,28,left+176,top,76,20,"TOOLS",controls)) {
+    if(EditorButton(dl,9,left+64,top,108,20,ColorLabel(g.stock,!g.nativeName.empty()),controls,false,Mark::Dropdown)) {
+        g_colorEntries=ColorEntries();g_colorLabels.clear();g_colorItems.clear();
+        for(const auto& entry:g_colorEntries) g_colorLabels.push_back(ColorLabel(entry.slot,entry.custom));
+        for(const auto& label:g_colorLabels) g_colorItems.push_back(label.c_str());
+        g_colorChoice=CurrentColorEntry(g_colorEntries);
+        OpenEditorChoice(Screens::DropdownRow("Color",&g_colorChoice,g_colorItems.data(),int(g_colorItems.size()),ColorChoiceChanged));
+    }
+    if(EditorButton(dl,28,left+176,top,76,20,"TOOLS",controls,false,Mark::Dropdown)) {
         g.toolChoice=0;
         auto row=Screens::DropdownRow("Palette tools",&g.toolChoice,kColorTools,int(std::size(kColorTools)),ToolChoiceChanged);
-        row.choiceHelpFormatter=ColorToolHelp;OpenEditorChoice(row);
+        row.choiceHelpFormatter=ToolChoiceHelp;OpenEditorChoice(row);
     }
-    const std::string selection=g.target?I18n::TrFormat("RAMP %d  /  SHADE",g.ramp):I18n::TrFormat("SHADE %d  /  RAMP",g.color);
-    if(EditorButton(dl,0,left,top+24,width,20,selection,controls)) {g.target=g.target?0:1;SyncColor();}
+    static const char* targets[]={"RAMPS","SHADES"};
+    const int picked=Segmented(dl,0,left,top+24,width,20,targets,2,g.target?0:1,controls);
+    if(picked>=0) {g.target=picked==0;SyncColor();}
     if(g.target) DrawRampGrid(dl,left,top+50,width,80,controls);
     else DrawSwatches(dl,left,top+50,width,controls,80);
     const char* colorMode=g.colorControls==State::ColorControls::Picker?"PICKER":HsvControls()?"HSV":"RGB";
-    if(EditorButton(dl,1,left,top+136,88,20,colorMode,controls)) CycleColorControls();
-    if(EditorButton(dl,2,left+94,top+136,158,20,HexValue(),controls)) EditHex();
+    if(EditorButton(dl,1,left,top+136,100,20,colorMode,controls,false,Mark::Cycle)) CycleColorControls();
+    if(EditorButton(dl,2,left+106,top+136,146,20,HexValue(),controls)) EditHex();
     if(g.colorControls==State::ColorControls::Picker) DrawColorPicker(dl,left,top+162,width,input && !g.panMode && !Modal());
     else for(int component=0;component<3;++component) CompactSlider(dl,component,left,top+162+component*26,width,controls);
-    if(EditorIcon(dl,6,left+5,top+254,controls)) {g.pin=!g.pin;Pin();}
-    if(EditorIcon(dl,7,left+41,top+254,controls)) ResetSelected();
-    if(EditorIcon(dl,8,left+77,top+254,controls,NoUndo())) Undo();
-    if(EditorIcon(dl,29,left+113,top+254,controls)) RunColorTool(ColorTool::Lighten);
-    if(EditorIcon(dl,30,left+149,top+254,controls)) RunColorTool(ColorTool::Darken);
-    if(EditorIcon(dl,31,left+185,top+254,controls)) RunColorTool(ColorTool::Copy);
-    if(EditorIcon(dl,32,left+221,top+254,controls,!g.copiedColor)) RunColorTool(ColorTool::Paste);
+    if(EditorIcon(dl,6,left+2,top+254,controls)) {g.pin=!g.pin;Pin();}
+    if(EditorIcon(dl,7,left+34,top+254,controls)) ResetSelected();
+    if(EditorIcon(dl,8,left+66,top+254,controls,NoUndo())) Undo();
+    if(EditorIcon(dl,29,left+98,top+254,controls)) RunColorTool(ColorTool::Lighten);
+    if(EditorIcon(dl,30,left+130,top+254,controls)) RunColorTool(ColorTool::Darken);
+    if(EditorIcon(dl,31,left+162,top+254,controls)) RunColorTool(ColorTool::Copy);
+    if(EditorIcon(dl,32,left+194,top+254,controls,!g.copiedColor)) RunColorTool(ColorTool::Paste);
+    if(EditorIcon(dl,23,left+226,top+254,controls)) LoadFile();
     const std::string move=g.moveOptions.empty()?I18n::Tr("No drawable animations"):g.moveOptions[g.moveChoice];
-    if(EditorButton(dl,10,right,top,previewWidth,22,move,controls,g.moveOptions.empty())) {
+    if(EditorButton(dl,10,right,top,previewWidth,22,move,controls,g.moveOptions.empty(),Mark::Dropdown)) {
         auto row=Screens::DropdownRow("Move",&g.moveChoice,g.moveOptions.data(),int(g.moveOptions.size()),MoveChoiceChanged);
         row.choiceCategoryMap=g.choiceCategories.data();row.categoryChoices=kMoveCategories;row.categoryCount=int(std::size(kMoveCategories));
         OpenEditorChoice(row);
@@ -901,21 +985,22 @@ void DrawEditor(ImDrawList* dl,float top,bool input) {
     if(EditorButton(dl,11,right,rowY,38,20,"<",controls,frames==0)) PrevFrame();
     if(EditorButton(dl,12,right+44,rowY,228,20,frames?I18n::TrFormat(g.playing?"PAUSE  %d / %d":"PLAY  %d / %d",g.frame+1,frames):I18n::Tr("NO FRAMES"),controls,frames==0)) g.playing=!g.playing;
     if(EditorButton(dl,13,right+278,rowY,38,20,">",controls,frames==0)) NextFrame();
-    if(EditorButton(dl,14,right,rowY+24,96,20,std::to_string(g.zoom)+"%",controls)) {g.zoom=g.zoom>=400?25:(std::min)(400,g.zoom+25);ZoomChanged();}
+    if(EditorButton(dl,14,right,rowY+24,96,20,std::to_string(g.zoom)+"%",controls,false,Mark::Cycle)) {g.zoom=g.zoom>=400?25:(std::min)(400,g.zoom+25);ZoomChanged();}
     if(EditorButton(dl,15,right+102,rowY+24,100,20,g.panMode?"PAN*":"PAN",input)) {g.panMode=!g.panMode;Neutral();}
     if(EditorButton(dl,16,right+208,rowY+24,108,20,"CENTER",controls)) Recenter();
     static const char* compares[]={"WORKING","ORIGINAL","SPLIT"};
-    if(EditorButton(dl,17,right,rowY+48,110,20,compares[g.compare],controls)) g.compare=(g.compare+1)%3;
-    if(EditorButton(dl,18,right+116,rowY+48,80,20,"MARK",controls)) g.marking=!g.marking;
-    if(EditorButton(dl,19,right+202,rowY+48,114,20,"PREVIEW",controls)) g.live=!g.live;
-    dl->AddCircleFilled(ImVec2(right+189,rowY+52),2,g.marking?Theme::kInfoAccent:Theme::kTextDisabled);
-    dl->AddCircleFilled(ImVec2(right+309,rowY+52),2,g.live?Theme::kInfoAccent:Theme::kTextDisabled);
+    if(EditorButton(dl,17,right,rowY+48,120,20,compares[g.compare],controls,false,Mark::Cycle)) g.compare=(g.compare+1)%3;
+    if(EditorButton(dl,18,right+126,rowY+48,80,20,"MARK",controls)) g.marking=!g.marking;
+    if(EditorButton(dl,19,right+212,rowY+48,104,20,"PREVIEW",controls)) g.live=!g.live;
+    Led(dl,right+196,rowY+56,g.marking);
+    Led(dl,right+306,rowY+56,g.live);
     controls=input && !g.panMode && g.pickerInput==State::PickerInput::Idle && !Modal() && !Screens::IsPopupActive();
-    if(EditorButton(dl,23,28,392,112,24,"LOAD",controls,false,true)) LoadFile();
-    if(EditorButton(dl,24,146,392,112,24,"SAVE",controls,false,true)) Save();
-    if(EditorButton(dl,25,264,392,112,24,"SAVE AS",controls,false,true)) SaveAs();
-    if(EditorButton(dl,20,382,392,112,24,"APPLY",controls,!g_applyColors,true)) ApplyToMatch();
-    if(EditorButton(dl,21,500,392,112,24,"RESTORE",controls,false,true)) RestoreMatch();
+    if(EditorButton(dl,21,28,392,180,24,"RESTORE",controls)) RestoreMatch();
+    if(EditorButton(dl,20,216,392,180,24,"APPLY",controls,!g_applyColors)) ApplyToMatch();
+    if(EditorButton(dl,24,404,392,208,24,"SAVE",controls,false,Mark::Dropdown)) {
+        g.saveChoice=g.stock;
+        OpenEditorChoice(Screens::DropdownRow("Save to color",&g.saveChoice,slots,6,[]{SaveSlot(g.saveChoice);}));
+    }
 }
 const char* ControlHelp(int control) {
     if(control>=29 && control<=32) return ColorToolHelp(Screens::Row{},control-25);
@@ -929,7 +1014,7 @@ const char* ControlHelp(int control) {
         "Pin this shade to protect it from ramp edits. Unpin it to follow the ramp color.",
         "Reset the selected ramp or shade to its original stock colors.",
         "Undo the last edit. A continuous drag or held adjustment is one edit.",
-        "Choose an original stock palette. Replacing an unsaved draft requires confirmation.",
+        "Choose one of the character's six stock colors, or a custom palette saved for one of them, to edit.",
         "Choose an animation using the classification tabs. Preview never advances the match.",
         "Pause the animation and show its previous frame.",
         "Play or pause the sprite animation using its original frame durations.",
@@ -940,15 +1025,15 @@ const char* ControlHelp(int control) {
         "Compare original and edited colors, or show both side by side.",
         "Highlight pixels using the selected shade in the sprite preview.",
         "Temporarily preview edits on the fighter. Apply keeps them when the menu closes.",
-        "Keep these colors in the current Practice match. This does not save a file.",
+        "Keep these colors in the current Practice match. Nothing is written to disk.",
         "Stop the temporary preview and restore the last applied colors. Keep the editable draft.",
         "Choose the fighter to edit. Switching away from an unsaved draft requires confirmation.",
-        "Open a palette with Windows Open. JSON includes ramps and pins; PAL contains colors only.",
-        "Save to the current file. A new draft opens Windows Save As.",
-        "Use Windows Save As to choose another name or location. JSON keeps ramps and pins.",
+        "Load colors from a .pal file into the draft. Nothing is written until you Save; Undo restores the previous colors.",
+        "Choose one of the six colors and write this palette as its custom palette. It is then used in this match.",
+        "",
         "Switch between the character's normal and alternate sprite animations.",
         "Click a sprite pixel to select its ramp or shade. Wheel zooms; right-drag pans.",
-        "Generate palette colors or create RGB/HSV gradients in the selected ramp."
+        "Roll a random palette, randomize the selection, build RGB/HSV gradients in the selected ramp, or reset every color to stock."
     };
     if(g.colorControls!=State::ColorControls::Picker) {
         if(control==3) return HsvControls()?"Adjust hue for the selected ramp or shade.":"Adjust the red channel for the selected ramp or shade.";
@@ -1094,7 +1179,8 @@ void Render(ImDrawList* dl,float contentY,bool inputEnabled) {
     }
     if(Input::NavUp() || Input::NavDown() || Input::NavLeft() || Input::NavRight() || Input::Activate() || Input::Back()) g.mouseHelp=false;
     dl->AddRectFilled(ImVec2(20,contentY-2),ImVec2(620,420),Theme::kStrip | IM_COL32_A_MASK);
-    dl->AddRectFilled(ImVec2(20,423),ImVec2(620,480),Theme::kStrip | IM_COL32_A_MASK);
+    dl->AddRectFilled(ImVec2(20,423),ImVec2(620,478),Theme::kStrip | IM_COL32_A_MASK);
+    dl->AddRect(ImVec2(20.5f,423.5f),ImVec2(619.5f,477.5f),Theme::kRule);
     if(!g.loaded) {
         FitText(dl,28,contentY,584,g.status.empty()?I18n::Tr("Choose a character in Practice to open its palettes."):g.status);
         if(input && Input::Back()) {g.closeRequested=true;Neutral();}
@@ -1112,7 +1198,7 @@ void Render(ImDrawList* dl,float contentY,bool inputEnabled) {
         if(Screens::IsPopupActive() && g.editorFocus==28) help=Screens::CurrentPopupHelpText();
         else if(Modal() && !g.status.empty()) help=g.status.c_str();
         else if(g.panMode) help=ControlHelp(15);
-        dl->PushClipRect(ImVec2(28,443),ImVec2(612,480),true);
+        dl->PushClipRect(ImVec2(28,443),ImVec2(612,476),true);
         dl->AddText(Layout::BodyFont(),metrics.bodyPx,ImVec2(28,444),Theme::kInfoAccent,I18n::Tr(help),nullptr,584);
         dl->PopClipRect();
     }

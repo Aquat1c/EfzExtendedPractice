@@ -33,6 +33,8 @@ EngineRegenMode InferEngineRegenMode(uint16_t paramA, uint16_t paramB);
 
 bool IsEngineRegenLikelyActive();
 bool GetEngineRegenStatus(EngineRegenMode& outMode, uint16_t& outParamA, uint16_t& outParamB);
+// Result of the latest GetEngineRegenStatus call.
+bool IsEngineRegenActive();
 bool DebugScanRegenParamWindow(uintptr_t playerBase, uint32_t& outAOffset, uint16_t& outAVal, uint32_t& outBOffset, uint16_t& outBVal);
 bool DeriveRfFromParamA(uint16_t paramA, float& rfValue, bool& isBlueIC);
 
@@ -48,6 +50,8 @@ void StartRFFreeze(double p1Value, double p2Value);
 void StartRFFreezeOne(int player, double value);
 void StopRFFreeze();
 void StopRFFreezePlayer(int player);
+// Leaves a manual freeze running.
+void StopRFFreezeFromCR(int player);
 void SetRFFreezeNeutralOnly(bool enabled);
 void UpdateRFFreezeTick();
 

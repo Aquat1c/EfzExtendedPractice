@@ -1049,8 +1049,8 @@ std::atomic<uint32_t> monitorTimeline{0};
 
 void ResetFrameMonitorTimeline() {
     assert(Practice::MonitorParked());
-    if(monitorWorld.s_crRFFreezeP1)StopRFFreezePlayer(1);
-    if(monitorWorld.s_crRFFreezeP2)StopRFFreezePlayer(2);
+    if(monitorWorld.s_crRFFreezeP1)StopRFFreezeFromCR(1);
+    if(monitorWorld.s_crRFFreezeP2)StopRFFreezeFromCR(2);
     monitorWorld.Reset();
     s_ptrCache={};g_lastSample={};
     PublishPracticeFrameSample(g_lastSample);
@@ -2231,11 +2231,11 @@ void FrameDataMonitor() {
                     Mission::Engine::IsPracticeAutomationSuppressed();
                 if (automationSuppressed) {
                     if (s_crRFFreezeP1) {
-                        StopRFFreezePlayer(1);
+                        StopRFFreezeFromCR(1);
                         s_crRFFreezeP1 = false;
                     }
                     if (s_crRFFreezeP2) {
-                        StopRFFreezePlayer(2);
+                        StopRFFreezeFromCR(2);
                         s_crRFFreezeP2 = false;
                     }
                 }
@@ -2297,7 +2297,9 @@ void FrameDataMonitor() {
                             WORD tgt = (WORD)CLAMP(tg.meter, 0, MAX_METER);
                             if (cur != tgt) { SafeWriteMemory(mA, &tgt, sizeof(tgt)); wroteHpOrMeter = true; }
                         }
-                        if (tg.rfOn) {
+                        // A manual RF freeze owns this player's RF and IC colour.
+                        const bool manualFreeze = GetRFFreezeOrigin(p) == RFFreezeOrigin::ManualUI;
+                        if (tg.rfOn && !manualFreeze) {
                             double p1rf=0.0, p2rf=0.0;
                             uintptr_t p1B = getPlayerBase(1);
                             uintptr_t p2B = getPlayerBase(2);
@@ -2311,7 +2313,8 @@ void FrameDataMonitor() {
                                 if (p==1) s_crRFFreezeP1 = true; else s_crRFFreezeP2 = true;
                             }
                         }
-                        if (tg.bic) {
+                        if (manualFreeze) {
+                        } else if (tg.bic) {
                             uintptr_t p1B = getPlayerBase(1);
                             uintptr_t p2B = getPlayerBase(2);
                             int ic1=1, ic2=1;
@@ -2426,8 +2429,8 @@ void FrameDataMonitor() {
 
                     bool p1RFActive = g_contRecEnabledP1.load() && (g_contRecRfModeP1.load() > 0);
                     bool p2RFActive = g_contRecEnabledP2.load() && (g_contRecRfModeP2.load() > 0);
-                    if (s_crRFFreezeP1 && !p1RFActive) { StopRFFreezePlayer(1); s_crRFFreezeP1 = false; }
-                    if (s_crRFFreezeP2 && !p2RFActive) { StopRFFreezePlayer(2); s_crRFFreezeP2 = false; }
+                    if (s_crRFFreezeP1 && !p1RFActive) { StopRFFreezeFromCR(1); s_crRFFreezeP1 = false; }
+                    if (s_crRFFreezeP2 && !p2RFActive) { StopRFFreezeFromCR(2); s_crRFFreezeP2 = false; }
                 }
 
                 if (!automationSuppressed &&
